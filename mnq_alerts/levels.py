@@ -1,5 +1,5 @@
 """
-levels.py — Calculates IBH/IBL and VWAP from intraday bar data.
+levels.py — Calculates IBH/IBL and VWAP from real-time trade tick data.
 """
 
 from __future__ import annotations
@@ -7,27 +7,26 @@ from __future__ import annotations
 import pandas as pd
 
 
-def calculate_initial_balance(bars: pd.DataFrame) -> tuple[float | None, float | None]:
+def calculate_initial_balance(trades: pd.DataFrame) -> tuple[float | None, float | None]:
     """
-    Return (IBH, IBL) — the high and low of the 9:30–10:30 AM RTH window.
-    Call only after 10:30 AM when the IB period is complete.
+    Return (IBH, IBL) — the highest and lowest trade prices during the
+    9:30–10:30 AM ET window. Call only after 10:30 AM when IB is complete.
     """
-    ib_bars = bars.between_time("09:30", "10:29")
-    if ib_bars.empty:
+    ib_trades = trades.between_time("09:30", "10:29")
+    if ib_trades.empty:
         return None, None
-    return float(ib_bars["High"].max()), float(ib_bars["Low"].min())
+    return float(ib_trades["Price"].max()), float(ib_trades["Price"].min())
 
 
-def calculate_vwap(bars: pd.DataFrame) -> float | None:
+def calculate_vwap(trades: pd.DataFrame) -> float | None:
     """
-    Return the session VWAP from 9:30 AM ET to the most recent bar.
-    Formula: VWAP = Σ(Typical Price × Volume) / Σ(Volume)
-    Typical Price = (High + Low + Close) / 3
+    Return the session VWAP from 9:30 AM ET to the most recent trade.
+    Formula: VWAP = Σ(Price × Size) / Σ(Size)
+    Calculated from individual trade ticks for maximum accuracy.
     """
-    session_bars = bars.between_time("09:30", "15:59")
-    if session_bars.empty or session_bars["Volume"].sum() == 0:
+    session_trades = trades.between_time("09:30", "15:59")
+    if session_trades.empty or session_trades["Size"].sum() == 0:
         return None
-
-    typical_price = (session_bars["High"] + session_bars["Low"] + session_bars["Close"]) / 3
-    vwap = (typical_price * session_bars["Volume"]).cumsum() / session_bars["Volume"].cumsum()
-    return float(vwap.iloc[-1])
+    total_pv = (session_trades["Price"] * session_trades["Size"]).sum()
+    total_size = session_trades["Size"].sum()
+    return float(total_pv / total_size)
