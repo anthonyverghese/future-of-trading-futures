@@ -27,6 +27,7 @@ from levels import calculate_initial_balance, calculate_vwap
 from market_data import get_current_price, get_todays_bars
 
 ET = pytz.timezone("America/New_York")
+PT = pytz.timezone("America/Los_Angeles")
 
 MARKET_OPEN  = datetime.time(MARKET_OPEN_HOUR,  MARKET_OPEN_MIN)
 MARKET_CLOSE = datetime.time(MARKET_CLOSE_HOUR, MARKET_CLOSE_MIN)
@@ -63,7 +64,7 @@ def run() -> None:
     print("  MNQ Alert System")
     print(f"  Threshold : ±{ALERT_THRESHOLD_POINTS} pts from IBH / IBL / VWAP")
     print(f"  Interval  : every {CHECK_INTERVAL_SECONDS}s during RTH")
-    print(f"  Hours     : 9:30 AM – 4:00 PM ET, weekdays only")
+    print(f"  Hours     : 6:30 AM – 1:00 PM PT, weekdays only")
     print("=" * 55)
 
     alert_manager     = AlertManager()
@@ -71,19 +72,20 @@ def run() -> None:
     last_session_date = None
 
     while True:
-        now   = datetime.datetime.now(ET)
-        today = now.date()
+        now    = datetime.datetime.now(ET)
+        now_pt = now.astimezone(PT)
+        today  = now.date()
 
         # Reset session state each new trading day
         if last_session_date != today:
             alert_manager     = AlertManager()
             ib_locked         = False
             last_session_date = today
-            print(f"\n[{now.strftime('%Y-%m-%d')}] New session — state reset.")
+            print(f"\n[{now_pt.strftime('%Y-%m-%d')}] New session — state reset.")
 
         if not is_market_open(now):
             wait_secs = seconds_until_next_open(now)
-            print(f"[{now.strftime('%H:%M:%S')} ET] Market closed. "
+            print(f"[{now_pt.strftime('%H:%M:%S')} PT] Market closed. "
                   f"Next open in ~{wait_secs / 60:.0f} min.")
             time.sleep(min(wait_secs, 300))
             continue
@@ -92,20 +94,20 @@ def run() -> None:
         current_price = get_current_price(bars)
 
         if current_price is None:
-            print(f"[{now.strftime('%H:%M:%S')} ET] No price data yet — retrying...")
+            print(f"[{now_pt.strftime('%H:%M:%S')} PT] No price data yet — retrying...")
             time.sleep(CHECK_INTERVAL_SECONDS)
             continue
 
-        # Lock in IBH/IBL once after 10:30 AM (fixed for the session)
+        # Lock in IBH/IBL once after 10:30 AM ET (fixed for the session)
         if ib_period_complete(now) and not ib_locked:
             ibh, ibl = calculate_initial_balance(bars)
             if ibh is not None and ibl is not None:
                 alert_manager.update_levels(ibh=ibh, ibl=ibl, vwap=None)
-                print(f"[{now.strftime('%H:%M:%S')} ET] "
+                print(f"[{now_pt.strftime('%H:%M:%S')} PT] "
                       f"IB locked — IBH: {ibh:.2f}, IBL: {ibl:.2f}")
                 ib_locked = True
             else:
-                print(f"[{now.strftime('%H:%M:%S')} ET] IB period done but no bar data yet.")
+                print(f"[{now_pt.strftime('%H:%M:%S')} PT] IB period done but no bar data yet.")
 
         # VWAP drifts throughout the session — recalculate every tick
         vwap = calculate_vwap(bars)
@@ -116,7 +118,7 @@ def run() -> None:
             alert_manager.check_and_notify(current_price)
 
         ib_status = "locked" if ib_locked else "IB window active"
-        print(f"[{now.strftime('%H:%M:%S')} ET] "
+        print(f"[{now_pt.strftime('%H:%M:%S')} PT] "
               f"MNQ: {current_price:.2f} | "
               f"VWAP: {f'{vwap:.2f}' if vwap else 'N/A'} | "
               f"IB: {ib_status}")
