@@ -93,6 +93,18 @@ def _fetch_bars(start: datetime.datetime, end: datetime.datetime) -> pd.DataFram
         )
         resp.raise_for_status()
     except requests.HTTPError as exc:
+        # Databento hist API has an ingestion lag; if our end time is ahead of
+        # available data, retry using the available_end from the error response.
+        if exc.response.status_code == 422:
+            try:
+                payload = exc.response.json().get("detail", {}).get("payload", {})
+                available_end_str = payload.get("available_end")
+                if available_end_str:
+                    available_end = pd.Timestamp(available_end_str).to_pydatetime()
+                    if available_end > start:
+                        return _fetch_bars(start, available_end)
+            except Exception:
+                pass
         print(f"[market_data] HTTP {exc.response.status_code}: {exc.response.text[:200]}")
         return pd.DataFrame()
     except requests.RequestException as exc:
