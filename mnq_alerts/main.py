@@ -114,7 +114,8 @@ def run() -> None:
         trades = get_session_trades()
 
         # Lock in IBH/IBL once after 10:30 AM ET (fixed for the session).
-        if ib_period_complete(now) and not ib_locked:
+        # Use the trade's own timestamp so replay doesn't lock IB prematurely.
+        if ts_et.time() >= IB_END and not ib_locked:
             ibh, ibl = calculate_initial_balance(trades)
             if ibh is not None and ibl is not None:
                 alert_manager.update_levels(ibh=ibh, ibl=ibl, vwap=None)
@@ -129,7 +130,7 @@ def run() -> None:
         if vwap is not None:
             alert_manager.update_levels(ibh=None, ibl=None, vwap=vwap)
 
-        if ib_period_complete(now):
+        if ts_et.time() >= IB_END:
             # During replay ts_et lags wall time; only notify for live trades.
             trade_lag = (now - ts_et).total_seconds()
             if trade_lag < 60:
