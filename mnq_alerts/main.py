@@ -126,7 +126,12 @@ def run() -> None:
             alert_manager.update_levels(ibh=None, ibl=None, vwap=vwap)
 
         if ib_period_complete(now):
-            alert_manager.check_and_notify(price)
+            # During replay ts_et lags wall time; only notify for live trades.
+            trade_lag = (now - ts_et).total_seconds()
+            if trade_lag < 60:
+                alert_manager.check_and_notify(price)
+            else:
+                alert_manager.advance_state(price)
 
         # Throttle console output — one status line per STATUS_INTERVAL_SECONDS.
         now_ts = time.time()

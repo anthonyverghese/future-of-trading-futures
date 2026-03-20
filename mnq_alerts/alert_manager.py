@@ -53,6 +53,12 @@ class AlertManager:
             else:
                 self._levels[name].price = price  # VWAP drifts; always update
 
+    def advance_state(self, current_price: float) -> None:
+        """Update in_zone state for all levels without sending notifications.
+        Use during historical replay to prime the state machine."""
+        for level in self._levels.values():
+            level.update(current_price)
+
     def check_and_notify(self, current_price: float) -> None:
         """Fire a notification for any level whose zone is newly entered."""
         for level in self._levels.values():
