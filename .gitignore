@@ -1,1 +1,5 @@
 *.pem
+*.pyc
+__pycache__/
+mnq_alerts/.env
+mnq_alerts/.session_cache.db
