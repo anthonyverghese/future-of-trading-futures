@@ -134,13 +134,19 @@ def run() -> None:
                 alert_manager.advance_state(price)
 
         # Throttle console output — one status line per STATUS_INTERVAL_SECONDS.
+        # During replay, show progress instead of stale historical prices.
         now_ts = time.time()
         if now_ts - last_status_ts >= _STATUS_INTERVAL_SECONDS:
-            ib_status = "locked" if ib_locked else "IB window active"
-            print(f"[{now_pt.strftime('%H:%M:%S')} PT] "
-                  f"MNQ: {price:.2f} | "
-                  f"VWAP: {f'{vwap:.2f}' if vwap else 'N/A'} | "
-                  f"IB: {ib_status}")
+            trade_lag = (now - ts_et).total_seconds()
+            if trade_lag >= 60:
+                print(f"[replaying] {ts_et.strftime('%H:%M:%S')} ET "
+                      f"({trade_lag / 60:.0f} min behind live)...")
+            else:
+                ib_status = "locked" if ib_locked else "IB window active"
+                print(f"[{now_pt.strftime('%H:%M:%S')} PT] "
+                      f"MNQ: {price:.2f} | "
+                      f"VWAP: {f'{vwap:.2f}' if vwap else 'N/A'} | "
+                      f"IB: {ib_status}")
             last_status_ts = now_ts
 
 
