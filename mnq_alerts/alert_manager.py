@@ -23,18 +23,26 @@ class LevelState:
 
     name: str
     price: float
-    in_zone: bool = False  # True while price is within the alert threshold
+    in_zone: bool = False           # True while price is within the alert threshold
+    reference_price: float | None = None  # level price locked at zone entry; used for exit check
 
     def update(self, current_price: float) -> bool:
-        """Returns True if an alert should fire (price just entered the zone)."""
-        within_threshold = abs(current_price - self.price) <= ALERT_THRESHOLD_POINTS
+        """Returns True if an alert should fire (price just entered the zone).
 
-        if within_threshold and not self.in_zone:
+        On zone entry, reference_price is locked to the current level price.
+        Exit is checked against that reference — so VWAP drifting slightly
+        while price is in-zone does not reset or re-trigger the alert.
+        """
+        if self.in_zone:
+            if abs(current_price - self.reference_price) > ALERT_THRESHOLD_POINTS:
+                self.in_zone = False
+                self.reference_price = None  # Reset — next entry will alert again
+            return False
+
+        if abs(current_price - self.price) <= ALERT_THRESHOLD_POINTS:
             self.in_zone = True
+            self.reference_price = self.price  # Lock reference at moment of entry
             return True
-
-        if not within_threshold and self.in_zone:
-            self.in_zone = False  # Reset — next entry will alert again
 
         return False
 
