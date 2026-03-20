@@ -10,8 +10,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from cache import log_alert
 from config import ALERT_THRESHOLD_POINTS
 from notifications import send_notification
+
+_TICKER = "MNQ"
 
 
 @dataclass
@@ -66,6 +69,7 @@ class AlertManager:
                 title, body = _build_message(level.name, level.price, current_price)
                 print(f"[ALERT] {title} | {body}")
                 send_notification(title, body)
+                log_alert(ticker=_TICKER, line=level.name, line_price=level.price)
 
 
 def _build_message(level_name: str, level_price: float, current_price: float) -> tuple[str, str]:

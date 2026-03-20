@@ -1,8 +1,11 @@
 """
-cache.py — Persists session trades to a local SQLite database.
+cache.py — Persists session trades and notification history to local SQLite databases.
 
-Saves a snapshot every CACHE_INTERVAL_SECONDS so the app can resume
-from the last checkpoint on restart instead of replaying from 9:30 AM.
+Session cache (.session_cache.db): checkpoints trades every CACHE_INTERVAL_SECONDS
+so the app can resume from the last checkpoint on restart. Cleared on new session.
+
+Alert log (alerts_log.db): permanent record of every push notification sent,
+for data analysis. Never deleted automatically.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ import pytz
 ET = pytz.timezone("America/New_York")
 
 CACHE_PATH = os.path.join(os.path.dirname(__file__), ".session_cache.db")
+ALERTS_LOG_PATH = os.path.join(os.path.dirname(__file__), "alerts_log.db")
 CACHE_INTERVAL_SECONDS = 300  # save every 5 minutes
 
 
@@ -106,3 +110,30 @@ def get_replay_start(cached_trades: pd.DataFrame) -> datetime.datetime:
 
     last_ts = cached_trades.index[-1].to_pydatetime()
     return last_ts + datetime.timedelta(seconds=1)
+
+
+def log_alert(ticker: str, line: str, line_price: float) -> None:
+    """
+    Persist a record of a sent push notification to the permanent alerts log.
+    Uses the system's local time for date and time columns.
+    Never deleted automatically — intended for data analysis.
+    """
+    now_local = datetime.datetime.now().astimezone()
+    date_str = now_local.strftime("%Y-%m-%d")
+    time_str = now_local.strftime("%H:%M:%S %Z")
+
+    with sqlite3.connect(ALERTS_LOG_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS alerts (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                date      TEXT,
+                time      TEXT,
+                ticker    TEXT,
+                line      TEXT,
+                line_price REAL
+            )
+        """)
+        conn.execute(
+            "INSERT INTO alerts (date, time, ticker, line, line_price) VALUES (?, ?, ?, ?, ?)",
+            (date_str, time_str, ticker, line, line_price),
+        )
