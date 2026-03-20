@@ -174,7 +174,8 @@ def run() -> None:
             trade_lag = (now - ts_et).total_seconds()
             if trade_lag >= 60:
                 print(f"[replaying] {ts_et.strftime('%H:%M:%S')} ET "
-                      f"({trade_lag / 60:.0f} min behind live)...")
+                      f"({trade_lag / 60:.0f} min behind live) | "
+                      f"VWAP: {f'{vwap:.2f}' if vwap else 'N/A'}")
             else:
                 ib_str = (f"IBH: {ibh:.2f} | IBL: {ibl:.2f}" if ib_locked
                           else "IB window active")
