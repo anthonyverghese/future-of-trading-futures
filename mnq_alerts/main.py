@@ -19,6 +19,7 @@ import pytz
 from alert_manager import AlertManager
 from config import (
     ALERT_THRESHOLD_POINTS,
+    DISPLAY_TZ,
     IB_END_HOUR, IB_END_MIN,
     MARKET_CLOSE_HOUR, MARKET_CLOSE_MIN,
     MARKET_OPEN_HOUR, MARKET_OPEN_MIN,
@@ -30,8 +31,12 @@ from market_data import get_session_trades, load_session_cache, reset_session, t
 from outcome_tracker import OutcomeEvaluator
 
 ET = pytz.timezone("America/New_York")
-LOCAL_TZ = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo
-LOCAL_TZ_NAME = datetime.datetime.now(datetime.timezone.utc).astimezone().strftime("%Z")
+if DISPLAY_TZ:
+    LOCAL_TZ      = pytz.timezone(DISPLAY_TZ)
+    LOCAL_TZ_NAME = datetime.datetime.now(pytz.timezone(DISPLAY_TZ)).strftime("%Z")
+else:
+    LOCAL_TZ      = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo
+    LOCAL_TZ_NAME = datetime.datetime.now(datetime.timezone.utc).astimezone().strftime("%Z")
 
 MARKET_OPEN  = datetime.time(MARKET_OPEN_HOUR,  MARKET_OPEN_MIN)
 MARKET_CLOSE = datetime.time(MARKET_CLOSE_HOUR, MARKET_CLOSE_MIN)

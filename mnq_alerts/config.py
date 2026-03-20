@@ -32,3 +32,10 @@ CHECK_INTERVAL_SECONDS = 30  # How often to poll during RTH
 
 PUSHOVER_TOKEN    = os.getenv("PUSHOVER_TOKEN", "")
 PUSHOVER_USER_KEY = os.getenv("PUSHOVER_USER_KEY", "")
+
+# ── Display ─────────────────────────────────────────────────────────────────────
+# Override the auto-detected local timezone for log timestamps.
+# Useful on EC2 where the system timezone is UTC.
+# Example: DISPLAY_TZ=America/Los_Angeles
+
+DISPLAY_TZ = os.getenv("DISPLAY_TZ", "")

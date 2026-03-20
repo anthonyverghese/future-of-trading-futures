@@ -78,5 +78,64 @@ Pushover notifications use priority 1 (high — bypasses quiet hours).
 If credentials are missing, notifications fall back to stdout.
 
 ## Display timezone
-All timestamps are displayed in **Pacific Time (PT)**. Market hours shown as
-6:30 AM – 1:00 PM PT.
+Timestamps auto-detect the system's local timezone. Override with `DISPLAY_TZ`
+in `.env` (e.g. `DISPLAY_TZ=America/Los_Angeles`). Useful on EC2 where the
+system timezone defaults to UTC.
+
+## Deploying to AWS EC2
+
+### One-time instance setup
+
+```bash
+# 1. Install Miniconda
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+bash Miniconda3-latest-Linux-x86_64.sh
+
+# 2. Clone the repo
+git clone https://github.com/anthonyverghese/future-of-trading-futures.git
+cd future-of-trading-futures
+
+# 3. Create Python 3.11 environment and install dependencies
+conda create -n mnq python=3.11 -y
+conda activate mnq
+pip install -r mnq_alerts/requirements.txt
+
+# 4. Create .env with credentials
+cat > mnq_alerts/.env <<EOF
+DATABENTO_API_KEY=...
+PUSHOVER_TOKEN=...
+PUSHOVER_USER_KEY=...
+DISPLAY_TZ=America/Los_Angeles
+EOF
+```
+
+### Install as a systemd service (runs on boot, restarts on crash)
+
+```bash
+# Copy the service file (edit paths if your username or conda location differs)
+sudo cp mnq-alerts.service /etc/systemd/system/
+
+# Enable and start
+sudo systemctl daemon-reload
+sudo systemctl enable mnq-alerts
+sudo systemctl start mnq-alerts
+
+# Check logs
+sudo journalctl -u mnq-alerts -f
+```
+
+### Updating the app after a code change
+
+```bash
+cd future-of-trading-futures
+git pull
+sudo systemctl restart mnq-alerts
+```
+
+### SQLite on EC2
+Both databases live on the EBS root volume and persist across reboots.
+They are only lost if the instance is terminated with "Delete on termination"
+enabled (the default). To be safe, periodically copy `alerts_log.db` to S3:
+```bash
+aws s3 cp mnq_alerts/alerts_log.db s3://your-bucket/alerts_log.db
+```
