@@ -4,4 +4,4 @@ Description=Back up alerts_log.db to S3
 [Service]
 Type=oneshot
 User=ec2-user
-ExecStart=aws s3 cp /home/ec2-user/future-of-trading-futures/mnq_alerts/alerts_log.db s3://mnq-alerts-backup/alerts_log.db
+ExecStart=/usr/bin/aws s3 cp /home/ec2-user/future-of-trading-futures/mnq_alerts/alerts_log.db s3://mnq-alerts-backup/alerts_log.db
