@@ -27,6 +27,23 @@ def _empty_trades() -> pd.DataFrame:
     )
 
 
+def clear_if_stale() -> None:
+    """Delete the cache file if it contains no data for today (leftover from a prior session)."""
+    if not os.path.exists(CACHE_PATH):
+        return
+    today = datetime.datetime.now(ET).date().isoformat()
+    try:
+        with sqlite3.connect(CACHE_PATH) as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM trades WHERE date = ?", (today,)
+            ).fetchone()[0]
+        if count == 0:
+            os.remove(CACHE_PATH)
+            print("[cache] Stale cache from previous session cleared.")
+    except Exception:
+        pass
+
+
 def save_trades(trades: pd.DataFrame) -> None:
     """Persist today's trades to the local cache database."""
     if trades.empty:

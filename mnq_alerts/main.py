@@ -24,7 +24,7 @@ from config import (
     MARKET_OPEN_HOUR, MARKET_OPEN_MIN,
 )
 from levels import calculate_initial_balance, calculate_vwap
-from cache import CACHE_INTERVAL_SECONDS, get_replay_start, load_trades, save_trades
+from cache import CACHE_INTERVAL_SECONDS, clear_if_stale, get_replay_start, load_trades, save_trades
 from market_data import get_session_trades, load_session_cache, reset_session, trade_stream
 
 ET = pytz.timezone("America/New_York")
@@ -87,7 +87,8 @@ def run() -> None:
               f"Next open in ~{wait_secs / 60:.0f} min.")
         time.sleep(min(wait_secs, 300))
 
-    # Load cached trades so we don't replay the full session on restart.
+    # Clear stale cache from a previous session before loading.
+    clear_if_stale()
     cached_trades = load_trades()
     load_session_cache(cached_trades)
     session_start = get_replay_start(cached_trades)
