@@ -109,16 +109,21 @@ DISPLAY_TZ=America/Los_Angeles
 EOF
 ```
 
-### Install as a systemd service (runs on boot, restarts on crash)
+### Install systemd services and timers
 
 ```bash
-# Copy the service file (edit paths if your username or conda location differs)
-sudo cp mnq-alerts.service /etc/systemd/system/
+# Copy all service and timer files
+sudo cp mnq-alerts.service mnq-alerts.timer mnq-backup.service mnq-backup.timer /etc/systemd/system/
 
-# Enable and start
 sudo systemctl daemon-reload
-sudo systemctl enable mnq-alerts
-sudo systemctl start mnq-alerts
+
+# App: starts at 9:30 AM ET weekdays, exits at 4 PM ET
+sudo systemctl enable mnq-alerts.timer
+sudo systemctl start mnq-alerts.timer
+
+# Backup: copies alerts_log.db to S3 at 4:15 PM ET weekdays
+sudo systemctl enable mnq-backup.timer
+sudo systemctl start mnq-backup.timer
 
 # Check logs
 sudo journalctl -u mnq-alerts -f
@@ -134,8 +139,5 @@ sudo systemctl restart mnq-alerts
 
 ### SQLite on EC2
 Both databases live on the EBS root volume and persist across reboots.
-They are only lost if the instance is terminated with "Delete on termination"
-enabled (the default). To be safe, periodically copy `alerts_log.db` to S3:
-```bash
-aws s3 cp mnq_alerts/alerts_log.db s3://your-bucket/alerts_log.db
-```
+`alerts_log.db` is automatically backed up to S3 at 4:15 PM ET each weekday
+via the `mnq-backup.timer` systemd unit.
