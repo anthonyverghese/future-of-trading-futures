@@ -24,7 +24,8 @@ from config import (
     MARKET_OPEN_HOUR, MARKET_OPEN_MIN,
 )
 from levels import calculate_initial_balance, calculate_vwap
-from market_data import get_session_trades, reset_session, trade_stream
+from cache import CACHE_INTERVAL_SECONDS, get_replay_start, load_trades, save_trades
+from market_data import get_session_trades, load_session_cache, reset_session, trade_stream
 
 ET = pytz.timezone("America/New_York")
 LOCAL_TZ = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo
@@ -86,17 +87,18 @@ def run() -> None:
               f"Next open in ~{wait_secs / 60:.0f} min.")
         time.sleep(min(wait_secs, 300))
 
+    # Load cached trades so we don't replay the full session on restart.
+    cached_trades = load_trades()
+    load_session_cache(cached_trades)
+    session_start = get_replay_start(cached_trades)
+
     alert_manager     = AlertManager()
     ib_locked         = False
     ibh: float | None = None
     ibl: float | None = None
     last_session_date = None
     last_status_ts    = 0.0
-
-    # If starting mid-session, replay trades from 9:30 AM so VWAP and IB
-    # are accurate from the first live tick rather than starting from scratch.
-    now_et = datetime.datetime.now(ET)
-    session_start = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+    last_cache_ts     = 0.0
 
     for price, size, ts_et in trade_stream(session_start=session_start):
         now    = datetime.datetime.now(ET)
@@ -115,6 +117,7 @@ def run() -> None:
             ibh               = None
             ibl               = None
             last_session_date = today
+            last_cache_ts     = 0.0
             print(f"\n[{now_pt.strftime('%Y-%m-%d')}] New session — state reset.")
 
         trades = get_session_trades()
@@ -144,9 +147,13 @@ def run() -> None:
             else:
                 alert_manager.advance_state(price)
 
-        # Throttle console output — one status line per STATUS_INTERVAL_SECONDS.
-        # During replay, show progress instead of stale historical prices.
+        # Save trade cache every CACHE_INTERVAL_SECONDS.
         now_ts = time.time()
+        if now_ts - last_cache_ts >= CACHE_INTERVAL_SECONDS:
+            save_trades(get_session_trades())
+            last_cache_ts = now_ts
+
+        # Throttle console output — one status line per STATUS_INTERVAL_SECONDS.
         if now_ts - last_status_ts >= _STATUS_INTERVAL_SECONDS:
             trade_lag = (now - ts_et).total_seconds()
             if trade_lag >= 60:

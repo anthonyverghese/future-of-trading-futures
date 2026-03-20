@@ -39,6 +39,16 @@ def reset_session() -> None:
     print("[market_data] Session trades reset.")
 
 
+def load_session_cache(trades: pd.DataFrame) -> None:
+    """Pre-populate session trades from a cache snapshot. Call once on startup."""
+    global _trades, _current_price
+    if not trades.empty:
+        _trades = trades.copy()
+        _current_price = float(trades["Price"].iloc[-1])
+        print(f"[market_data] Loaded {len(trades)} trades from cache "
+              f"(up to {trades.index[-1].strftime('%H:%M:%S')} ET).")
+
+
 def get_session_trades() -> pd.DataFrame:
     """Return all trades accumulated so far this session."""
     return _trades
