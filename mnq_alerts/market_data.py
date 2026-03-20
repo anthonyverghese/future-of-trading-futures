@@ -20,7 +20,13 @@ from config import DATABENTO_API_KEY, DATABENTO_DATASET, DATABENTO_SYMBOL
 ET = pytz.timezone("America/New_York")
 
 # Session trade accumulator — reset each new trading day via reset_session().
-_trades: pd.DataFrame = pd.DataFrame(columns=["Price", "Size"])
+def _empty_trades() -> pd.DataFrame:
+    return pd.DataFrame(
+        {"Price": pd.Series(dtype=float), "Size": pd.Series(dtype=int)},
+        index=pd.DatetimeIndex([]),
+    )
+
+_trades: pd.DataFrame = _empty_trades()
 _current_price: float | None = None
 _live_client: db.Live | None = None
 
@@ -28,7 +34,7 @@ _live_client: db.Live | None = None
 def reset_session() -> None:
     """Clear accumulated trade data for a new session. Call once per trading day."""
     global _trades, _current_price
-    _trades = pd.DataFrame(columns=["Price", "Size"])
+    _trades = _empty_trades()
     _current_price = None
     print("[market_data] Session trades reset.")
 
@@ -79,7 +85,7 @@ def trade_stream() -> Generator[tuple[float, int, datetime.datetime], None, None
                 _trades = pd.concat([_trades, new_row])
                 _current_price = price
 
-                yield price, size, ts.to_pydatetime()
+                yield price, size, ts.to_pydatetime(warn=False)
 
         except Exception as exc:
             print(f"[market_data] Feed error: {exc}. Reconnecting...")
