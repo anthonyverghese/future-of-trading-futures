@@ -27,7 +27,8 @@ from levels import calculate_initial_balance, calculate_vwap
 from market_data import get_session_trades, reset_session, trade_stream
 
 ET = pytz.timezone("America/New_York")
-PT = pytz.timezone("America/Los_Angeles")
+LOCAL_TZ = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo
+LOCAL_TZ_NAME = datetime.datetime.now(datetime.timezone.utc).astimezone().strftime("%Z")
 
 MARKET_OPEN  = datetime.time(MARKET_OPEN_HOUR,  MARKET_OPEN_MIN)
 MARKET_CLOSE = datetime.time(MARKET_CLOSE_HOUR, MARKET_CLOSE_MIN)
@@ -66,7 +67,12 @@ def run() -> None:
     print("=" * 55)
     print("  MNQ Alert System — Live Feed (GLBX.MDP3 MDP 3.0)")
     print(f"  Threshold : ±{ALERT_THRESHOLD_POINTS} pts from IBH / IBL / VWAP")
-    print(f"  Hours     : 6:30 AM – 1:00 PM PT, weekdays only")
+    market_open_local = datetime.datetime.now(ET).replace(
+        hour=MARKET_OPEN_HOUR, minute=MARKET_OPEN_MIN).astimezone(LOCAL_TZ)
+    market_close_local = datetime.datetime.now(ET).replace(
+        hour=MARKET_CLOSE_HOUR, minute=MARKET_CLOSE_MIN).astimezone(LOCAL_TZ)
+    print(f"  Hours     : {market_open_local.strftime('%I:%M %p')} – "
+          f"{market_close_local.strftime('%I:%M %p')} {LOCAL_TZ_NAME}, weekdays only")
     print("=" * 55)
 
     # Wait for RTH before opening the live connection.
@@ -74,9 +80,9 @@ def run() -> None:
         now = datetime.datetime.now(ET)
         if is_market_open(now):
             break
-        now_pt = now.astimezone(PT)
+        now_pt = now.astimezone(LOCAL_TZ)
         wait_secs = seconds_until_next_open(now)
-        print(f"[{now_pt.strftime('%H:%M:%S')} PT] Market closed. "
+        print(f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] Market closed. "
               f"Next open in ~{wait_secs / 60:.0f} min.")
         time.sleep(min(wait_secs, 300))
 
@@ -94,7 +100,7 @@ def run() -> None:
 
     for price, size, ts_et in trade_stream(session_start=session_start):
         now    = datetime.datetime.now(ET)
-        now_pt = now.astimezone(PT)
+        now_pt = now.astimezone(LOCAL_TZ)
         today  = now.date()
 
         # Skip trades outside RTH — futures trade 24/5 but we only alert during RTH.
@@ -119,11 +125,11 @@ def run() -> None:
             ibh, ibl = calculate_initial_balance(trades)
             if ibh is not None and ibl is not None:
                 alert_manager.update_levels(ibh=ibh, ibl=ibl, vwap=None)
-                print(f"[{now_pt.strftime('%H:%M:%S')} PT] "
+                print(f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] "
                       f"IB locked — IBH: {ibh:.2f}, IBL: {ibl:.2f}")
                 ib_locked = True
             else:
-                print(f"[{now_pt.strftime('%H:%M:%S')} PT] IB period done but no trade data yet.")
+                print(f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] IB period done but no trade data yet.")
 
         # Recalculate VWAP on every trade tick for real-time accuracy.
         vwap = calculate_vwap(trades)
@@ -149,7 +155,7 @@ def run() -> None:
             else:
                 ib_str = (f"IBH: {ibh:.2f} | IBL: {ibl:.2f}" if ib_locked
                           else "IB window active")
-                print(f"[{now_pt.strftime('%H:%M:%S')} PT] "
+                print(f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] "
                       f"MNQ: {price:.2f} | "
                       f"VWAP: {f'{vwap:.2f}' if vwap else 'N/A'} | "
                       f"{ib_str}")
