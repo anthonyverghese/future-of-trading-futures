@@ -112,28 +112,112 @@ def get_replay_start(cached_trades: pd.DataFrame) -> datetime.datetime:
     return last_ts + datetime.timedelta(seconds=1)
 
 
-def log_alert(ticker: str, line: str, line_price: float) -> None:
+def _ensure_alerts_schema(conn: sqlite3.Connection) -> None:
+    """Create alerts and daily_stats tables if they don't exist, and migrate old schemas."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS alerts (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            date          TEXT,
+            time          TEXT,
+            ticker        TEXT,
+            line          TEXT,
+            line_price    REAL,
+            current_price REAL,
+            direction     TEXT,
+            hit_time      TEXT,
+            outcome       TEXT
+        )
+    """)
+    # Migrate older schemas that may be missing the new columns.
+    for col in ["current_price REAL", "direction TEXT", "hit_time TEXT", "outcome TEXT"]:
+        try:
+            conn.execute(f"ALTER TABLE alerts ADD COLUMN {col}")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS daily_stats (
+            date               TEXT PRIMARY KEY,
+            ibh                REAL,
+            ibl                REAL,
+            notifications_sent INTEGER DEFAULT 0,
+            correct_recs       INTEGER DEFAULT 0,
+            incorrect_recs     INTEGER DEFAULT 0
+        )
+    """)
+
+
+def log_alert(
+    ticker: str,
+    line: str,
+    line_price: float,
+    current_price: float,
+    direction: str,
+) -> int:
     """
-    Persist a record of a sent push notification to the permanent alerts log.
-    Uses the system's local time for date and time columns.
-    Never deleted automatically — intended for data analysis.
+    Persist a sent push notification to the permanent alerts log.
+    Returns the alert id for outcome tracking.
+    direction: 'up' if price was above the line (buy bias), 'down' if below (sell bias).
     """
     now_local = datetime.datetime.now().astimezone()
     date_str = now_local.strftime("%Y-%m-%d")
     time_str = now_local.strftime("%H:%M:%S %Z")
 
     with sqlite3.connect(ALERTS_LOG_PATH) as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS alerts (
-                id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                date      TEXT,
-                time      TEXT,
-                ticker    TEXT,
-                line      TEXT,
-                line_price REAL
-            )
-        """)
+        _ensure_alerts_schema(conn)
+        cur = conn.execute(
+            """INSERT INTO alerts (date, time, ticker, line, line_price, current_price, direction)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (date_str, time_str, ticker, line, line_price, current_price, direction),
+        )
+        upsert_daily_stats(date_str, notifications_delta=1)
+        return cur.lastrowid
+
+
+def update_alert_hit(alert_id: int, hit_time: str) -> None:
+    """Record when price first touched the line for a pending alert."""
+    with sqlite3.connect(ALERTS_LOG_PATH) as conn:
         conn.execute(
-            "INSERT INTO alerts (date, time, ticker, line, line_price) VALUES (?, ?, ?, ?, ?)",
-            (date_str, time_str, ticker, line, line_price),
+            "UPDATE alerts SET hit_time = ? WHERE id = ?",
+            (hit_time, alert_id),
+        )
+
+
+def update_alert_outcome(alert_id: int, outcome: str, date_str: str) -> None:
+    """
+    Set the final outcome for an alert ('correct', 'incorrect', 'unresolved').
+    Also increments the relevant counter in daily_stats.
+    """
+    with sqlite3.connect(ALERTS_LOG_PATH) as conn:
+        conn.execute(
+            "UPDATE alerts SET outcome = ? WHERE id = ?",
+            (outcome, alert_id),
+        )
+    if outcome == "correct":
+        upsert_daily_stats(date_str, correct_delta=1)
+    elif outcome == "incorrect":
+        upsert_daily_stats(date_str, incorrect_delta=1)
+
+
+def upsert_daily_stats(
+    date: str,
+    ibh: float | None = None,
+    ibl: float | None = None,
+    notifications_delta: int = 0,
+    correct_delta: int = 0,
+    incorrect_delta: int = 0,
+) -> None:
+    """Insert or update the daily_stats row for the given date."""
+    with sqlite3.connect(ALERTS_LOG_PATH) as conn:
+        _ensure_alerts_schema(conn)
+        conn.execute(
+            """INSERT INTO daily_stats (date, ibh, ibl, notifications_sent, correct_recs, incorrect_recs)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(date) DO UPDATE SET
+                   ibh                = COALESCE(excluded.ibh, ibh),
+                   ibl                = COALESCE(excluded.ibl, ibl),
+                   notifications_sent = notifications_sent + excluded.notifications_sent,
+                   correct_recs       = correct_recs       + excluded.correct_recs,
+                   incorrect_recs     = incorrect_recs     + excluded.incorrect_recs""",
+            (date, ibh, ibl, notifications_delta, correct_delta, incorrect_delta),
         )

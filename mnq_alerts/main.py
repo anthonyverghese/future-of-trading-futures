@@ -24,8 +24,10 @@ from config import (
     MARKET_OPEN_HOUR, MARKET_OPEN_MIN,
 )
 from levels import calculate_initial_balance, calculate_vwap
-from cache import CACHE_INTERVAL_SECONDS, clear_if_stale, get_replay_start, load_trades, save_trades
+from cache import (CACHE_INTERVAL_SECONDS, clear_if_stale, get_replay_start,
+                   load_trades, save_trades, upsert_daily_stats)
 from market_data import get_session_trades, load_session_cache, reset_session, trade_stream
+from outcome_tracker import OutcomeEvaluator
 
 ET = pytz.timezone("America/New_York")
 LOCAL_TZ = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo
@@ -94,12 +96,14 @@ def run() -> None:
     session_start = get_replay_start(cached_trades)
 
     alert_manager     = AlertManager()
+    evaluator         = OutcomeEvaluator()
     ib_locked         = False
     ibh: float | None = None
     ibl: float | None = None
     last_session_date = None
     last_status_ts    = 0.0
     last_cache_ts     = 0.0
+    session_closed    = False
 
     for price, size, ts_et in trade_stream(session_start=session_start):
         now    = datetime.datetime.now(ET)
@@ -114,11 +118,13 @@ def run() -> None:
         if last_session_date != today:
             reset_session()
             alert_manager     = AlertManager()
+            evaluator         = OutcomeEvaluator()
             ib_locked         = False
             ibh               = None
             ibl               = None
             last_session_date = today
             last_cache_ts     = 0.0
+            session_closed    = False
             print(f"\n[{now_pt.strftime('%Y-%m-%d')}] New session — state reset.")
 
         trades = get_session_trades()
@@ -132,6 +138,7 @@ def run() -> None:
                 print(f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] "
                       f"IB locked — IBH: {ibh:.2f}, IBL: {ibl:.2f}")
                 ib_locked = True
+                upsert_daily_stats(today.isoformat(), ibh=ibh, ibl=ibl)
             else:
                 print(f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] IB period done but no trade data yet.")
 
@@ -144,7 +151,15 @@ def run() -> None:
             # During replay ts_et lags wall time; only notify for live trades.
             trade_lag = (now - ts_et).total_seconds()
             if trade_lag < 60:
-                alert_manager.check_and_notify(price)
+                fired = alert_manager.check_and_notify(price)
+                for alert_id, line_name, line_price, direction in fired:
+                    evaluator.add(alert_id, line_price, direction, ts_et, today.isoformat())
+                evaluator.update(price, ts_et)
+
+                # Close session once market shuts — mark remaining evals unresolved.
+                if not session_closed and ts_et.time() >= MARKET_CLOSE:
+                    evaluator.close_session()
+                    session_closed = True
             else:
                 alert_manager.advance_state(price)
 

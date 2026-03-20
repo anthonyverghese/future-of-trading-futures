@@ -62,14 +62,31 @@ class AlertManager:
         for level in self._levels.values():
             level.update(current_price)
 
-    def check_and_notify(self, current_price: float) -> None:
-        """Fire a notification for any level whose zone is newly entered."""
+    def check_and_notify(
+        self, current_price: float
+    ) -> list[tuple[int, str, float, str]]:
+        """
+        Fire a notification for any level whose zone is newly entered.
+        Returns a list of (alert_id, line_name, line_price, direction) for each
+        fired alert so the caller can register them with OutcomeEvaluator.
+        direction is 'up' if price was above the line (buy bias), else 'down'.
+        """
+        fired: list[tuple[int, str, float, str]] = []
         for level in self._levels.values():
             if level.update(current_price):
+                direction = "up" if current_price > level.price else "down"
                 title, body = _build_message(level.name, level.price, current_price)
                 print(f"[ALERT] {title} | {body}")
                 send_notification(title, body)
-                log_alert(ticker=_TICKER, line=level.name, line_price=level.price)
+                alert_id = log_alert(
+                    ticker=_TICKER,
+                    line=level.name,
+                    line_price=level.price,
+                    current_price=current_price,
+                    direction=direction,
+                )
+                fired.append((alert_id, level.name, level.price, direction))
+        return fired
 
 
 def _build_message(level_name: str, level_price: float, current_price: float) -> tuple[str, str]:
