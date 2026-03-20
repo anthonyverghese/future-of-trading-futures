@@ -69,6 +69,8 @@ def trade_stream() -> Generator[tuple[float, int, datetime.datetime], None, None
         _live_client = _make_client()
         try:
             for record in _live_client:
+                if not isinstance(record, db.TradeMsg):
+                    continue
                 price = record.price / 1_000_000_000
                 size = int(record.size)
                 ts = pd.Timestamp(record.ts_event, unit="ns", tz="UTC").tz_convert(ET)
