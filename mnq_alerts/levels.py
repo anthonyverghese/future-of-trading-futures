@@ -12,7 +12,7 @@ def calculate_initial_balance(trades: pd.DataFrame) -> tuple[float | None, float
     Return (IBH, IBL) — the highest and lowest trade prices during the
     9:30–10:30 AM ET window. Call only after 10:30 AM when IB is complete.
     """
-    ib_trades = trades.between_time("09:30", "10:29")
+    ib_trades = trades.between_time("09:30", "10:30", inclusive="left")
     if ib_trades.empty:
         return None, None
     return float(ib_trades["Price"].max()), float(ib_trades["Price"].min())
@@ -24,7 +24,7 @@ def calculate_vwap(trades: pd.DataFrame) -> float | None:
     Formula: VWAP = Σ(Price × Size) / Σ(Size)
     Calculated from individual trade ticks for maximum accuracy.
     """
-    session_trades = trades.between_time("09:30", "15:59")
+    session_trades = trades.between_time("09:30", "16:00", inclusive="left")
     if session_trades.empty or session_trades["Size"].sum() == 0:
         return None
     total_pv = (session_trades["Price"] * session_trades["Size"]).sum()
