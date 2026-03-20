@@ -85,7 +85,12 @@ def run() -> None:
     last_session_date = None
     last_status_ts    = 0.0
 
-    for price, size, ts_et in trade_stream():
+    # If starting mid-session, replay trades from 9:30 AM so VWAP and IB
+    # are accurate from the first live tick rather than starting from scratch.
+    now_et = datetime.datetime.now(ET)
+    session_start = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+
+    for price, size, ts_et in trade_stream(session_start=session_start):
         now    = datetime.datetime.now(ET)
         now_pt = now.astimezone(PT)
         today  = now.date()

@@ -49,30 +49,40 @@ def get_current_price() -> float | None:
     return _current_price
 
 
-def _make_client() -> db.Live:
+def _make_client(start: datetime.datetime | None = None) -> db.Live:
     client = db.Live(key=DATABENTO_API_KEY)
-    client.subscribe(
-        dataset=DATABENTO_DATASET,
-        schema="trades",
-        stype_in="continuous",
-        symbols=[DATABENTO_SYMBOL],
-    )
+    kwargs: dict = {
+        "dataset":  DATABENTO_DATASET,
+        "schema":   "trades",
+        "stype_in": "continuous",
+        "symbols":  [DATABENTO_SYMBOL],
+    }
+    if start is not None:
+        kwargs["start"] = start.isoformat()
+    client.subscribe(**kwargs)
     return client
 
 
-def trade_stream() -> Generator[tuple[float, int, datetime.datetime], None, None]:
+def trade_stream(session_start: datetime.datetime | None = None) -> Generator[tuple[float, int, datetime.datetime], None, None]:
     """
     Yield (price, size, timestamp_et) for each live trade record.
     Blocks until the next trade arrives. Reconnects automatically on errors.
+
+    Pass session_start to replay historical trades from that timestamp before
+    switching to live — use this when starting mid-session so VWAP and IB
+    are accurate from the first live tick.
 
     Accumulates every yielded trade into the session DataFrame so callers can
     compute VWAP and IB levels from get_session_trades().
     """
     global _trades, _current_price, _live_client
 
+    start = session_start  # used only on first connection; cleared after
     while True:
-        print("[market_data] Connecting to Databento live feed...")
-        _live_client = _make_client()
+        print("[market_data] Connecting to Databento live feed"
+              + (f" (replaying from {start.strftime('%H:%M:%S')} ET)..." if start else "..."))
+        _live_client = _make_client(start=start)
+        start = None  # reconnects after errors go to live-only
         try:
             for record in _live_client:
                 if not isinstance(record, db.TradeMsg):
