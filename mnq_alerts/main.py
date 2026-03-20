@@ -12,6 +12,7 @@ Stream behavior:
 from __future__ import annotations
 
 import datetime
+import sys
 import time
 
 import pytz
@@ -161,10 +162,14 @@ def run() -> None:
                     evaluator.add(alert_id, line_price, direction, ts_et, today.isoformat())
                 evaluator.update(price, ts_et)
 
-                # Close session once market shuts — mark remaining evals unresolved.
+                # Close session once market shuts — mark remaining evals unresolved,
+                # then exit cleanly so systemd does not restart the process.
                 if not session_closed and ts_et.time() >= MARKET_CLOSE:
                     evaluator.close_session()
                     session_closed = True
+                    print(f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] "
+                          f"Market closed. Shutting down.")
+                    sys.exit(0)
             else:
                 alert_manager.advance_state(price)
 
