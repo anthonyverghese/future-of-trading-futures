@@ -82,6 +82,8 @@ def run() -> None:
 
     alert_manager     = AlertManager()
     ib_locked         = False
+    ibh: float | None = None
+    ibl: float | None = None
     last_session_date = None
     last_status_ts    = 0.0
 
@@ -104,6 +106,8 @@ def run() -> None:
             reset_session()
             alert_manager     = AlertManager()
             ib_locked         = False
+            ibh               = None
+            ibl               = None
             last_session_date = today
             print(f"\n[{now_pt.strftime('%Y-%m-%d')}] New session — state reset.")
 
@@ -142,11 +146,12 @@ def run() -> None:
                 print(f"[replaying] {ts_et.strftime('%H:%M:%S')} ET "
                       f"({trade_lag / 60:.0f} min behind live)...")
             else:
-                ib_status = "locked" if ib_locked else "IB window active"
+                ib_str = (f"IBH: {ibh:.2f} | IBL: {ibl:.2f}" if ib_locked
+                          else "IB window active")
                 print(f"[{now_pt.strftime('%H:%M:%S')} PT] "
                       f"MNQ: {price:.2f} | "
                       f"VWAP: {f'{vwap:.2f}' if vwap else 'N/A'} | "
-                      f"IB: {ib_status}")
+                      f"{ib_str}")
             last_status_ts = now_ts
 
 
