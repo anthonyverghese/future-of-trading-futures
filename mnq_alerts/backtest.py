@@ -179,7 +179,11 @@ def simulate_and_evaluate(df: pd.DataFrame, date: datetime.date) -> list[Alert]:
     alerts: list[Alert] = []
     post_ib = df[df.index.time >= IB_END]
 
-    for ts, row in post_ib.iterrows():
+    for tick_num, (ts, row) in enumerate(post_ib.iterrows()):
+        if tick_num % 10_000 == 0:
+            print(f"    [sim] {ts.strftime('%Y-%m-%d %H:%M:%S')} ET  "
+                  f"({tick_num:,} ticks)", flush=True)
+
         price = row["price"]
         vwap  = row["vwap"]
         level_prices = {"IBH": ibh, "IBL": ibl, "VWAP": vwap}
@@ -556,16 +560,21 @@ def main() -> None:
     client: db.Historical = db.Historical(key=DATABENTO_API_KEY)
     all_alerts: list[Alert] = []
 
-    for date in days:
-        print(f"  {date} ...", end="  ", flush=True)
+    cum_correct = cum_incorrect = cum_inconc = 0
+
+    for day_num, date in enumerate(days, 1):
+        print(f"\n{'─' * 65}")
+        print(f"  Day {day_num}/{len(days)}  |  {date}")
+        print(f"{'─' * 65}")
+
         try:
             df = fetch_trades(client, date)
         except Exception as e:
-            print(f"ERROR: {e}")
+            print(f"  ERROR fetching data: {e}")
             continue
 
         if df.empty:
-            print("no data")
+            print("  No data for this day.")
             continue
 
         alerts = simulate_and_evaluate(df, date)
@@ -574,8 +583,15 @@ def main() -> None:
         c = sum(1 for a in alerts if a.outcome == "correct")
         i = sum(1 for a in alerts if a.outcome == "incorrect")
         n = sum(1 for a in alerts if a.outcome == "inconclusive")
-        print(f"{len(df):>7,} trades  →  {len(alerts):>2} alerts  "
-              f"({c} correct  {i} incorrect  {n} inconclusive)")
+        cum_correct   += c
+        cum_incorrect += i
+        cum_inconc    += n
+
+        print(f"  Trades fetched    : {len(df):,}")
+        print(f"  Alerts today      : {len(alerts)}  "
+              f"({c} correct  |  {i} incorrect  |  {n} inconclusive)")
+        print(f"  Cumulative total  : "
+              f"{cum_correct} correct  |  {cum_incorrect} incorrect  |  {cum_inconc} inconclusive")
 
     build_model(all_alerts)
     print_results(all_alerts, days)
