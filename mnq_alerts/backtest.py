@@ -138,6 +138,8 @@ def fetch_trades(client: db.Historical, date: datetime.date) -> pd.DataFrame:
         price = rec.price / 1_000_000_000
         size  = int(rec.size)
         rows.append((ts, price, size))
+        if len(rows) % 10_000 == 0:
+            print(f"    ... {len(rows):,} trades downloaded", flush=True)
 
     if not rows:
         return pd.DataFrame(columns=["price", "size"])
