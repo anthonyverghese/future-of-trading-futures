@@ -369,6 +369,27 @@ def build_model(all_alerts: list[Alert]) -> None:
     n_incorrect = sum(1 for a in labeled if a.outcome == "incorrect")
     print(f"  Samples: {len(labeled)}  ({n_correct} correct, {n_incorrect} incorrect)")
 
+    # ── Diagnostic: how many samples had price hit the line before the
+    # 2-minute feature window ended? Those samples contain post-hit data
+    # and the model's output would arrive too late to act on in live trading.
+    hit_before_window = [
+        a for a in labeled
+        if a.hit_time is not None and a.alert_time is not None
+        and (a.hit_time - a.alert_time).total_seconds() < FEATURE_SECS
+    ]
+    pct = len(hit_before_window) / len(labeled) * 100 if labeled else 0
+    print(f"\n  ⚠ Line hit before 2-min window ended: "
+          f"{len(hit_before_window)}/{len(labeled)} samples ({pct:.1f}%)")
+    print(f"  For these alerts, the model sees post-hit data and would arrive")
+    print(f"  too late to be actionable in live trading.")
+
+    # Filter to only samples where the line was NOT hit during the feature window.
+    clean = [a for a in labeled if a not in set(hit_before_window)]
+    n_clean_correct   = sum(1 for a in clean if a.outcome == "correct")
+    n_clean_incorrect = sum(1 for a in clean if a.outcome == "incorrect")
+    print(f"\n  Clean samples (line hit AFTER 2-min window): "
+          f"{len(clean)}  ({n_clean_correct} correct, {n_clean_incorrect} incorrect)")
+
     if len(labeled) < 6 or min(n_correct, n_incorrect) < 2:
         print("  Insufficient samples for reliable model — skipping.")
         return
