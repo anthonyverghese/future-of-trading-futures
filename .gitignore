@@ -3,3 +3,4 @@
 __pycache__/
 mnq_alerts/.env
 mnq_alerts/.session_cache.db
+mnq_alerts/alert_model.joblib

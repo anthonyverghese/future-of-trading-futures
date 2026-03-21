@@ -21,6 +21,7 @@ import sys
 from dataclasses import dataclass, field
 
 import databento as db
+import joblib
 import numpy as np
 import pandas as pd
 import pytz
@@ -33,6 +34,8 @@ from sklearn.preprocessing import StandardScaler
 
 sys.path.insert(0, os.path.dirname(__file__))
 from config import DATABENTO_API_KEY
+
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "alert_model.joblib")
 
 ET = pytz.timezone("America/New_York")
 
@@ -463,6 +466,12 @@ def build_model(all_alerts: list[Alert]) -> None:
     for feat, val in imp.items():
         bar = "█" * max(1, int(val / imp.max() * 30))
         print(f"    {feat:<25} {val / imp.sum():>5.1%}  {bar}")
+
+    # ── Save model ────────────────────────────────────────────────────────────
+    joblib.dump({"model": best_model, "threshold": best_threshold, "features": list(X.columns)},
+                MODEL_PATH)
+    print(f"\n  Model saved to {MODEL_PATH}")
+    print(f"  Load with: joblib.load('{MODEL_PATH}')")
 
     # ── Classification report at chosen threshold ─────────────────────────────
     final_preds = (p_incorrect > best_threshold).astype(int)
