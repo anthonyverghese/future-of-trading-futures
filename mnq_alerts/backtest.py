@@ -179,13 +179,15 @@ def simulate_and_evaluate(df: pd.DataFrame, date: datetime.date) -> list[Alert]:
     alerts: list[Alert] = []
     post_ib = df[df.index.time >= IB_END]
 
-    for tick_num, (ts, row) in enumerate(post_ib.iterrows()):
+    # itertuples is ~8x faster than iterrows for large DataFrames.
+    for tick_num, row in enumerate(post_ib.itertuples()):
         if tick_num % 10_000 == 0:
-            print(f"    [sim] {ts.strftime('%Y-%m-%d %H:%M:%S')} ET  "
+            print(f"    [sim] {row.Index.strftime('%Y-%m-%d %H:%M:%S')} ET  "
                   f"({tick_num:,} ticks)", flush=True)
 
-        price = row["price"]
-        vwap  = row["vwap"]
+        ts    = row.Index
+        price = row.price
+        vwap  = row.vwap
         level_prices = {"IBH": ibh, "IBL": ibl, "VWAP": vwap}
 
         for name, zone in zones.items():
@@ -193,61 +195,55 @@ def simulate_and_evaluate(df: pd.DataFrame, date: datetime.date) -> list[Alert]:
                 direction = "up" if price > zone.ref else "down"
                 alerts.append(Alert(
                     date=date,
-                    alert_time=ts.to_pydatetime(),
+                    alert_time=ts.to_pydatetime(warn=False),
                     level=name,
                     line_price=zone.ref,
                     entry_price=price,
                     direction=direction,
                 ))
 
-    # ── Outcome evaluation ────────────────────────────────────────────────────
+    # ── Outcome evaluation (vectorized — no iterrows) ─────────────────────────
+    prices = df["price"]
+
     for alert in alerts:
         alert_ts   = pd.Timestamp(alert.alert_time)
         window_end = alert_ts + pd.Timedelta(seconds=WINDOW_SECS)
-        forward    = df[df.index > alert_ts]
 
-        # Phase 1: wait for price to touch the line within 15 min of alert.
-        hit_ts = None
-        for ts, row in forward.iterrows():
-            if ts > window_end:
-                break
-            if abs(row["price"] - alert.line_price) <= HIT_THRESHOLD:
-                hit_ts = ts
-                alert.hit_time = ts.to_pydatetime()
-                break
-
-        if hit_ts is None:
+        # Phase 1: first tick where price touches the line within 15 min.
+        hit_seg  = prices[(prices.index > alert_ts) & (prices.index <= window_end)]
+        hit_mask = abs(hit_seg - alert.line_price) <= HIT_THRESHOLD
+        if not hit_mask.any():
             alert.outcome = "inconclusive"
             continue
 
-        # Phase 2: target (+10) or stop (-20) within 15 min of touching.
-        eval_end = hit_ts + pd.Timedelta(seconds=WINDOW_SECS)
-        post_hit = df[df.index > hit_ts]
+        hit_ts = hit_mask.idxmax()
+        alert.hit_time = hit_ts.to_pydatetime(warn=False)
 
-        for ts, row in post_hit.iterrows():
-            if ts > eval_end:
-                break
-            p = row["price"]
-            if alert.direction == "up":
-                if p >= alert.line_price + TARGET_POINTS:
-                    alert.outcome      = "correct"
-                    alert.outcome_time = ts.to_pydatetime()
-                    break
-                elif p <= alert.line_price - STOP_POINTS:
-                    alert.outcome      = "incorrect"
-                    alert.outcome_time = ts.to_pydatetime()
-                    break
-            else:
-                if p <= alert.line_price - TARGET_POINTS:
-                    alert.outcome      = "correct"
-                    alert.outcome_time = ts.to_pydatetime()
-                    break
-                elif p >= alert.line_price + STOP_POINTS:
-                    alert.outcome      = "incorrect"
-                    alert.outcome_time = ts.to_pydatetime()
-                    break
-        else:
+        # Phase 2: first tick where target (+10) or stop (-20) is hit.
+        eval_end = hit_ts + pd.Timedelta(seconds=WINDOW_SECS)
+        eval_seg = prices[(prices.index > hit_ts) & (prices.index <= eval_end)]
+        if eval_seg.empty:
             alert.outcome = "inconclusive"
+            continue
+
+        if alert.direction == "up":
+            target_mask = eval_seg >= alert.line_price + TARGET_POINTS
+            stop_mask   = eval_seg <= alert.line_price - STOP_POINTS
+        else:
+            target_mask = eval_seg <= alert.line_price - TARGET_POINTS
+            stop_mask   = eval_seg >= alert.line_price + STOP_POINTS
+
+        target_ts = eval_seg.index[target_mask][0] if target_mask.any() else None
+        stop_ts   = eval_seg.index[stop_mask][0]   if stop_mask.any()   else None
+
+        if target_ts is None and stop_ts is None:
+            alert.outcome = "inconclusive"
+        elif stop_ts is None or (target_ts is not None and target_ts <= stop_ts):
+            alert.outcome      = "correct"
+            alert.outcome_time = target_ts.to_pydatetime(warn=False)
+        else:
+            alert.outcome      = "incorrect"
+            alert.outcome_time = stop_ts.to_pydatetime(warn=False)
 
     # ── Feature extraction (2-min window before outcome) ─────────────────────
     for alert in alerts:
