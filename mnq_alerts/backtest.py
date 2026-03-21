@@ -46,6 +46,7 @@ IB_END        = datetime.time(10, 30)
 MARKET_CLOSE  = datetime.time(16,  0)
 
 ALERT_THRESHOLD = 10.0   # points — zone entry (must match live config)
+EXIT_THRESHOLD  = 20.0   # points — zone exit (must match live config)
 HIT_THRESHOLD   = 1.0    # points — price within this = "touched the line"
 TARGET_POINTS   = 10.0   # points in recommended direction = correct
 STOP_POINTS     = 20.0   # points against recommendation = incorrect
@@ -90,7 +91,7 @@ class ZoneState:
             self.price = new_level_price
 
         if self.in_zone:
-            if abs(current_price - self.ref) > ALERT_THRESHOLD:
+            if abs(current_price - self.ref) > EXIT_THRESHOLD:
                 self.in_zone = False
                 self.ref = None
             return False
@@ -245,14 +246,15 @@ def simulate_and_evaluate(df: pd.DataFrame, date: datetime.date) -> list[Alert]:
             alert.outcome      = "incorrect"
             alert.outcome_time = stop_ts.to_pydatetime(warn=False)
 
-    # ── Feature extraction (2-min window before outcome) ─────────────────────
+    # ── Feature extraction (2-min window after alert fires) ──────────────────
+    # Uses data available at decision time — no look-ahead bias.
     for alert in alerts:
         if alert.outcome not in ("correct", "incorrect") or alert.outcome_time is None:
             continue
 
-        outcome_ts   = pd.Timestamp(alert.outcome_time)
-        window_start = outcome_ts - pd.Timedelta(seconds=FEATURE_SECS)
-        window       = df[(df.index >= window_start) & (df.index <= outcome_ts)]
+        alert_ts     = pd.Timestamp(alert.alert_time)
+        window_end   = alert_ts + pd.Timedelta(seconds=FEATURE_SECS)
+        window       = df[(df.index >= alert_ts) & (df.index <= window_end)]
 
         if len(window) < 3:
             continue

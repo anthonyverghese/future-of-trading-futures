@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from cache import log_alert
-from config import ALERT_THRESHOLD_POINTS
+from config import ALERT_EXIT_POINTS, ALERT_THRESHOLD_POINTS
 from notifications import send_notification
 
 _TICKER = "MNQ"
@@ -30,11 +30,11 @@ class LevelState:
         """Returns True if an alert should fire (price just entered the zone).
 
         On zone entry, reference_price is locked to the current level price.
-        Exit is checked against that reference — so VWAP drifting slightly
-        while price is in-zone does not reset or re-trigger the alert.
+        Exit requires price to move ALERT_EXIT_POINTS (20) away from the
+        reference — wider than the entry threshold (10) to reduce re-triggering.
         """
         if self.in_zone:
-            if abs(current_price - self.reference_price) > ALERT_THRESHOLD_POINTS:
+            if abs(current_price - self.reference_price) > ALERT_EXIT_POINTS:
                 self.in_zone = False
                 self.reference_price = None  # Reset — next entry will alert again
             return False
