@@ -7,8 +7,8 @@ Monitors MNQ Micro Nasdaq futures during Regular Trading Hours and sends push no
 - Runs Monday–Friday, 9:30 AM – 4:00 PM ET
 - After 10:30 AM, locks in the **Initial Balance High (IBH)** and **Initial Balance Low (IBL)**
 - Recalculates **VWAP** on every tick
-- Sends a push notification when MNQ is within **15 points** of any level
-- Will not re-alert until price moves more than 15 points away and re-approaches
+- Sends a push notification when MNQ is within **10 points** of any level
+- Will not re-alert until price moves more than 10 points away and re-approaches
 
 ## Prerequisites
 

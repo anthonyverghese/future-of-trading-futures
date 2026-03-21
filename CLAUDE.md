@@ -6,7 +6,7 @@ Pushover push notifications when price approaches key intraday levels:
 - **IBH / IBL** — Initial Balance High/Low (9:30–10:30 AM ET, locked after 10:30)
 - **VWAP** — Session volume-weighted average price (updates on every trade tick)
 
-Alerts fire once when price enters within 15 points of a level, then reset
+Alerts fire once when price enters within 10 points of a level, then reset
 after price exits, preventing notification spam.
 
 ## Architecture
@@ -59,7 +59,7 @@ Requires Python 3.9+. The `databento` SDK includes a compiled Rust extension
 
 | Setting | Default | Description |
 |---|---|---|
-| `ALERT_THRESHOLD_POINTS` | 15 | Points from a level to trigger alert |
+| `ALERT_THRESHOLD_POINTS` | 10 | Points from a level to trigger alert |
 | `MARKET_OPEN` | 9:30 AM ET | RTH start |
 | `MARKET_CLOSE` | 4:00 PM ET | RTH end |
 | `IB_END` | 10:30 AM ET | IB window close |
