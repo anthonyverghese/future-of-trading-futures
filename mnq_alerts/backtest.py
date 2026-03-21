@@ -45,7 +45,7 @@ MARKET_OPEN   = datetime.time(9,  30)
 IB_END        = datetime.time(10, 30)
 MARKET_CLOSE  = datetime.time(16,  0)
 
-ALERT_THRESHOLD = 15.0   # points — zone entry (must match live config)
+ALERT_THRESHOLD = 10.0   # points — zone entry (must match live config)
 HIT_THRESHOLD   = 1.0    # points — price within this = "touched the line"
 TARGET_POINTS   = 10.0   # points in recommended direction = correct
 STOP_POINTS     = 20.0   # points against recommendation = incorrect
