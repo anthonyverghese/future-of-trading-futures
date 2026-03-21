@@ -5,7 +5,9 @@ A recommendation is correct if, within 15 minutes of price hitting the line,
 price moves 10 points in the recommended direction.
 A recommendation is incorrect if price hits the line but does not move 10 points
 in the recommended direction within 15 minutes.
-Alerts where price never reaches the line are marked 'unresolved' at session close.
+A recommendation is inconclusive if price never reaches the line within 15 minutes
+of the alert triggering.
+Alerts still pending at session close are marked 'unresolved'.
 """
 
 from __future__ import annotations
@@ -57,10 +59,14 @@ class OutcomeEvaluator:
 
         for ev in self._pending:
             if ev.hit_time is None:
-                # Check if price has reached the line.
                 if abs(current_price - ev.line_price) <= HIT_THRESHOLD:
+                    # Price touched the line — start the move evaluation window.
                     ev.hit_time = current_time
                     update_alert_hit(ev.alert_id, current_time.isoformat())
+                elif (current_time - ev.alert_time).total_seconds() / 60 >= EVAL_WINDOW_MINS:
+                    # Price never reached the line within 15 minutes — inconclusive.
+                    update_alert_outcome(ev.alert_id, "inconclusive", ev.date_str)
+                    resolved.append(ev)
             else:
                 elapsed_mins = (current_time - ev.hit_time).total_seconds() / 60
 
