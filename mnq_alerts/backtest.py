@@ -375,7 +375,7 @@ def print_results(all_alerts: list[Alert], days: list[datetime.date]) -> None:
     df = pd.concat([df, pd.DataFrame([total_row])], ignore_index=True)
 
     print(f"\n{'═' * 80}")
-    print("  BACKTEST RESULTS — Last 20 Trading Days")
+    print("  BACKTEST RESULTS — Last 30 Trading Days")
     print(f"{'═' * 80}")
     print(df.to_string(index=False))
 
@@ -405,7 +405,7 @@ def print_results(all_alerts: list[Alert], days: list[datetime.date]) -> None:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main() -> None:
-    days = get_trading_days(20)
+    days = get_trading_days(30)
     print(f"{'═' * 60}")
     print(f"  MNQ Backtest  |  {days[0]} → {days[-1]}")
     print(f"  Alert threshold : ±{ALERT_THRESHOLD} pts")
