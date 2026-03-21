@@ -86,7 +86,7 @@ class OutcomeEvaluator:
             self._pending.remove(ev)
 
     def close_session(self) -> None:
-        """Mark all still-pending evaluations as 'unresolved' at session end."""
+        """Mark all still-pending evaluations as 'inconclusive' at session end."""
         for ev in self._pending:
-            update_alert_outcome(ev.alert_id, "unresolved", ev.date_str)
+            update_alert_outcome(ev.alert_id, "inconclusive", ev.date_str)
         self._pending.clear()
