@@ -200,6 +200,18 @@ def simulate_and_evaluate(df: pd.DataFrame, date: datetime.date) -> list[Alert]:
 
         for name, zone in zones.items():
             if zone.update(price, new_level_price=level_prices[name]):
+                alert_time_mins = ts.hour * 60 + ts.minute
+
+                # Hard filter 1: skip alerts in the first post-IB hour.
+                # Backtest shows 62.1% win rate (10:30–11:30 ET) — below break-even.
+                if (10 * 60 + 30) <= alert_time_mins < (11 * 60 + 30):
+                    continue
+
+                # Hard filter 2: skip the first test of any level.
+                # Backtest shows 52.8% win rate on test #1 — well below break-even.
+                if zone.entry_count == 1:
+                    continue
+
                 direction = "up" if price > zone.ref else "down"
                 alerts.append(Alert(
                     date=date,
@@ -350,26 +362,15 @@ def simulate_and_evaluate(df: pd.DataFrame, date: datetime.date) -> list[Alert]:
         session_low_now   = float(row_at_alert["session_low"])
 
         # How far has MNQ moved from today's open? Positive = above open (green day).
-        session_move_pts  = alert.entry_price - day_open
-
-        # Does the trade direction align with the day's trend?
-        # direction="up" = BUY; direction="down" = SELL.
-        # Trend-following: BUY on a green day, or SELL on a red day.
-        day_bullish   = alert.entry_price > day_open
-        trade_bullish = alert.direction == "up"
-        trend_alignment = 1 if day_bullish == trade_bullish else -1
+        session_move_pts = alert.entry_price - day_open
 
         # Distance from today's session extremes at alert time.
         dist_from_high = session_high_now - alert.entry_price   # 0 = at session high
         dist_from_low  = alert.entry_price - session_low_now    # 0 = at session low
 
-        # ── Time-of-day bucket features (ET) ──────────────────────────────────
-        # alert_time is tz-aware in ET.
+        # minutes since market open (continuous — top feature last run)
         alert_time_mins = alert.alert_time.hour * 60 + alert.alert_time.minute
-        alert_mins      = alert_time_mins - (9 * 60 + 30)  # minutes since open
-        is_first_hour   = 1 if (10*60+30) <= alert_time_mins < (11*60+30) else 0
-        is_lunch        = 1 if (11*60+30) <= alert_time_mins < (13*60)    else 0
-        is_power_hour   = 1 if (15*60)    <= alert_time_mins < (16*60)    else 0
+        alert_mins      = alert_time_mins - (9 * 60 + 30)
 
         alert.features = {
             # Approach momentum (positive = moving toward line)
@@ -385,24 +386,16 @@ def simulate_and_evaluate(df: pd.DataFrame, date: datetime.date) -> list[Alert]:
             # Volume / activity
             "volume_trend":       volume_trend,
             "tick_rate":          tick_rate,
-            # Time of day
+            # Time of day (continuous only — buckets showed 0% importance)
             "time_of_day_mins":   alert_mins,
-            "is_first_hour":      is_first_hour,
-            "is_lunch":           is_lunch,
-            "is_power_hour":      is_power_hour,
             # Session / market context
             "session_move_pts":   session_move_pts,
-            "trend_alignment":    trend_alignment,
             "dist_from_high":     dist_from_high,
             "dist_from_low":      dist_from_low,
             # Level quality
             "level_test_count":   alert.level_test_count,
             # Alert context
             "entry_distance":     abs(alert.entry_price - alert.line_price),
-            "level_IBH":          1 if alert.level == "IBH"  else 0,
-            "level_IBL":          1 if alert.level == "IBL"  else 0,
-            "level_VWAP":         1 if alert.level == "VWAP" else 0,
-            "direction":          1 if alert.direction == "up" else 0,
         }
 
     return alerts
