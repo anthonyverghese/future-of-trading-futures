@@ -546,17 +546,26 @@ def print_results(all_alerts: list[Alert], days: list[datetime.date]) -> None:
     total_avoided   = int(total_row["Correctly Avoided"])
     total_decided   = total_correct + total_incorrect
 
+    # Good trades the model incorrectly told you to skip.
+    good_skipped = sum(
+        1 for a in all_alerts
+        if a.outcome == "correct" and a.cv_pred == 0
+    )
+
     print(f"\n{'─' * 65}")
     if total_decided > 0:
         raw_rate = total_correct / total_decided
         print(f"  Win rate — raw (no model)    : {raw_rate:.1%}  "
               f"({total_correct}W / {total_incorrect}L)")
 
+        # Subtract both avoided bad trades AND wrongly skipped good trades.
+        adj_correct   = total_correct   - good_skipped
         adj_incorrect = total_incorrect - total_avoided
-        adj_decided   = total_correct + adj_incorrect
-        adj_rate      = total_correct / adj_decided if adj_decided > 0 else 0.0
+        adj_decided   = adj_correct + adj_incorrect
+        adj_rate      = adj_correct / adj_decided if adj_decided > 0 else 0.0
         print(f"  Win rate — model-filtered    : {adj_rate:.1%}  "
-              f"(avoided {total_avoided}/{total_incorrect} bad trades)")
+              f"({adj_correct}W / {adj_incorrect}L  |  "
+              f"avoided {total_avoided} bad, skipped {good_skipped} good)")
         print(f"\n  'Correctly Avoided' uses cross-val predictions — no in-sample overfitting.")
     print(f"{'─' * 65}")
 
