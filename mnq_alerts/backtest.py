@@ -46,12 +46,13 @@ MARKET_OPEN   = datetime.time(9,  30)
 IB_END        = datetime.time(10, 30)
 MARKET_CLOSE  = datetime.time(16,  0)
 
-ALERT_THRESHOLD = 7.0    # points — zone entry (must match live config)
-EXIT_THRESHOLD  = 20.0   # points — zone exit (must match live config)
-HIT_THRESHOLD   = 1.0    # points — price within this = "touched the line"
-TARGET_POINTS   = 10.0   # points in recommended direction = correct
-WINDOW_SECS     = 15 * 60  # 15-minute evaluation window
-FEATURE_SECS    = 3  * 60  # 3-minute approach window BEFORE alert fires
+ALERT_THRESHOLD   = 7.0    # points — zone entry (must match live config)
+EXIT_THRESHOLD    = 20.0   # points — zone exit (must match live config)
+HIT_THRESHOLD     = 1.0    # points — price within this = "touched the line"
+TARGET_POINTS     = 10.0   # points in recommended direction = correct
+WINDOW_SECS       = 15 * 60  # 15-minute evaluation window
+FEATURE_SECS      = 3  * 60  # 3-minute approach window BEFORE alert fires
+CONFLUENCE_PTS    = 10.0   # pts — line within this of a prior day level = confluence
 
 
 # ── Data structures ───────────────────────────────────────────────────────────
@@ -64,12 +65,13 @@ class Alert:
     line_price:       float         # level price locked at zone entry
     entry_price:      float         # MNQ price when alert fired
     direction:        str           # 'up' = BUY rec, 'down' = SELL rec
-    level_test_count: int  = 1      # which test of this level today (1 = first touch)
-    hit_time:         datetime.datetime | None = None
-    outcome_time:     datetime.datetime | None = None
-    outcome:          str = "inconclusive"
-    features:         dict = field(default_factory=dict)
-    cv_pred:          int | None = None   # 0=predicted incorrect (avoid), 1=predicted correct
+    level_test_count:  int  = 1      # which test of this level today (1 = first touch)
+    prior_confluence:  bool = False  # True if line is within CONFLUENCE_PTS of a prior day level
+    hit_time:          datetime.datetime | None = None
+    outcome_time:      datetime.datetime | None = None
+    outcome:           str = "inconclusive"
+    features:          dict = field(default_factory=dict)
+    cv_pred:           int | None = None   # 0=predicted incorrect (avoid), 1=predicted correct
 
 
 class ZoneState:
@@ -185,9 +187,14 @@ def fetch_trades(client: db.Historical, date: datetime.date) -> pd.DataFrame:
 
 # ── Simulation ────────────────────────────────────────────────────────────────
 
-def simulate_and_evaluate(df: pd.DataFrame, date: datetime.date) -> list[Alert]:
+def simulate_and_evaluate(
+    df: pd.DataFrame,
+    date: datetime.date,
+    prior_levels: list[float] | None = None,
+) -> list[Alert]:
     """
     Simulate alert system + evaluate outcomes for one trading day.
+    prior_levels: list of key prices from the prior session (IBH, IBL, close).
     Returns a list of Alert objects with outcomes and features populated.
     """
     if df.empty:
@@ -242,7 +249,11 @@ def simulate_and_evaluate(df: pd.DataFrame, date: datetime.date) -> list[Alert]:
                 if zone.entry_count == 1:
                     continue
 
-                direction = "up" if price > zone.ref else "down"
+                direction   = "up" if price > zone.ref else "down"
+                confluence  = bool(
+                    prior_levels and
+                    any(abs(zone.ref - p) <= CONFLUENCE_PTS for p in prior_levels)
+                )
                 alerts.append(Alert(
                     date=date,
                     alert_time=ts.to_pydatetime(warn=False),
@@ -251,6 +262,7 @@ def simulate_and_evaluate(df: pd.DataFrame, date: datetime.date) -> list[Alert]:
                     entry_price=price,
                     direction=direction,
                     level_test_count=zone.entry_count,
+                    prior_confluence=confluence,
                 ))
 
     # ── Outcome evaluation (vectorized — no iterrows) ─────────────────────────
@@ -416,6 +428,7 @@ def simulate_and_evaluate(df: pd.DataFrame, date: datetime.date) -> list[Alert]:
             "dist_from_low":      dist_from_low,
             # Level quality
             "level_test_count":   alert.level_test_count,
+            "prior_confluence":   1 if alert.prior_confluence else 0,
             # Alert context
             "entry_distance":     abs(alert.entry_price - alert.line_price),
         }
@@ -697,9 +710,16 @@ def print_results(all_alerts: list[Alert], days: list[datetime.date]) -> None:
     print("  WIN RATE BY ENTRY DISTANCE (how far inside the 7-pt zone)")
     print(f"{'─' * 55}")
     win_rate_table([
-        ("0–2 pts from line (very close)",  [a for a in decided if abs(a.entry_price - a.line_price) <= 2]),
-        ("2–4 pts from line",               [a for a in decided if 2 < abs(a.entry_price - a.line_price) <= 4]),
-        ("4–7 pts from line (outer edge)",  [a for a in decided if abs(a.entry_price - a.line_price) > 4]),
+        ("0–5 pts from line (close)",       [a for a in decided if abs(a.entry_price - a.line_price) <= 5]),
+        ("5–7 pts from line (outer edge)",  [a for a in decided if abs(a.entry_price - a.line_price) >  5]),
+    ])
+
+    print(f"\n{'─' * 55}")
+    print(f"  WIN RATE BY PRIOR DAY CONFLUENCE (line within {CONFLUENCE_PTS:.0f} pts of prior IBH/IBL/close)")
+    print(f"{'─' * 55}")
+    win_rate_table([
+        ("Confluence with prior level",    [a for a in decided if a.prior_confluence]),
+        ("No prior level confluence",      [a for a in decided if not a.prior_confluence]),
     ])
 
     print(f"\n{'─' * 55}")
@@ -771,6 +791,7 @@ def main() -> None:
     all_alerts: list[Alert] = []
 
     cum_correct = cum_incorrect = cum_inconc = 0
+    prior_levels: list[float] = []   # IBH, IBL, close from the previous session
 
     for day_num, date in enumerate(days, 1):
         print(f"\n{'─' * 65}")
@@ -787,8 +808,17 @@ def main() -> None:
             print("  No data for this day.")
             continue
 
-        alerts = simulate_and_evaluate(df, date)
+        alerts = simulate_and_evaluate(df, date, prior_levels=prior_levels)
         all_alerts.extend(alerts)
+
+        # Compute this day's key levels to carry forward as prior_levels tomorrow.
+        ib = df[(df.index.time >= MARKET_OPEN) & (df.index.time < IB_END)]
+        if not ib.empty:
+            prior_levels = [
+                float(ib["price"].max()),   # prior IBH
+                float(ib["price"].min()),   # prior IBL
+                float(df["price"].iloc[-1]),  # prior session close
+            ]
 
         c = sum(1 for a in alerts if a.outcome == "correct")
         i = sum(1 for a in alerts if a.outcome == "incorrect")
