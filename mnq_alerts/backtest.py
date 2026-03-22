@@ -689,9 +689,63 @@ def print_results(all_alerts: list[Alert], days: list[datetime.date]) -> None:
     print("  WIN RATE BY DIRECTION")
     print(f"{'─' * 55}")
     win_rate_table([
-        ("BUY  (price above line → support)", [a for a in decided if a.direction == "up"]),
+        ("BUY  (price above line → support)",    [a for a in decided if a.direction == "up"]),
         ("SELL (price below line → resistance)", [a for a in decided if a.direction == "down"]),
     ])
+
+    print(f"\n{'─' * 55}")
+    print("  WIN RATE BY ENTRY DISTANCE (how far inside the 7-pt zone)")
+    print(f"{'─' * 55}")
+    win_rate_table([
+        ("0–2 pts from line (very close)",  [a for a in decided if abs(a.entry_price - a.line_price) <= 2]),
+        ("2–4 pts from line",               [a for a in decided if 2 < abs(a.entry_price - a.line_price) <= 4]),
+        ("4–7 pts from line (outer edge)",  [a for a in decided if abs(a.entry_price - a.line_price) > 4]),
+    ])
+
+    print(f"\n{'─' * 55}")
+    print("  WIN RATE BY APPROACH STRENGTH (norm_approach feature, top/bottom half)")
+    print(f"{'─' * 55}")
+    featured = [a for a in decided if a.features]
+    if featured:
+        median_approach = sorted(a.features.get("norm_approach", 0) for a in featured)[len(featured) // 2]
+        win_rate_table([
+            ("Strong approach (top half)",  [a for a in featured if a.features.get("norm_approach", 0) >= median_approach]),
+            ("Weak approach (bottom half)", [a for a in featured if a.features.get("norm_approach", 0) <  median_approach]),
+        ])
+
+    print(f"\n{'─' * 55}")
+    print("  WIN RATE BY DAY OF WEEK")
+    print(f"{'─' * 55}")
+    win_rate_table([
+        ("Monday",    [a for a in decided if a.alert_time.weekday() == 0]),
+        ("Tuesday",   [a for a in decided if a.alert_time.weekday() == 1]),
+        ("Wednesday", [a for a in decided if a.alert_time.weekday() == 2]),
+        ("Thursday",  [a for a in decided if a.alert_time.weekday() == 3]),
+        ("Friday",    [a for a in decided if a.alert_time.weekday() == 4]),
+    ])
+
+    print(f"\n{'─' * 55}")
+    print("  WIN RATE BY VWAP DIRECTION (VWAP alerts only)")
+    print(f"{'─' * 55}")
+    vwap = [a for a in decided if a.level == "VWAP"]
+    win_rate_table([
+        ("VWAP BUY  (price above VWAP → support)",    [a for a in vwap if a.direction == "up"]),
+        ("VWAP SELL (price below VWAP → resistance)", [a for a in vwap if a.direction == "down"]),
+    ])
+
+    print(f"\n{'─' * 55}")
+    print("  WIN RATE BY SESSION MOVE MAGNITUDE (MNQ pts from open at alert time)")
+    print(f"{'─' * 55}")
+    def session_bucket(a: Alert) -> str:
+        m = a.features.get("session_move_pts", 0)
+        if   m >  50: return "Strongly green  (>+50 pts)"
+        elif m >   0: return "Mildly green    (0 to +50 pts)"
+        elif m > -50: return "Mildly red      (0 to -50 pts)"
+        else:         return "Strongly red    (<-50 pts)"
+    buckets_session = ["Strongly green  (>+50 pts)", "Mildly green    (0 to +50 pts)",
+                       "Mildly red      (0 to -50 pts)", "Strongly red    (<-50 pts)"]
+    win_rate_table([(b, [a for a in decided if a.features and session_bucket(a) == b])
+                    for b in buckets_session])
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
