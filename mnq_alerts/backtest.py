@@ -604,6 +604,28 @@ def main() -> None:
         print(f"  Trades fetched    : {len(df):,}")
         print(f"  Alerts today      : {len(alerts)}  "
               f"({c} correct  |  {i} incorrect  |  {n} inconclusive)")
+
+        # Per-alert detail for correct and incorrect outcomes.
+        decided = [a for a in alerts if a.outcome in ("correct", "incorrect")]
+        if decided:
+            print(f"\n  {'Time':>8}  {'Level':>5}  {'Line':>8}  {'Entry':>8}  "
+                  f"{'Dir':>5}  {'Hit':>8}  {'Resolved':>8}  Outcome")
+            print(f"  {'-'*8}  {'-'*5}  {'-'*8}  {'-'*8}  "
+                  f"{'-'*5}  {'-'*8}  {'-'*8}  {'-'*9}")
+            for a in sorted(decided, key=lambda x: x.alert_time):
+                hit_str = a.hit_time.strftime("%H:%M:%S") if a.hit_time else "  —"
+                out_str = a.outcome_time.strftime("%H:%M:%S") if a.outcome_time else "  —"
+                marker  = "✓" if a.outcome == "correct" else "✗"
+                print(f"  {a.alert_time.strftime('%H:%M:%S'):>8}  "
+                      f"{a.level:>5}  "
+                      f"{a.line_price:>8.2f}  "
+                      f"{a.entry_price:>8.2f}  "
+                      f"{'↑ BUY' if a.direction == 'up' else '↓ SELL':>5}  "
+                      f"{hit_str:>8}  "
+                      f"{out_str:>8}  "
+                      f"{marker} {a.outcome}")
+        print()
+
         print(f"  Cumulative total  : "
               f"{cum_correct} correct  |  {cum_incorrect} incorrect  |  {cum_inconc} inconclusive")
 
