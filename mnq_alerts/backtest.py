@@ -610,6 +610,84 @@ def print_results(all_alerts: list[Alert], days: list[datetime.date]) -> None:
         print(f"\n  'Correctly Avoided' uses cross-val predictions — no in-sample overfitting.")
     print(f"{'─' * 65}")
 
+    # ── Breakdown analysis ────────────────────────────────────────────────────
+    # Shows raw win rates by key groupings so we can decide which hard filters
+    # or feature changes are worth making — without running another backtest.
+    decided = [a for a in all_alerts if a.outcome in ("correct", "incorrect")]
+    if not decided:
+        return
+
+    def win_rate_table(groups: list[tuple[str, list[Alert]]]) -> None:
+        print(f"  {'Group':<28}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}")
+        print(f"  {'-'*28}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}")
+        for label, alerts in groups:
+            w = sum(1 for a in alerts if a.outcome == "correct")
+            l = sum(1 for a in alerts if a.outcome == "incorrect")
+            t = w + l
+            wr = w / t if t > 0 else 0.0
+            print(f"  {label:<28}  {w:>5}  {l:>5}  {t:>7}  {wr:>5.1%}")
+
+    # By time bucket (using features dict; fall back to alert_time if no features)
+    def time_bucket(a: Alert) -> str:
+        mins = a.alert_time.hour * 60 + a.alert_time.minute
+        if   (10*60+30) <= mins < (11*60+30): return "10:30–11:30 ET (first hour)"
+        elif (11*60+30) <= mins < (13*60):    return "11:30–13:00 ET (lunch)"
+        elif (13*60)    <= mins < (15*60):    return "13:00–15:00 ET (afternoon)"
+        elif (15*60)    <= mins < (16*60):    return "15:00–16:00 ET (power hour)"
+        else:                                  return "other"
+
+    print(f"\n{'─' * 55}")
+    print("  WIN RATE BY TIME OF DAY")
+    print(f"{'─' * 55}")
+    buckets = ["10:30–11:30 ET (first hour)", "11:30–13:00 ET (lunch)",
+               "13:00–15:00 ET (afternoon)", "15:00–16:00 ET (power hour)"]
+    win_rate_table([(b, [a for a in decided if time_bucket(a) == b]) for b in buckets])
+
+    print(f"\n{'─' * 55}")
+    print("  WIN RATE BY LEVEL")
+    print(f"{'─' * 55}")
+    win_rate_table([(lvl, [a for a in decided if a.level == lvl])
+                    for lvl in ["IBH", "IBL", "VWAP"]])
+
+    print(f"\n{'─' * 55}")
+    print("  WIN RATE BY LEVEL TEST COUNT (how many times zone entered today)")
+    print(f"{'─' * 55}")
+    max_count = max((a.level_test_count for a in decided), default=1)
+    groups = []
+    for n in range(1, min(max_count + 1, 6)):
+        label = f"Test #{n}" if n < 5 else "Test #5+"
+        subset = [a for a in decided if (a.level_test_count == n if n < 5 else a.level_test_count >= 5)]
+        groups.append((label, subset))
+    win_rate_table(groups)
+
+    print(f"\n{'─' * 55}")
+    print("  WIN RATE BY TREND ALIGNMENT")
+    print(f"{'─' * 55}")
+    with_trend     = [a for a in decided if a.features.get("trend_alignment",  0) ==  1]
+    counter_trend  = [a for a in decided if a.features.get("trend_alignment",  0) == -1]
+    win_rate_table([
+        ("With trend (BUY on green / SELL on red)", with_trend),
+        ("Counter-trend",                           counter_trend),
+    ])
+
+    print(f"\n{'─' * 55}")
+    print("  WIN RATE BY DAY DIRECTION (MNQ vs open at alert time)")
+    print(f"{'─' * 55}")
+    green_day = [a for a in decided if a.features.get("session_move_pts", 0) > 0]
+    red_day   = [a for a in decided if a.features.get("session_move_pts", 0) <= 0]
+    win_rate_table([
+        ("Green day (price above open)", green_day),
+        ("Red day (price at/below open)", red_day),
+    ])
+
+    print(f"\n{'─' * 55}")
+    print("  WIN RATE BY DIRECTION")
+    print(f"{'─' * 55}")
+    win_rate_table([
+        ("BUY  (price above line → support)", [a for a in decided if a.direction == "up"]),
+        ("SELL (price below line → resistance)", [a for a in decided if a.direction == "down"]),
+    ])
+
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
