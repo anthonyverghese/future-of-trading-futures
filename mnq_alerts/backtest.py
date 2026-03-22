@@ -38,6 +38,7 @@ from config import DATABENTO_API_KEY
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "alert_model.joblib")
 
 ET = pytz.timezone("America/New_York")
+PT = pytz.timezone("America/Los_Angeles")
 
 DATASET       = "GLBX.MDP3"
 SYMBOL        = "MNQ.c.0"
@@ -608,21 +609,24 @@ def main() -> None:
         # Per-alert detail for correct and incorrect outcomes.
         decided = [a for a in alerts if a.outcome in ("correct", "incorrect")]
         if decided:
-            print(f"\n  {'Time':>8}  {'Level':>5}  {'Line':>8}  {'Entry':>8}  "
-                  f"{'Dir':>5}  {'Hit':>8}  {'Resolved':>8}  Outcome")
-            print(f"  {'-'*8}  {'-'*5}  {'-'*8}  {'-'*8}  "
-                  f"{'-'*5}  {'-'*8}  {'-'*8}  {'-'*9}")
+            def fmt(dt: datetime.datetime | None) -> str:
+                if dt is None:
+                    return "       —"
+                return dt.astimezone(PT).strftime("%H:%M:%S")
+
+            print(f"\n  {'Alert(PT)':>9}  {'Level':>5}  {'Line':>8}  {'Entry':>8}  "
+                  f"{'Dir':>6}  {'Hit(PT)':>8}  {'Done(PT)':>8}  Outcome")
+            print(f"  {'-'*9}  {'-'*5}  {'-'*8}  {'-'*8}  "
+                  f"{'-'*6}  {'-'*8}  {'-'*8}  {'-'*9}")
             for a in sorted(decided, key=lambda x: x.alert_time):
-                hit_str = a.hit_time.strftime("%H:%M:%S") if a.hit_time else "  —"
-                out_str = a.outcome_time.strftime("%H:%M:%S") if a.outcome_time else "  —"
-                marker  = "✓" if a.outcome == "correct" else "✗"
-                print(f"  {a.alert_time.strftime('%H:%M:%S'):>8}  "
+                marker = "✓" if a.outcome == "correct" else "✗"
+                print(f"  {fmt(a.alert_time):>9}  "
                       f"{a.level:>5}  "
                       f"{a.line_price:>8.2f}  "
                       f"{a.entry_price:>8.2f}  "
-                      f"{'↑ BUY' if a.direction == 'up' else '↓ SELL':>5}  "
-                      f"{hit_str:>8}  "
-                      f"{out_str:>8}  "
+                      f"{'↑ BUY' if a.direction == 'up' else '↓ SELL':>6}  "
+                      f"{fmt(a.hit_time):>8}  "
+                      f"{fmt(a.outcome_time):>8}  "
                       f"{marker} {a.outcome}")
         print()
 
