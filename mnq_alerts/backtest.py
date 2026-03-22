@@ -771,13 +771,22 @@ def print_results(all_alerts: list[Alert], days: list[datetime.date]) -> None:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main() -> None:
-    # Pass --offset 45 to run on the prior 45-day period (out-of-sample).
-    # Pass --offset 0 (default) for the most recent 45 days.
+    # --days N    : number of trading days to backtest (default 45)
+    # --offset N  : skip N trading days back before starting (default 0)
+    # Examples:
+    #   python backtest.py                      # most recent 45 days
+    #   python backtest.py --offset 45          # prior 45 days
+    #   python backtest.py --days 90            # full 90-day combined run
+    #   python backtest.py --days 90 --offset 45  # 90 days starting 45 days back
+    n_days = 45
+    if "--days" in sys.argv:
+        n_days = int(sys.argv[sys.argv.index("--days") + 1])
+
     offset = 0
     if "--offset" in sys.argv:
         offset = int(sys.argv[sys.argv.index("--offset") + 1])
 
-    days = get_trading_days(45, offset=offset)
+    days = get_trading_days(n_days, offset=offset)
     period = f"(offset {offset}d)" if offset else "(most recent)"
     print(f"{'═' * 65}")
     print(f"  MNQ Backtest  |  {days[0]} → {days[-1]}  {period}")
