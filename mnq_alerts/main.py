@@ -21,27 +21,43 @@ from alert_manager import AlertManager
 from config import (
     ALERT_THRESHOLD_POINTS,
     DISPLAY_TZ,
-    IB_END_HOUR, IB_END_MIN,
-    MARKET_CLOSE_HOUR, MARKET_CLOSE_MIN,
-    MARKET_OPEN_HOUR, MARKET_OPEN_MIN,
+    IB_END_HOUR,
+    IB_END_MIN,
+    MARKET_CLOSE_HOUR,
+    MARKET_CLOSE_MIN,
+    MARKET_OPEN_HOUR,
+    MARKET_OPEN_MIN,
 )
-from levels import calculate_initial_balance, calculate_vwap
-from cache import (CACHE_INTERVAL_SECONDS, clear_if_stale, get_replay_start,
-                   load_trades, save_trades, upsert_daily_stats)
-from market_data import get_session_trades, load_session_cache, reset_session, trade_stream
+from levels import calculate_fib_levels, calculate_initial_balance, calculate_vwap
+from cache import (
+    CACHE_INTERVAL_SECONDS,
+    clear_if_stale,
+    get_replay_start,
+    load_trades,
+    save_trades,
+    upsert_daily_stats,
+)
+from market_data import (
+    get_session_trades,
+    load_session_cache,
+    reset_session,
+    trade_stream,
+)
 from outcome_tracker import OutcomeEvaluator
 
 ET = pytz.timezone("America/New_York")
 if DISPLAY_TZ:
-    LOCAL_TZ      = pytz.timezone(DISPLAY_TZ)
+    LOCAL_TZ = pytz.timezone(DISPLAY_TZ)
     LOCAL_TZ_NAME = datetime.datetime.now(pytz.timezone(DISPLAY_TZ)).strftime("%Z")
 else:
-    LOCAL_TZ      = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo
-    LOCAL_TZ_NAME = datetime.datetime.now(datetime.timezone.utc).astimezone().strftime("%Z")
+    LOCAL_TZ = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo
+    LOCAL_TZ_NAME = (
+        datetime.datetime.now(datetime.timezone.utc).astimezone().strftime("%Z")
+    )
 
-MARKET_OPEN  = datetime.time(MARKET_OPEN_HOUR,  MARKET_OPEN_MIN)
+MARKET_OPEN = datetime.time(MARKET_OPEN_HOUR, MARKET_OPEN_MIN)
 MARKET_CLOSE = datetime.time(MARKET_CLOSE_HOUR, MARKET_CLOSE_MIN)
-IB_END       = datetime.time(IB_END_HOUR,       IB_END_MIN)
+IB_END = datetime.time(IB_END_HOUR, IB_END_MIN)
 
 # Throttle console status output to avoid flooding the terminal.
 _STATUS_INTERVAL_SECONDS = 5
@@ -59,8 +75,9 @@ def ib_period_complete(now: datetime.datetime) -> bool:
 
 def seconds_until_next_open(now: datetime.datetime) -> float:
     """Return seconds until the next RTH open, accounting for weekends."""
-    today_open = now.replace(hour=MARKET_OPEN_HOUR, minute=MARKET_OPEN_MIN,
-                             second=0, microsecond=0)
+    today_open = now.replace(
+        hour=MARKET_OPEN_HOUR, minute=MARKET_OPEN_MIN, second=0, microsecond=0
+    )
     if now < today_open and now.weekday() < 5:
         return (today_open - now).total_seconds()
 
@@ -75,13 +92,23 @@ def run() -> None:
     """Main event-driven loop. Runs until interrupted (Ctrl+C)."""
     print("=" * 55)
     print("  MNQ Alert System — Live Feed (GLBX.MDP3 MDP 3.0)")
-    print(f"  Threshold : ±{ALERT_THRESHOLD_POINTS} pts from IBH / IBL / VWAP")
-    market_open_local = datetime.datetime.now(ET).replace(
-        hour=MARKET_OPEN_HOUR, minute=MARKET_OPEN_MIN).astimezone(LOCAL_TZ)
-    market_close_local = datetime.datetime.now(ET).replace(
-        hour=MARKET_CLOSE_HOUR, minute=MARKET_CLOSE_MIN).astimezone(LOCAL_TZ)
-    print(f"  Hours     : {market_open_local.strftime('%I:%M %p')} – "
-          f"{market_close_local.strftime('%I:%M %p')} {LOCAL_TZ_NAME}, weekdays only")
+    print(
+        f"  Threshold : ±{ALERT_THRESHOLD_POINTS} pts from IBH / IBL / VWAP / Fib levels"
+    )
+    market_open_local = (
+        datetime.datetime.now(ET)
+        .replace(hour=MARKET_OPEN_HOUR, minute=MARKET_OPEN_MIN)
+        .astimezone(LOCAL_TZ)
+    )
+    market_close_local = (
+        datetime.datetime.now(ET)
+        .replace(hour=MARKET_CLOSE_HOUR, minute=MARKET_CLOSE_MIN)
+        .astimezone(LOCAL_TZ)
+    )
+    print(
+        f"  Hours     : {market_open_local.strftime('%I:%M %p')} – "
+        f"{market_close_local.strftime('%I:%M %p')} {LOCAL_TZ_NAME}, weekdays only"
+    )
     print("=" * 55)
 
     # Wait for RTH before opening the live connection.
@@ -91,8 +118,10 @@ def run() -> None:
             break
         now_pt = now.astimezone(LOCAL_TZ)
         wait_secs = seconds_until_next_open(now)
-        print(f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] Market closed. "
-              f"Next open in ~{wait_secs / 60:.0f} min.")
+        print(
+            f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] Market closed. "
+            f"Next open in ~{wait_secs / 60:.0f} min."
+        )
         time.sleep(min(wait_secs, 300))
 
     # Clear stale cache from a previous session before loading.
@@ -101,21 +130,21 @@ def run() -> None:
     load_session_cache(cached_trades)
     session_start = get_replay_start(cached_trades)
 
-    alert_manager     = AlertManager()
-    evaluator         = OutcomeEvaluator()
-    ib_locked         = False
+    alert_manager = AlertManager()
+    evaluator = OutcomeEvaluator()
+    ib_locked = False
     ibh: float | None = None
     ibl: float | None = None
     day_open: float | None = None
     last_session_date = None
-    last_status_ts    = 0.0
-    last_cache_ts     = 0.0
-    session_closed    = False
+    last_status_ts = 0.0
+    last_cache_ts = 0.0
+    session_closed = False
 
     for price, size, ts_et in trade_stream(session_start=session_start):
-        now    = datetime.datetime.now(ET)
+        now = datetime.datetime.now(ET)
         now_pt = now.astimezone(LOCAL_TZ)
-        today  = now.date()
+        today = now.date()
 
         # Skip trades outside RTH — futures trade 24/5 but we only alert during RTH.
         if not is_market_open(now):
@@ -124,15 +153,15 @@ def run() -> None:
         # Reset session state each new trading day.
         if last_session_date != today:
             reset_session()
-            alert_manager     = AlertManager()
-            evaluator         = OutcomeEvaluator()
-            ib_locked         = False
-            ibh               = None
-            ibl               = None
-            day_open          = None
+            alert_manager = AlertManager()
+            evaluator = OutcomeEvaluator()
+            ib_locked = False
+            ibh = None
+            ibl = None
+            day_open = None
             last_session_date = today
-            last_cache_ts     = 0.0
-            session_closed    = False
+            last_cache_ts = 0.0
+            session_closed = False
             print(f"\n[{now_pt.strftime('%Y-%m-%d')}] New session — state reset.")
 
         # Record opening price for session context scoring.
@@ -147,12 +176,22 @@ def run() -> None:
             ibh, ibl = calculate_initial_balance(trades)
             if ibh is not None and ibl is not None:
                 alert_manager.update_levels(ibh=ibh, ibl=ibl, vwap=None)
-                print(f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] "
-                      f"IB locked — IBH: {ibh:.2f}, IBL: {ibl:.2f}")
+                print(
+                    f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] "
+                    f"IB locked — IBH: {ibh:.2f}, IBL: {ibl:.2f}"
+                )
                 ib_locked = True
                 upsert_daily_stats(today.isoformat(), ibh=ibh, ibl=ibl)
+                fib_levels = calculate_fib_levels(ibh, ibl)
+                alert_manager.update_fib_levels(fib_levels)
+                fib_str = ", ".join(f"{k}: {v:.2f}" for k, v in fib_levels.items())
+                print(
+                    f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] Fib levels: {fib_str}"
+                )
             else:
-                print(f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] IB period done but no trade data yet.")
+                print(
+                    f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] IB period done but no trade data yet."
+                )
 
         # Recalculate VWAP on every trade tick for real-time accuracy.
         vwap = calculate_vwap(trades)
@@ -169,11 +208,15 @@ def run() -> None:
                 tick_rate = len(recent) / 3.0 if not recent.empty else 0.0
                 session_move = price - day_open if day_open is not None else None
                 fired = alert_manager.check_and_notify(
-                    price, now_et=ts_et.time(), tick_rate=tick_rate,
+                    price,
+                    now_et=ts_et.time(),
+                    tick_rate=tick_rate,
                     session_move_pts=session_move,
                 )
                 for alert_id, line_name, line_price, direction in fired:
-                    evaluator.add(alert_id, line_price, direction, ts_et, today.isoformat())
+                    evaluator.add(
+                        alert_id, line_price, direction, ts_et, today.isoformat()
+                    )
                 evaluator.update(price, ts_et)
 
                 # Close session once market shuts — mark remaining evals unresolved,
@@ -181,8 +224,10 @@ def run() -> None:
                 if not session_closed and ts_et.time() >= MARKET_CLOSE:
                     evaluator.close_session()
                     session_closed = True
-                    print(f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] "
-                          f"Market closed. Shutting down.")
+                    print(
+                        f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] "
+                        f"Market closed. Shutting down."
+                    )
                     sys.exit(0)
             else:
                 alert_manager.advance_state(price)
@@ -197,16 +242,23 @@ def run() -> None:
         if now_ts - last_status_ts >= _STATUS_INTERVAL_SECONDS:
             trade_lag = (now - ts_et).total_seconds()
             if trade_lag >= 60:
-                print(f"[replaying] {ts_et.strftime('%H:%M:%S')} ET "
-                      f"({trade_lag / 60:.0f} min behind live) | "
-                      f"VWAP: {f'{vwap:.2f}' if vwap else 'N/A'}")
+                print(
+                    f"[replaying] {ts_et.strftime('%H:%M:%S')} ET "
+                    f"({trade_lag / 60:.0f} min behind live) | "
+                    f"VWAP: {f'{vwap:.2f}' if vwap else 'N/A'}"
+                )
             else:
-                ib_str = (f"IBH: {ibh:.2f} | IBL: {ibl:.2f}" if ib_locked
-                          else "IB window active")
-                print(f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] "
-                      f"MNQ: {price:.2f} | "
-                      f"VWAP: {f'{vwap:.2f}' if vwap else 'N/A'} | "
-                      f"{ib_str}")
+                ib_str = (
+                    f"IBH: {ibh:.2f} | IBL: {ibl:.2f}"
+                    if ib_locked
+                    else "IB window active"
+                )
+                print(
+                    f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] "
+                    f"MNQ: {price:.2f} | "
+                    f"VWAP: {f'{vwap:.2f}' if vwap else 'N/A'} | "
+                    f"{ib_str}"
+                )
             last_status_ts = now_ts
 
 

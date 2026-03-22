@@ -40,52 +40,57 @@ MODEL_PATH = os.path.join(os.path.dirname(__file__), "alert_model.joblib")
 ET = pytz.timezone("America/New_York")
 PT = pytz.timezone("America/Los_Angeles")
 
-DATASET       = "GLBX.MDP3"
-SYMBOL        = "MNQ.c.0"
-MARKET_OPEN   = datetime.time(9,  30)
-IB_END        = datetime.time(10, 30)
-MARKET_CLOSE  = datetime.time(16,  0)
+DATASET = "GLBX.MDP3"
+SYMBOL = "MNQ.c.0"
+MARKET_OPEN = datetime.time(9, 30)
+IB_END = datetime.time(10, 30)
+MARKET_CLOSE = datetime.time(16, 0)
 
-ALERT_THRESHOLD   = 7.0    # points — zone entry (must match live config)
-EXIT_THRESHOLD    = 20.0   # points — zone exit (must match live config)
-HIT_THRESHOLD     = 1.0    # points — price within this = "touched the line"
-TARGET_POINTS     = 8.0    # points in recommended direction = correct
-STOP_POINTS       = 20.0   # points against — stopped out before target = incorrect
-WINDOW_SECS       = 15 * 60  # 15-minute evaluation window
-FEATURE_SECS      = 3  * 60  # 3-minute approach window BEFORE alert fires
-CONFLUENCE_PTS    = 10.0   # pts — line within this of a prior day level = confluence
+ALERT_THRESHOLD = 7.0  # points — zone entry (must match live config)
+EXIT_THRESHOLD = 20.0  # points — zone exit (must match live config)
+HIT_THRESHOLD = 1.0  # points — price within this = "touched the line"
+TARGET_POINTS = 8.0  # points in recommended direction = correct
+STOP_POINTS = 20.0  # points against — stopped out before target = incorrect
+WINDOW_SECS = 15 * 60  # 15-minute evaluation window
+FEATURE_SECS = 3 * 60  # 3-minute approach window BEFORE alert fires
+CONFLUENCE_PTS = 10.0  # pts — line within this of a prior day level = confluence
 
 
 # ── Data structures ───────────────────────────────────────────────────────────
 
+
 @dataclass
 class Alert:
-    date:             datetime.date
-    alert_time:       datetime.datetime
-    level:            str           # VWAP, IBH, or IBL
-    line_price:       float         # level price locked at zone entry
-    entry_price:      float         # MNQ price when alert fired
-    direction:        str           # 'up' = BUY rec, 'down' = SELL rec
-    level_test_count:  int  = 1      # which test of this level today (1 = first touch)
-    prior_confluence:  bool = False  # True if line is within CONFLUENCE_PTS of a prior day level
-    hit_time:          datetime.datetime | None = None
-    outcome_time:      datetime.datetime | None = None
-    outcome:           str = "inconclusive"
-    features:          dict = field(default_factory=dict)
-    cv_pred:           int | None = None   # 0=predicted incorrect (avoid), 1=predicted correct
+    date: datetime.date
+    alert_time: datetime.datetime
+    level: str  # VWAP, IBH, or IBL
+    line_price: float  # level price locked at zone entry
+    entry_price: float  # MNQ price when alert fired
+    direction: str  # 'up' = BUY rec, 'down' = SELL rec
+    level_test_count: int = 1  # which test of this level today (1 = first touch)
+    prior_confluence: bool = (
+        False  # True if line is within CONFLUENCE_PTS of a prior day level
+    )
+    hit_time: datetime.datetime | None = None
+    outcome_time: datetime.datetime | None = None
+    outcome: str = "inconclusive"
+    features: dict = field(default_factory=dict)
+    cv_pred: int | None = None  # 0=predicted incorrect (avoid), 1=predicted correct
 
 
 class ZoneState:
     """Alert zone state — mirrors the live LevelState logic exactly."""
 
     def __init__(self, name: str, price: float) -> None:
-        self.name        = name
-        self.price       = price
-        self.in_zone     = False
+        self.name = name
+        self.price = price
+        self.in_zone = False
         self.ref: float | None = None
-        self.entry_count = 0   # cumulative zone entries today for this level
+        self.entry_count = 0  # cumulative zone entries today for this level
 
-    def update(self, current_price: float, new_level_price: float | None = None) -> bool:
+    def update(
+        self, current_price: float, new_level_price: float | None = None
+    ) -> bool:
         """Returns True if an alert should fire (zone just entered).
 
         new_level_price updates self.price (used for drifting VWAP).
@@ -102,8 +107,8 @@ class ZoneState:
             return False
 
         if abs(current_price - self.price) <= ALERT_THRESHOLD:
-            self.in_zone     = True
-            self.ref         = self.price
+            self.in_zone = True
+            self.ref = self.price
             self.entry_count += 1
             return True
 
@@ -111,6 +116,7 @@ class ZoneState:
 
 
 # ── Data fetching ─────────────────────────────────────────────────────────────
+
 
 def get_trading_days(n: int = 45, offset: int = 0) -> list[datetime.date]:
     """Return n trading weekdays ending offset trading days before yesterday.
@@ -153,7 +159,7 @@ def fetch_trades(client: db.Historical, date: datetime.date) -> pd.DataFrame:
         return pd.read_parquet(path)
 
     start = ET.localize(datetime.datetime.combine(date, MARKET_OPEN)).isoformat()
-    end   = ET.localize(datetime.datetime.combine(date, MARKET_CLOSE)).isoformat()
+    end = ET.localize(datetime.datetime.combine(date, MARKET_CLOSE)).isoformat()
 
     store = client.timeseries.get_range(
         dataset=DATASET,
@@ -168,9 +174,9 @@ def fetch_trades(client: db.Historical, date: datetime.date) -> pd.DataFrame:
     for rec in store:
         if not isinstance(rec, db.TradeMsg):
             continue
-        ts    = pd.Timestamp(rec.ts_event, unit="ns", tz="UTC").tz_convert(ET)
+        ts = pd.Timestamp(rec.ts_event, unit="ns", tz="UTC").tz_convert(ET)
         price = rec.price / 1_000_000_000
-        size  = int(rec.size)
+        size = int(rec.size)
         rows.append((ts, price, size))
         if len(rows) % 10_000 == 0:
             print(f"    ... {len(rows):,} trades downloaded", flush=True)
@@ -178,7 +184,9 @@ def fetch_trades(client: db.Historical, date: datetime.date) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame(columns=["price", "size"])
 
-    df = pd.DataFrame(rows, columns=["ts", "price", "size"]).set_index("ts").sort_index()
+    df = (
+        pd.DataFrame(rows, columns=["ts", "price", "size"]).set_index("ts").sort_index()
+    )
 
     os.makedirs(CACHE_DIR, exist_ok=True)
     df.to_parquet(path)
@@ -187,6 +195,7 @@ def fetch_trades(client: db.Historical, date: datetime.date) -> pd.DataFrame:
 
 
 # ── Simulation ────────────────────────────────────────────────────────────────
+
 
 def simulate_and_evaluate(
     df: pd.DataFrame,
@@ -210,17 +219,35 @@ def simulate_and_evaluate(
 
     # Compute running VWAP, session high/low from 9:30 (all O(n), no look-ahead).
     df = df.copy()
-    df["vwap"]         = (df["price"] * df["size"]).cumsum() / df["size"].cumsum()
+    df["vwap"] = (df["price"] * df["size"]).cumsum() / df["size"].cumsum()
     df["session_high"] = df["price"].cummax()
-    df["session_low"]  = df["price"].cummin()
+    df["session_low"] = df["price"].cummin()
     day_open = float(df["price"].iloc[0])
 
     # ── Alert zone simulation (post-IB only) ─────────────────────────────────
+    ib_range = ibh - ibl
+
+    # Fibonacci levels derived from IB range (fixed after 10:30 AM, like IBH/IBL).
+    # Retracements sit between IBL and IBH; extensions sit beyond.
+    fib_levels = {
+        "FIB_EXT_LO_1.618": ibl - 0.618 * ib_range,  # 161.8% extension below IBL
+        "FIB_EXT_LO_1.272": ibl - 0.272 * ib_range,  # 127.2% extension below IBL
+        "FIB_RET_0.236": ibl + 0.236 * ib_range,  # 23.6% retracement
+        "FIB_RET_0.382": ibl + 0.382 * ib_range,  # 38.2% retracement
+        "FIB_RET_0.500": ibl + 0.500 * ib_range,  # 50% (midpoint)
+        "FIB_RET_0.618": ibl + 0.618 * ib_range,  # 61.8% retracement
+        "FIB_RET_0.786": ibl + 0.786 * ib_range,  # 78.6% retracement
+        "FIB_EXT_HI_1.272": ibh + 0.272 * ib_range,  # 127.2% extension above IBH
+        "FIB_EXT_HI_1.618": ibh + 0.618 * ib_range,  # 161.8% extension above IBH
+    }
+
     zones = {
-        "IBH":  ZoneState("IBH",  ibh),
-        "IBL":  ZoneState("IBL",  ibl),
+        "IBH": ZoneState("IBH", ibh),
+        "IBL": ZoneState("IBL", ibl),
         "VWAP": ZoneState("VWAP", float(df["vwap"].iloc[0])),
     }
+    for fib_name, fib_price in fib_levels.items():
+        zones[fib_name] = ZoneState(fib_name, fib_price)
 
     alerts: list[Alert] = []
     post_ib = df[df.index.time >= IB_END]
@@ -228,41 +255,49 @@ def simulate_and_evaluate(
     # itertuples is ~8x faster than iterrows for large DataFrames.
     for tick_num, row in enumerate(post_ib.itertuples()):
         if tick_num % 10_000 == 0:
-            print(f"    [sim] {row.Index.strftime('%Y-%m-%d %H:%M:%S')} ET  "
-                  f"({tick_num:,} ticks)", flush=True)
+            print(
+                f"    [sim] {row.Index.strftime('%Y-%m-%d %H:%M:%S')} ET  "
+                f"({tick_num:,} ticks)",
+                flush=True,
+            )
 
-        ts    = row.Index
+        ts = row.Index
         price = row.price
-        vwap  = row.vwap
+        vwap = row.vwap
+        # Fib levels are fixed (like IBH/IBL), only VWAP drifts.
         level_prices = {"IBH": ibh, "IBL": ibl, "VWAP": vwap}
+        for fib_name, fib_price in fib_levels.items():
+            level_prices[fib_name] = fib_price
 
         for name, zone in zones.items():
             if zone.update(price, new_level_price=level_prices[name]):
-                direction   = "up" if price > zone.ref else "down"
-                confluence  = bool(
-                    prior_levels and
-                    any(abs(zone.ref - p) <= CONFLUENCE_PTS for p in prior_levels)
+                direction = "up" if price > zone.ref else "down"
+                confluence = bool(
+                    prior_levels
+                    and any(abs(zone.ref - p) <= CONFLUENCE_PTS for p in prior_levels)
                 )
-                alerts.append(Alert(
-                    date=date,
-                    alert_time=ts.to_pydatetime(warn=False),
-                    level=name,
-                    line_price=zone.ref,
-                    entry_price=price,
-                    direction=direction,
-                    level_test_count=zone.entry_count,
-                    prior_confluence=confluence,
-                ))
+                alerts.append(
+                    Alert(
+                        date=date,
+                        alert_time=ts.to_pydatetime(warn=False),
+                        level=name,
+                        line_price=zone.ref,
+                        entry_price=price,
+                        direction=direction,
+                        level_test_count=zone.entry_count,
+                        prior_confluence=confluence,
+                    )
+                )
 
     # ── Outcome evaluation (vectorized — no iterrows) ─────────────────────────
     prices = df["price"]
 
     for alert in alerts:
-        alert_ts   = pd.Timestamp(alert.alert_time)
+        alert_ts = pd.Timestamp(alert.alert_time)
         window_end = alert_ts + pd.Timedelta(seconds=WINDOW_SECS)
 
         # Phase 1: first tick where price touches the line within 15 min.
-        hit_seg  = prices[(prices.index > alert_ts) & (prices.index <= window_end)]
+        hit_seg = prices[(prices.index > alert_ts) & (prices.index <= window_end)]
         hit_mask = abs(hit_seg - alert.line_price) <= HIT_THRESHOLD
         if not hit_mask.any():
             alert.outcome = "inconclusive"
@@ -279,32 +314,36 @@ def simulate_and_evaluate(
 
         if alert.direction == "up":
             target_mask = eval_seg >= alert.line_price + TARGET_POINTS
-            stop_mask   = eval_seg <= alert.line_price - STOP_POINTS
+            stop_mask = eval_seg <= alert.line_price - STOP_POINTS
         else:
             target_mask = eval_seg <= alert.line_price - TARGET_POINTS
-            stop_mask   = eval_seg >= alert.line_price + STOP_POINTS
+            stop_mask = eval_seg >= alert.line_price + STOP_POINTS
 
         target_hit = target_mask.any()
-        stop_hit   = stop_mask.any()
+        stop_hit = stop_mask.any()
 
         if target_hit and stop_hit:
             # Both triggered — whichever came first wins.
             target_ts = eval_seg.index[target_mask][0]
-            stop_ts   = eval_seg.index[stop_mask][0]
+            stop_ts = eval_seg.index[stop_mask][0]
             if target_ts <= stop_ts:
-                alert.outcome      = "correct"
+                alert.outcome = "correct"
                 alert.outcome_time = target_ts.to_pydatetime(warn=False)
             else:
-                alert.outcome      = "incorrect"
+                alert.outcome = "incorrect"
                 alert.outcome_time = stop_ts.to_pydatetime(warn=False)
         elif target_hit:
-            alert.outcome      = "correct"
-            alert.outcome_time = eval_seg.index[target_mask][0].to_pydatetime(warn=False)
+            alert.outcome = "correct"
+            alert.outcome_time = eval_seg.index[target_mask][0].to_pydatetime(
+                warn=False
+            )
         else:
             # Stop hit or time expired — both count as incorrect.
             alert.outcome = "incorrect"
             if stop_hit:
-                alert.outcome_time = eval_seg.index[stop_mask][0].to_pydatetime(warn=False)
+                alert.outcome_time = eval_seg.index[stop_mask][0].to_pydatetime(
+                    warn=False
+                )
 
     # ── Feature extraction (2-min approach window BEFORE alert fires) ────────
     # Window = [alert_ts - 2min, alert_ts]. All data is available at the
@@ -319,9 +358,9 @@ def simulate_and_evaluate(
         if alert.outcome not in ("correct", "incorrect"):
             continue  # inconclusive: no outcome label to train on
 
-        alert_ts     = pd.Timestamp(alert.alert_time)
+        alert_ts = pd.Timestamp(alert.alert_time)
         window_start = alert_ts - pd.Timedelta(seconds=FEATURE_SECS)
-        window       = df[(df.index >= window_start) & (df.index <= alert_ts)]
+        window = df[(df.index >= window_start) & (df.index <= alert_ts)]
 
         if len(window) < 3:
             # Too few ticks in approach window (e.g. alert fired very close
@@ -329,15 +368,15 @@ def simulate_and_evaluate(
             continue
 
         prices_arr = window["price"].values
-        sizes_arr  = window["size"].values
-        n          = len(prices_arr)
+        sizes_arr = window["size"].values
+        n = len(prices_arr)
 
         # Split window into two equal halves.
         mid = n // 2
-        first_prices  = prices_arr[:mid]  if mid >= 2 else prices_arr[:1]
-        second_prices = prices_arr[mid:]  if n - mid >= 2 else prices_arr[-1:]
-        first_sizes   = sizes_arr[:mid]
-        second_sizes  = sizes_arr[mid:]
+        first_prices = prices_arr[:mid] if mid >= 2 else prices_arr[:1]
+        second_prices = prices_arr[mid:] if n - mid >= 2 else prices_arr[-1:]
+        first_sizes = sizes_arr[:mid]
+        second_sizes = sizes_arr[mid:]
 
         # ── Approach momentum features ────────────────────────────────────────
         # Sign convention: positive = price moving TOWARD the line (approach),
@@ -350,8 +389,8 @@ def simulate_and_evaluate(
             """Positive = moving toward the line. Call only within this iteration."""
             return -val if is_up else val
 
-        overall_change    = prices_arr[-1] - prices_arr[0]
-        approach_momentum = toward(overall_change)   # >0 = consistent approach
+        overall_change = prices_arr[-1] - prices_arr[0]
+        approach_momentum = toward(overall_change)  # >0 = consistent approach
 
         # Linear regression slope — more robust to noise than endpoint diff.
         x = np.arange(n, dtype=float)
@@ -359,16 +398,20 @@ def simulate_and_evaluate(
         approach_slope = toward(slope)
 
         # Sub-window momentum: first half (early approach) and second half (late).
-        first_change  = (first_prices[-1]  - first_prices[0])  if len(first_prices)  >= 2 else 0.0
-        second_change = (second_prices[-1] - second_prices[0]) if len(second_prices) >= 2 else 0.0
-        approach_first  = toward(first_change)
+        first_change = (
+            (first_prices[-1] - first_prices[0]) if len(first_prices) >= 2 else 0.0
+        )
+        second_change = (
+            (second_prices[-1] - second_prices[0]) if len(second_prices) >= 2 else 0.0
+        )
+        approach_first = toward(first_change)
         approach_second = toward(second_change)
 
         # Acceleration: is approach strengthening (+) or stalling/reversing (-)?
         approach_accel = approach_second - approach_first
 
         # Volatility and normalized approach momentum.
-        volatility    = float(np.std(prices_arr))
+        volatility = float(np.std(prices_arr))
         norm_approach = approach_momentum / volatility if volatility > 1e-9 else 0.0
 
         # ── Pullback feature ──────────────────────────────────────────────────
@@ -390,53 +433,53 @@ def simulate_and_evaluate(
             max_pullback = max(0.0, prices_arr[0] - float(np.min(prices_arr)))
 
         # ── Volume and activity features ──────────────────────────────────────
-        first_vol  = int(np.sum(first_sizes))
+        first_vol = int(np.sum(first_sizes))
         second_vol = int(np.sum(second_sizes))
-        volume_trend = second_vol - first_vol   # positive = participation increasing
-        tick_rate    = n / (FEATURE_SECS / 60)  # trades per minute in the window
+        volume_trend = second_vol - first_vol  # positive = participation increasing
+        tick_rate = n / (FEATURE_SECS / 60)  # trades per minute in the window
 
         # ── Session context features ───────────────────────────────────────────
         # Look up session high/low at alert time (all computed cumulatively, no look-ahead).
-        row_at_alert      = df.loc[:alert_ts, ["session_high", "session_low"]].iloc[-1]
-        session_high_now  = float(row_at_alert["session_high"])
-        session_low_now   = float(row_at_alert["session_low"])
+        row_at_alert = df.loc[:alert_ts, ["session_high", "session_low"]].iloc[-1]
+        session_high_now = float(row_at_alert["session_high"])
+        session_low_now = float(row_at_alert["session_low"])
 
         # How far has MNQ moved from today's open? Positive = above open (green day).
         session_move_pts = alert.entry_price - day_open
 
         # Distance from today's session extremes at alert time.
-        dist_from_high = session_high_now - alert.entry_price   # 0 = at session high
-        dist_from_low  = alert.entry_price - session_low_now    # 0 = at session low
+        dist_from_high = session_high_now - alert.entry_price  # 0 = at session high
+        dist_from_low = alert.entry_price - session_low_now  # 0 = at session low
 
         # minutes since market open (continuous — top feature last run)
         alert_time_mins = alert.alert_time.hour * 60 + alert.alert_time.minute
-        alert_mins      = alert_time_mins - (9 * 60 + 30)
+        alert_mins = alert_time_mins - (9 * 60 + 30)
 
         alert.features = {
             # Approach momentum (positive = moving toward line)
-            "approach_momentum":  approach_momentum,
-            "approach_slope":     approach_slope,
-            "approach_first":     approach_first,
-            "approach_second":    approach_second,
-            "approach_accel":     approach_accel,
-            "norm_approach":      norm_approach,
+            "approach_momentum": approach_momentum,
+            "approach_slope": approach_slope,
+            "approach_first": approach_first,
+            "approach_second": approach_second,
+            "approach_accel": approach_accel,
+            "norm_approach": norm_approach,
             # Approach quality
-            "volatility":         volatility,
-            "max_pullback":       max_pullback,
+            "volatility": volatility,
+            "max_pullback": max_pullback,
             # Volume / activity
-            "volume_trend":       volume_trend,
-            "tick_rate":          tick_rate,
+            "volume_trend": volume_trend,
+            "tick_rate": tick_rate,
             # Time of day (continuous only — buckets showed 0% importance)
-            "time_of_day_mins":   alert_mins,
+            "time_of_day_mins": alert_mins,
             # Session / market context
-            "session_move_pts":   session_move_pts,
-            "dist_from_high":     dist_from_high,
-            "dist_from_low":      dist_from_low,
+            "session_move_pts": session_move_pts,
+            "dist_from_high": dist_from_high,
+            "dist_from_low": dist_from_low,
             # Level quality
-            "level_test_count":   alert.level_test_count,
-            "prior_confluence":   1 if alert.prior_confluence else 0,
+            "level_test_count": alert.level_test_count,
+            "prior_confluence": 1 if alert.prior_confluence else 0,
             # Alert context
-            "entry_distance":     abs(alert.entry_price - alert.line_price),
+            "entry_distance": abs(alert.entry_price - alert.line_price),
         }
 
     return alerts
@@ -444,20 +487,22 @@ def simulate_and_evaluate(
 
 # ── Model training ────────────────────────────────────────────────────────────
 
+
 def build_model(all_alerts: list[Alert]) -> None:
     """
     Compare multiple classifiers, select the best by ROC-AUC, tune the
     decision threshold to maximize win rate (recall of 'incorrect' class),
     and attach cross-val predictions to alerts for the 'Correctly Avoided' table.
     """
-    labeled = [a for a in all_alerts
-               if a.outcome in ("correct", "incorrect") and a.features]
+    labeled = [
+        a for a in all_alerts if a.outcome in ("correct", "incorrect") and a.features
+    ]
 
     print(f"\n{'─' * 65}")
     print("  MODEL TRAINING")
     print(f"{'─' * 65}")
 
-    n_correct   = sum(1 for a in labeled if a.outcome == "correct")
+    n_correct = sum(1 for a in labeled if a.outcome == "correct")
     n_incorrect = sum(1 for a in labeled if a.outcome == "incorrect")
     print(f"  Samples: {len(labeled)}  ({n_correct} correct, {n_incorrect} incorrect)")
 
@@ -475,25 +520,41 @@ def build_model(all_alerts: list[Alert]) -> None:
     # LogisticRegression needs scaling; tree models do not.
     # Conservative hyperparameters throughout — small dataset, avoid overfitting.
     candidates: dict[str, object] = {
-        "LogisticRegression": Pipeline([
-            ("scaler", StandardScaler()),
-            ("clf", LogisticRegression(
-                C=0.3, class_weight="balanced", max_iter=1000, random_state=42,
-            )),
-        ]),
+        "LogisticRegression": Pipeline(
+            [
+                ("scaler", StandardScaler()),
+                (
+                    "clf",
+                    LogisticRegression(
+                        C=0.3,
+                        class_weight="balanced",
+                        max_iter=1000,
+                        random_state=42,
+                    ),
+                ),
+            ]
+        ),
         "RandomForest": RandomForestClassifier(
-            n_estimators=300, max_depth=4, min_samples_leaf=3,
-            max_features="sqrt", class_weight="balanced", random_state=42,
+            n_estimators=300,
+            max_depth=4,
+            min_samples_leaf=3,
+            max_features="sqrt",
+            class_weight="balanced",
+            random_state=42,
         ),
         "GradientBoosting": GradientBoostingClassifier(
-            n_estimators=100, max_depth=2, learning_rate=0.05,
-            subsample=0.8, min_samples_leaf=4, random_state=42,
+            n_estimators=100,
+            max_depth=2,
+            learning_rate=0.05,
+            subsample=0.8,
+            min_samples_leaf=4,
+            random_state=42,
         ),
     }
 
     print(f"\n  Model comparison ({n_splits}-fold cross-val, ROC-AUC):")
-    best_auc   = 0.0
-    best_name  = ""
+    best_auc = 0.0
+    best_name = ""
     best_model = None
 
     for name, model in candidates.items():
@@ -502,50 +563,58 @@ def build_model(all_alerts: list[Alert]) -> None:
         flag = "  ← best" if mean_auc > best_auc else ""
         print(f"    {name:<25}  AUC {mean_auc:.3f} ± {std_auc:.3f}{flag}")
         if mean_auc > best_auc:
-            best_auc   = mean_auc
-            best_name  = name
+            best_auc = mean_auc
+            best_name = name
             best_model = model
 
     print(f"\n  Selected: {best_name} (AUC {best_auc:.3f})")
     if len(labeled) < 30:
-        print(f"  Note: {len(labeled)} samples — treat results as directional, not definitive.")
+        print(
+            f"  Note: {len(labeled)} samples — treat results as directional, not definitive."
+        )
 
     # ── Threshold optimisation ────────────────────────────────────────────────
     # Get cross-val probabilities (honest out-of-sample estimates).
-    proba      = cross_val_predict(best_model, X, y, cv=cv, method="predict_proba")
-    p_incorrect = proba[:, 0]   # P(outcome = incorrect)
+    proba = cross_val_predict(best_model, X, y, cv=cv, method="predict_proba")
+    p_incorrect = proba[:, 0]  # P(outcome = incorrect)
 
     # Show the win-rate trade-off across thresholds so you can pick your comfort level.
     # Lower threshold = more aggressive at flagging trades as incorrect (skip them).
     print(f"\n  Threshold sweep  (predict 'skip trade' when P(incorrect) > threshold):")
-    print(f"  {'Threshold':>10}  {'Avoided':>8}  {'Missed good':>12}  {'Win rate':>10}  {'Trades taken':>13}")
+    print(
+        f"  {'Threshold':>10}  {'Avoided':>8}  {'Missed good':>12}  {'Win rate':>10}  {'Trades taken':>13}"
+    )
     print(f"  {'-'*10}  {'-'*8}  {'-'*12}  {'-'*10}  {'-'*13}")
 
-    best_wr        = n_correct / (n_correct + n_incorrect)   # baseline (no model)
+    best_wr = n_correct / (n_correct + n_incorrect)  # baseline (no model)
     best_threshold = 0.5
     for thr in [0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.60, 0.70]:
-        skip         = p_incorrect > thr
-        ca           = int((skip & (y == 0)).sum())   # correctly avoided (bad trades skipped)
-        ia           = int((skip & (y == 1)).sum())   # incorrectly avoided (good trades skipped)
-        rem_correct  = n_correct   - ia
+        skip = p_incorrect > thr
+        ca = int((skip & (y == 0)).sum())  # correctly avoided (bad trades skipped)
+        ia = int((skip & (y == 1)).sum())  # incorrectly avoided (good trades skipped)
+        rem_correct = n_correct - ia
         rem_incorrect = n_incorrect - ca
-        total        = rem_correct + rem_incorrect
-        wr           = rem_correct / total if total > 0 else 0.0
-        taken        = total
+        total = rem_correct + rem_incorrect
+        wr = rem_correct / total if total > 0 else 0.0
+        taken = total
         print(f"  {thr:>10.2f}  {ca:>8}  {ia:>12}  {wr:>9.1%}  {taken:>13}")
-        if wr > best_wr and rem_correct >= n_correct * 0.6:   # don't skip too many good trades
-            best_wr        = wr
+        if (
+            wr > best_wr and rem_correct >= n_correct * 0.6
+        ):  # don't skip too many good trades
+            best_wr = wr
             best_threshold = thr
 
-    print(f"\n  Auto-selected threshold: {best_threshold:.2f}  "
-          f"(maximises win rate while keeping ≥60% of correct trades)")
+    print(
+        f"\n  Auto-selected threshold: {best_threshold:.2f}  "
+        f"(maximises win rate while keeping ≥60% of correct trades)"
+    )
 
     # Attach cv_pred using the chosen threshold.
     for alert, p_inc in zip(labeled, p_incorrect):
         alert.cv_pred = 0 if p_inc > best_threshold else 1
 
     # ── Feature importances ───────────────────────────────────────────────────
-    best_model.fit(X, y)   # type: ignore[union-attr]
+    best_model.fit(X, y)  # type: ignore[union-attr]
     if hasattr(best_model, "feature_importances_"):
         imp = pd.Series(best_model.feature_importances_, index=X.columns)
     elif hasattr(best_model, "named_steps"):
@@ -565,7 +634,7 @@ def build_model(all_alerts: list[Alert]) -> None:
 
     # ── Feature means by outcome ──────────────────────────────────────────────
     top5 = list(imp.index[:5])
-    correct_rows   = X[y == 1]
+    correct_rows = X[y == 1]
     incorrect_rows = X[y == 0]
     print(f"\n  Top-5 feature means by outcome:")
     print(f"  {'Feature':<25}  {'Correct':>10}  {'Incorrect':>10}  {'Δ (C-I)':>10}")
@@ -573,45 +642,55 @@ def build_model(all_alerts: list[Alert]) -> None:
     for feat in top5:
         c_mean = correct_rows[feat].mean()
         i_mean = incorrect_rows[feat].mean()
-        delta  = c_mean - i_mean
+        delta = c_mean - i_mean
         print(f"  {feat:<25}  {c_mean:>10.3f}  {i_mean:>10.3f}  {delta:>+10.3f}")
 
     # ── Save model ────────────────────────────────────────────────────────────
-    joblib.dump({"model": best_model, "threshold": best_threshold, "features": list(X.columns)},
-                MODEL_PATH)
+    joblib.dump(
+        {"model": best_model, "threshold": best_threshold, "features": list(X.columns)},
+        MODEL_PATH,
+    )
     print(f"\n  Model saved to {MODEL_PATH}")
     print(f"  Load with: joblib.load('{MODEL_PATH}')")
 
     # ── Classification report at chosen threshold ─────────────────────────────
     final_preds = (p_incorrect > best_threshold).astype(int)
-    final_preds = 1 - final_preds   # flip: 0=incorrect, 1=correct, but report expects 1=skip
+    final_preds = (
+        1 - final_preds
+    )  # flip: 0=incorrect, 1=correct, but report expects 1=skip
     # Reframe: 1 = "take trade" (correct), 0 = "skip trade" (incorrect)
     print(f"\n  Classification report at threshold {best_threshold:.2f}:")
-    print(classification_report(
-        y, 1 - (p_incorrect > best_threshold).astype(int),
-        target_names=["incorrect (skip)", "correct (take)"],
-        zero_division=0,
-    ))
+    print(
+        classification_report(
+            y,
+            1 - (p_incorrect > best_threshold).astype(int),
+            target_names=["incorrect (skip)", "correct (take)"],
+            zero_division=0,
+        )
+    )
 
 
 # ── Results table ─────────────────────────────────────────────────────────────
 
+
 def print_results(all_alerts: list[Alert], days: list[datetime.date]) -> None:
     rows = []
     for date in days:
-        day       = [a for a in all_alerts if a.date == date]
-        correct   = sum(1 for a in day if a.outcome == "correct")
+        day = [a for a in all_alerts if a.date == date]
+        correct = sum(1 for a in day if a.outcome == "correct")
         incorrect = sum(1 for a in day if a.outcome == "incorrect")
-        inconc    = sum(1 for a in day if a.outcome == "inconclusive")
-        avoided   = sum(1 for a in day if a.outcome == "incorrect" and a.cv_pred == 0)
-        rows.append({
-            "Date":              str(date),
-            "Alerts":            len(day),
-            "Correct":           correct,
-            "Incorrect":         incorrect,
-            "Inconclusive":      inconc,
-            "Correctly Avoided": avoided,
-        })
+        inconc = sum(1 for a in day if a.outcome == "inconclusive")
+        avoided = sum(1 for a in day if a.outcome == "incorrect" and a.cv_pred == 0)
+        rows.append(
+            {
+                "Date": str(date),
+                "Alerts": len(day),
+                "Correct": correct,
+                "Incorrect": incorrect,
+                "Inconclusive": inconc,
+                "Correctly Avoided": avoided,
+            }
+        )
 
     df = pd.DataFrame(rows)
 
@@ -626,48 +705,59 @@ def print_results(all_alerts: list[Alert], days: list[datetime.date]) -> None:
 
     total_decided_total = int(df["Correct"].sum() + df["Incorrect"].sum())
     total_row = {
-        "Date":              "TOTAL",
-        "Alerts":            df["Alerts"].sum(),
-        "Correct":           df["Correct"].sum(),
-        "Incorrect":         df["Incorrect"].sum(),
-        "Inconclusive":      df["Inconclusive"].sum(),
+        "Date": "TOTAL",
+        "Alerts": df["Alerts"].sum(),
+        "Correct": df["Correct"].sum(),
+        "Incorrect": df["Incorrect"].sum(),
+        "Inconclusive": df["Inconclusive"].sum(),
         "Correctly Avoided": df["Correctly Avoided"].sum(),
-        "Win%":              f"{df['Correct'].sum() / total_decided_total:.0%}" if total_decided_total else "—",
+        "Win%": (
+            f"{df['Correct'].sum() / total_decided_total:.0%}"
+            if total_decided_total
+            else "—"
+        ),
     }
     df = pd.concat([df, pd.DataFrame([total_row])], ignore_index=True)
 
     n_days = len([r for r in rows if r["Correct"] + r["Incorrect"] > 0])
     print(f"\n{'═' * 90}")
-    print(f"  BACKTEST RESULTS  ({days[0]} → {days[-1]},  {n_days} active trading days)")
+    print(
+        f"  BACKTEST RESULTS  ({days[0]} → {days[-1]},  {n_days} active trading days)"
+    )
     print(f"{'═' * 90}")
     print(df.to_string(index=False))
 
-    total_correct   = int(total_row["Correct"])
+    total_correct = int(total_row["Correct"])
     total_incorrect = int(total_row["Incorrect"])
-    total_avoided   = int(total_row["Correctly Avoided"])
-    total_decided   = total_correct + total_incorrect
+    total_avoided = int(total_row["Correctly Avoided"])
+    total_decided = total_correct + total_incorrect
 
     # Good trades the model incorrectly told you to skip.
     good_skipped = sum(
-        1 for a in all_alerts
-        if a.outcome == "correct" and a.cv_pred == 0
+        1 for a in all_alerts if a.outcome == "correct" and a.cv_pred == 0
     )
 
     print(f"\n{'─' * 65}")
     if total_decided > 0:
         raw_rate = total_correct / total_decided
-        print(f"  Win rate — raw (no model)    : {raw_rate:.1%}  "
-              f"({total_correct}W / {total_incorrect}L)")
+        print(
+            f"  Win rate — raw (no model)    : {raw_rate:.1%}  "
+            f"({total_correct}W / {total_incorrect}L)"
+        )
 
         # Subtract both avoided bad trades AND wrongly skipped good trades.
-        adj_correct   = total_correct   - good_skipped
+        adj_correct = total_correct - good_skipped
         adj_incorrect = total_incorrect - total_avoided
-        adj_decided   = adj_correct + adj_incorrect
-        adj_rate      = adj_correct / adj_decided if adj_decided > 0 else 0.0
-        print(f"  Win rate — model-filtered    : {adj_rate:.1%}  "
-              f"({adj_correct}W / {adj_incorrect}L  |  "
-              f"avoided {total_avoided} bad, skipped {good_skipped} good)")
-        print(f"\n  'Correctly Avoided' uses cross-val predictions — no in-sample overfitting.")
+        adj_decided = adj_correct + adj_incorrect
+        adj_rate = adj_correct / adj_decided if adj_decided > 0 else 0.0
+        print(
+            f"  Win rate — model-filtered    : {adj_rate:.1%}  "
+            f"({adj_correct}W / {adj_incorrect}L  |  "
+            f"avoided {total_avoided} bad, skipped {good_skipped} good)"
+        )
+        print(
+            f"\n  'Correctly Avoided' uses cross-val predictions — no in-sample overfitting."
+        )
     print(f"{'─' * 65}")
 
     # ── Breakdown analysis ────────────────────────────────────────────────────
@@ -691,24 +781,37 @@ def print_results(all_alerts: list[Alert], days: list[datetime.date]) -> None:
     # By time bucket (using features dict; fall back to alert_time if no features)
     def time_bucket(a: Alert) -> str:
         mins = a.alert_time.hour * 60 + a.alert_time.minute
-        if   (10*60+30) <= mins < (11*60+30): return "10:30–11:30 ET (first hour)"
-        elif (11*60+30) <= mins < (13*60):    return "11:30–13:00 ET (lunch)"
-        elif (13*60)    <= mins < (15*60):    return "13:00–15:00 ET (afternoon)"
-        elif (15*60)    <= mins < (16*60):    return "15:00–16:00 ET (power hour)"
-        else:                                  return "other"
+        if (10 * 60 + 30) <= mins < (11 * 60 + 30):
+            return "10:30–11:30 ET (first hour)"
+        elif (11 * 60 + 30) <= mins < (13 * 60):
+            return "11:30–13:00 ET (lunch)"
+        elif (13 * 60) <= mins < (15 * 60):
+            return "13:00–15:00 ET (afternoon)"
+        elif (15 * 60) <= mins < (16 * 60):
+            return "15:00–16:00 ET (power hour)"
+        else:
+            return "other"
 
     print(f"\n{'─' * 55}")
     print("  WIN RATE BY TIME OF DAY")
     print(f"{'─' * 55}")
-    buckets = ["10:30–11:30 ET (first hour)", "11:30–13:00 ET (lunch)",
-               "13:00–15:00 ET (afternoon)", "15:00–16:00 ET (power hour)"]
+    buckets = [
+        "10:30–11:30 ET (first hour)",
+        "11:30–13:00 ET (lunch)",
+        "13:00–15:00 ET (afternoon)",
+        "15:00–16:00 ET (power hour)",
+    ]
     win_rate_table([(b, [a for a in decided if time_bucket(a) == b]) for b in buckets])
 
     print(f"\n{'─' * 55}")
     print("  WIN RATE BY LEVEL")
     print(f"{'─' * 55}")
-    win_rate_table([(lvl, [a for a in decided if a.level == lvl])
-                    for lvl in ["IBH", "IBL", "VWAP"]])
+    win_rate_table(
+        [
+            (lvl, [a for a in decided if a.level == lvl])
+            for lvl in ["IBH", "IBL", "VWAP"]
+        ]
+    )
 
     print(f"\n{'─' * 55}")
     print("  WIN RATE BY LEVEL TEST COUNT (how many times zone entered today)")
@@ -717,7 +820,11 @@ def print_results(all_alerts: list[Alert], days: list[datetime.date]) -> None:
     groups = []
     for n in range(1, min(max_count + 1, 6)):
         label = f"Test #{n}" if n < 5 else "Test #5+"
-        subset = [a for a in decided if (a.level_test_count == n if n < 5 else a.level_test_count >= 5)]
+        subset = [
+            a
+            for a in decided
+            if (a.level_test_count == n if n < 5 else a.level_test_count >= 5)
+        ]
         groups.append((label, subset))
     win_rate_table(groups)
 
@@ -725,80 +832,147 @@ def print_results(all_alerts: list[Alert], days: list[datetime.date]) -> None:
     print("  WIN RATE BY DAY DIRECTION (MNQ vs open at alert time)")
     print(f"{'─' * 55}")
     green_day = [a for a in decided if a.features.get("session_move_pts", 0) > 0]
-    red_day   = [a for a in decided if a.features.get("session_move_pts", 0) <= 0]
-    win_rate_table([
-        ("Green day (price above open)", green_day),
-        ("Red day (price at/below open)", red_day),
-    ])
+    red_day = [a for a in decided if a.features.get("session_move_pts", 0) <= 0]
+    win_rate_table(
+        [
+            ("Green day (price above open)", green_day),
+            ("Red day (price at/below open)", red_day),
+        ]
+    )
 
     print(f"\n{'─' * 55}")
     print("  WIN RATE BY DIRECTION")
     print(f"{'─' * 55}")
-    win_rate_table([
-        ("BUY  (price above line → support)",    [a for a in decided if a.direction == "up"]),
-        ("SELL (price below line → resistance)", [a for a in decided if a.direction == "down"]),
-    ])
+    win_rate_table(
+        [
+            (
+                "BUY  (price above line → support)",
+                [a for a in decided if a.direction == "up"],
+            ),
+            (
+                "SELL (price below line → resistance)",
+                [a for a in decided if a.direction == "down"],
+            ),
+        ]
+    )
 
     print(f"\n{'─' * 55}")
     print("  WIN RATE BY ENTRY DISTANCE (how far inside the 7-pt zone)")
     print(f"{'─' * 55}")
-    win_rate_table([
-        ("0–5 pts from line (close)",       [a for a in decided if abs(a.entry_price - a.line_price) <= 5]),
-        ("5–7 pts from line (outer edge)",  [a for a in decided if abs(a.entry_price - a.line_price) >  5]),
-    ])
+    win_rate_table(
+        [
+            (
+                "0–5 pts from line (close)",
+                [a for a in decided if abs(a.entry_price - a.line_price) <= 5],
+            ),
+            (
+                "5–7 pts from line (outer edge)",
+                [a for a in decided if abs(a.entry_price - a.line_price) > 5],
+            ),
+        ]
+    )
 
     print(f"\n{'─' * 55}")
-    print(f"  WIN RATE BY PRIOR DAY CONFLUENCE (line within {CONFLUENCE_PTS:.0f} pts of prior IBH/IBL/close)")
+    print(
+        f"  WIN RATE BY PRIOR DAY CONFLUENCE (line within {CONFLUENCE_PTS:.0f} pts of prior IBH/IBL/close)"
+    )
     print(f"{'─' * 55}")
-    win_rate_table([
-        ("Confluence with prior level",    [a for a in decided if a.prior_confluence]),
-        ("No prior level confluence",      [a for a in decided if not a.prior_confluence]),
-    ])
+    win_rate_table(
+        [
+            ("Confluence with prior level", [a for a in decided if a.prior_confluence]),
+            (
+                "No prior level confluence",
+                [a for a in decided if not a.prior_confluence],
+            ),
+        ]
+    )
 
     print(f"\n{'─' * 55}")
     print("  WIN RATE BY APPROACH STRENGTH (norm_approach feature, top/bottom half)")
     print(f"{'─' * 55}")
     featured = [a for a in decided if a.features]
     if featured:
-        median_approach = sorted(a.features.get("norm_approach", 0) for a in featured)[len(featured) // 2]
-        win_rate_table([
-            ("Strong approach (top half)",  [a for a in featured if a.features.get("norm_approach", 0) >= median_approach]),
-            ("Weak approach (bottom half)", [a for a in featured if a.features.get("norm_approach", 0) <  median_approach]),
-        ])
+        median_approach = sorted(a.features.get("norm_approach", 0) for a in featured)[
+            len(featured) // 2
+        ]
+        win_rate_table(
+            [
+                (
+                    "Strong approach (top half)",
+                    [
+                        a
+                        for a in featured
+                        if a.features.get("norm_approach", 0) >= median_approach
+                    ],
+                ),
+                (
+                    "Weak approach (bottom half)",
+                    [
+                        a
+                        for a in featured
+                        if a.features.get("norm_approach", 0) < median_approach
+                    ],
+                ),
+            ]
+        )
 
     print(f"\n{'─' * 55}")
     print("  WIN RATE BY DAY OF WEEK")
     print(f"{'─' * 55}")
-    win_rate_table([
-        ("Monday",    [a for a in decided if a.alert_time.weekday() == 0]),
-        ("Tuesday",   [a for a in decided if a.alert_time.weekday() == 1]),
-        ("Wednesday", [a for a in decided if a.alert_time.weekday() == 2]),
-        ("Thursday",  [a for a in decided if a.alert_time.weekday() == 3]),
-        ("Friday",    [a for a in decided if a.alert_time.weekday() == 4]),
-    ])
+    win_rate_table(
+        [
+            ("Monday", [a for a in decided if a.alert_time.weekday() == 0]),
+            ("Tuesday", [a for a in decided if a.alert_time.weekday() == 1]),
+            ("Wednesday", [a for a in decided if a.alert_time.weekday() == 2]),
+            ("Thursday", [a for a in decided if a.alert_time.weekday() == 3]),
+            ("Friday", [a for a in decided if a.alert_time.weekday() == 4]),
+        ]
+    )
 
     print(f"\n{'─' * 55}")
     print("  WIN RATE BY VWAP DIRECTION (VWAP alerts only)")
     print(f"{'─' * 55}")
     vwap = [a for a in decided if a.level == "VWAP"]
-    win_rate_table([
-        ("VWAP BUY  (price above VWAP → support)",    [a for a in vwap if a.direction == "up"]),
-        ("VWAP SELL (price below VWAP → resistance)", [a for a in vwap if a.direction == "down"]),
-    ])
+    win_rate_table(
+        [
+            (
+                "VWAP BUY  (price above VWAP → support)",
+                [a for a in vwap if a.direction == "up"],
+            ),
+            (
+                "VWAP SELL (price below VWAP → resistance)",
+                [a for a in vwap if a.direction == "down"],
+            ),
+        ]
+    )
 
     print(f"\n{'─' * 55}")
     print("  WIN RATE BY SESSION MOVE MAGNITUDE (MNQ pts from open at alert time)")
     print(f"{'─' * 55}")
+
     def session_bucket(a: Alert) -> str:
         m = a.features.get("session_move_pts", 0)
-        if   m >  50: return "Strongly green  (>+50 pts)"
-        elif m >   0: return "Mildly green    (0 to +50 pts)"
-        elif m > -50: return "Mildly red      (0 to -50 pts)"
-        else:         return "Strongly red    (<-50 pts)"
-    buckets_session = ["Strongly green  (>+50 pts)", "Mildly green    (0 to +50 pts)",
-                       "Mildly red      (0 to -50 pts)", "Strongly red    (<-50 pts)"]
-    win_rate_table([(b, [a for a in decided if a.features and session_bucket(a) == b])
-                    for b in buckets_session])
+        if m > 50:
+            return "Strongly green  (>+50 pts)"
+        elif m > 0:
+            return "Mildly green    (0 to +50 pts)"
+        elif m > -50:
+            return "Mildly red      (0 to -50 pts)"
+        else:
+            return "Strongly red    (<-50 pts)"
+
+    buckets_session = [
+        "Strongly green  (>+50 pts)",
+        "Mildly green    (0 to +50 pts)",
+        "Mildly red      (0 to -50 pts)",
+        "Strongly red    (<-50 pts)",
+    ]
+    win_rate_table(
+        [
+            (b, [a for a in decided if a.features and session_bucket(a) == b])
+            for b in buckets_session
+        ]
+    )
 
     # ── NEW TEST 1: Filter stacking analysis ─────────────────────────────────
     # Shows the cumulative effect of adding each filter.
@@ -810,16 +984,41 @@ def print_results(all_alerts: list[Alert], days: list[datetime.date]) -> None:
     all_decided = [a for a in all_alerts if a.outcome in ("correct", "incorrect")]
 
     filters = [
-        ("Baseline (all alerts)",          lambda a: True),
-        ("+ Skip first test (#1)",         lambda a: a.level_test_count >= 2),
-        ("+ Skip first hour (10:30-11:30)",lambda a: a.level_test_count >= 2
-                                                     and not ((10*60+30) <= a.alert_time.hour*60+a.alert_time.minute < (11*60+30))),
-        ("+ Skip power hour (15:00-16:00)",lambda a: a.level_test_count >= 2
-                                                     and not ((10*60+30) <= a.alert_time.hour*60+a.alert_time.minute < (11*60+30))
-                                                     and not ((15*60) <= a.alert_time.hour*60+a.alert_time.minute < (16*60))),
-        ("+ Skip test #2 (keep #3+)",      lambda a: a.level_test_count >= 3
-                                                     and not ((10*60+30) <= a.alert_time.hour*60+a.alert_time.minute < (11*60+30))
-                                                     and not ((15*60) <= a.alert_time.hour*60+a.alert_time.minute < (16*60))),
+        ("Baseline (all alerts)", lambda a: True),
+        ("+ Skip first test (#1)", lambda a: a.level_test_count >= 2),
+        (
+            "+ Skip first hour (10:30-11:30)",
+            lambda a: a.level_test_count >= 2
+            and not (
+                (10 * 60 + 30)
+                <= a.alert_time.hour * 60 + a.alert_time.minute
+                < (11 * 60 + 30)
+            ),
+        ),
+        (
+            "+ Skip power hour (15:00-16:00)",
+            lambda a: a.level_test_count >= 2
+            and not (
+                (10 * 60 + 30)
+                <= a.alert_time.hour * 60 + a.alert_time.minute
+                < (11 * 60 + 30)
+            )
+            and not (
+                (15 * 60) <= a.alert_time.hour * 60 + a.alert_time.minute < (16 * 60)
+            ),
+        ),
+        (
+            "+ Skip test #2 (keep #3+)",
+            lambda a: a.level_test_count >= 3
+            and not (
+                (10 * 60 + 30)
+                <= a.alert_time.hour * 60 + a.alert_time.minute
+                < (11 * 60 + 30)
+            )
+            and not (
+                (15 * 60) <= a.alert_time.hour * 60 + a.alert_time.minute < (16 * 60)
+            ),
+        ),
     ]
 
     print(f"  {'Filter':<38}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}")
@@ -844,16 +1043,32 @@ def print_results(all_alerts: list[Alert], days: list[datetime.date]) -> None:
         q25 = rates[len(rates) // 4]
         q50 = rates[len(rates) // 2]
         q75 = rates[3 * len(rates) // 4]
-        win_rate_table([
-            (f"Q1: tick_rate < {q25:.0f}",          [a for a in with_tick if a.features["tick_rate"] < q25]),
-            (f"Q2: {q25:.0f} – {q50:.0f}",          [a for a in with_tick if q25 <= a.features["tick_rate"] < q50]),
-            (f"Q3: {q50:.0f} – {q75:.0f}",          [a for a in with_tick if q50 <= a.features["tick_rate"] < q75]),
-            (f"Q4: tick_rate ≥ {q75:.0f}",          [a for a in with_tick if a.features["tick_rate"] >= q75]),
-        ])
+        win_rate_table(
+            [
+                (
+                    f"Q1: tick_rate < {q25:.0f}",
+                    [a for a in with_tick if a.features["tick_rate"] < q25],
+                ),
+                (
+                    f"Q2: {q25:.0f} – {q50:.0f}",
+                    [a for a in with_tick if q25 <= a.features["tick_rate"] < q50],
+                ),
+                (
+                    f"Q3: {q50:.0f} – {q75:.0f}",
+                    [a for a in with_tick if q50 <= a.features["tick_rate"] < q75],
+                ),
+                (
+                    f"Q4: tick_rate ≥ {q75:.0f}",
+                    [a for a in with_tick if a.features["tick_rate"] >= q75],
+                ),
+            ]
+        )
 
         # Sweep minimum tick rate thresholds.
         print(f"\n  Minimum tick rate filter sweep:")
-        print(f"  {'Min tick_rate':>14}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}  {'Removed':>8}")
+        print(
+            f"  {'Min tick_rate':>14}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}  {'Removed':>8}"
+        )
         print(f"  {'-'*14}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}  {'-'*8}")
         for threshold in [0, 500, 750, 1000, 1250, 1500, 1750, 2000]:
             subset = [a for a in with_tick if a.features["tick_rate"] >= threshold]
@@ -863,7 +1078,9 @@ def print_results(all_alerts: list[Alert], days: list[datetime.date]) -> None:
             wr = w / t if t > 0 else 0.0
             removed = len(with_tick) - len(subset)
             warn = "  ⚠ n<30" if 0 < t < 30 else ""
-            print(f"  {threshold:>14}  {w:>5}  {l:>5}  {t:>7}  {wr:>5.1%}  {removed:>8}{warn}")
+            print(
+                f"  {threshold:>14}  {w:>5}  {l:>5}  {t:>7}  {wr:>5.1%}  {removed:>8}{warn}"
+            )
 
     # ── NEW TEST 3: Trend alignment ──────────────────────────────────────────
     print(f"\n{'═' * 70}")
@@ -873,21 +1090,24 @@ def print_results(all_alerts: list[Alert], days: list[datetime.date]) -> None:
 
     with_features = [a for a in decided if a.features]
     if with_features:
+
         def trend_aligned(a: Alert) -> bool:
             """True if trade direction matches session direction (with-trend)."""
             session_move = a.features.get("session_move_pts", 0)
             if a.direction == "up" and session_move > 0:
-                return True   # BUY on green day = with trend
+                return True  # BUY on green day = with trend
             if a.direction == "down" and session_move < 0:
-                return True   # SELL on red day = with trend
+                return True  # SELL on red day = with trend
             return False
 
-        aligned     = [a for a in with_features if trend_aligned(a)]
-        counter     = [a for a in with_features if not trend_aligned(a)]
-        win_rate_table([
-            ("With trend",    aligned),
-            ("Against trend", counter),
-        ])
+        aligned = [a for a in with_features if trend_aligned(a)]
+        counter = [a for a in with_features if not trend_aligned(a)]
+        win_rate_table(
+            [
+                ("With trend", aligned),
+                ("Against trend", counter),
+            ]
+        )
 
     # ── NEW TEST 4: Multi-factor cross-tabs ──────────────────────────────────
     print(f"\n{'═' * 70}")
@@ -899,9 +1119,16 @@ def print_results(all_alerts: list[Alert], days: list[datetime.date]) -> None:
     cross_groups = []
     for tl in time_labels:
         for tc in test_labels:
-            subset = [a for a in decided
-                      if time_bucket(a) == tl
-                      and (a.level_test_count == 2 if tc == "Test #2" else a.level_test_count >= 3)]
+            subset = [
+                a
+                for a in decided
+                if time_bucket(a) == tl
+                and (
+                    a.level_test_count == 2
+                    if tc == "Test #2"
+                    else a.level_test_count >= 3
+                )
+            ]
             cross_groups.append((f"{tl.split(' ET')[0]} / {tc}", subset))
     win_rate_table(cross_groups)
 
@@ -912,8 +1139,13 @@ def print_results(all_alerts: list[Alert], days: list[datetime.date]) -> None:
     if with_features:
         cross_groups2 = []
         for tl in time_labels:
-            for trend_label, trend_fn in [("with trend", trend_aligned), ("against trend", lambda a: not trend_aligned(a))]:
-                subset = [a for a in with_features if time_bucket(a) == tl and trend_fn(a)]
+            for trend_label, trend_fn in [
+                ("with trend", trend_aligned),
+                ("against trend", lambda a: not trend_aligned(a)),
+            ]:
+                subset = [
+                    a for a in with_features if time_bucket(a) == tl and trend_fn(a)
+                ]
                 cross_groups2.append((f"{tl.split(' ET')[0]} / {trend_label}", subset))
         win_rate_table(cross_groups2)
 
@@ -935,7 +1167,10 @@ def print_results(all_alerts: list[Alert], days: list[datetime.date]) -> None:
     if with_features:
         cross_groups4 = []
         for lvl in ["IBH", "IBL", "VWAP"]:
-            for trend_label, trend_fn in [("with trend", trend_aligned), ("against trend", lambda a: not trend_aligned(a))]:
+            for trend_label, trend_fn in [
+                ("with trend", trend_aligned),
+                ("against trend", lambda a: not trend_aligned(a)),
+            ]:
                 subset = [a for a in with_features if a.level == lvl and trend_fn(a)]
                 cross_groups4.append((f"{lvl} / {trend_label}", subset))
         win_rate_table(cross_groups4)
@@ -943,27 +1178,30 @@ def print_results(all_alerts: list[Alert], days: list[datetime.date]) -> None:
 
 # ── Parameter sweep ──────────────────────────────────────────────────────────
 
+
 def parameter_sweep(
     all_alerts: list[Alert],
     day_dfs: dict[datetime.date, pd.DataFrame],
 ) -> None:
     """Re-evaluate outcomes with different target/window combinations."""
     combos = [
-        ( 8,  10 * 60, "+8 pts / 10 min"),
-        ( 8,  15 * 60, "+8 pts / 15 min (current)"),
-        (10,  10 * 60, "+10 pts / 10 min"),
-        (10,  15 * 60, "+10 pts / 15 min"),
-        (10,  20 * 60, "+10 pts / 20 min"),
-        (12,  15 * 60, "+12 pts / 15 min"),
-        (12,  20 * 60, "+12 pts / 20 min"),
-        (15,  20 * 60, "+15 pts / 20 min"),
+        (8, 10 * 60, "+8 pts / 10 min"),
+        (8, 15 * 60, "+8 pts / 15 min (current)"),
+        (10, 10 * 60, "+10 pts / 10 min"),
+        (10, 15 * 60, "+10 pts / 15 min"),
+        (10, 20 * 60, "+10 pts / 20 min"),
+        (12, 15 * 60, "+12 pts / 15 min"),
+        (12, 20 * 60, "+12 pts / 20 min"),
+        (15, 20 * 60, "+15 pts / 20 min"),
     ]
 
     print(f"\n{'═' * 70}")
     print("  PARAMETER SWEEP: TARGET × WINDOW")
     print(f"  (Re-evaluates outcomes for every alert under different parameters)")
     print(f"{'═' * 70}")
-    print(f"  {'Params':<30}  {'W':>5}  {'L':>5}  {'Inc':>5}  {'Total':>7}  {'Win%':>6}")
+    print(
+        f"  {'Params':<30}  {'W':>5}  {'L':>5}  {'Inc':>5}  {'Total':>7}  {'Win%':>6}"
+    )
     print(f"  {'-'*30}  {'-'*5}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}")
 
     for target, window, label in combos:
@@ -975,11 +1213,13 @@ def parameter_sweep(
                 continue
 
             prices = df["price"]
-            alert_ts   = pd.Timestamp(alert.alert_time)
-            window_end = alert_ts + pd.Timedelta(seconds=WINDOW_SECS)  # use original window for hit phase
+            alert_ts = pd.Timestamp(alert.alert_time)
+            window_end = alert_ts + pd.Timedelta(
+                seconds=WINDOW_SECS
+            )  # use original window for hit phase
 
             # Phase 1: did price touch the line within original 15 min?
-            hit_seg  = prices[(prices.index > alert_ts) & (prices.index <= window_end)]
+            hit_seg = prices[(prices.index > alert_ts) & (prices.index <= window_end)]
             hit_mask = abs(hit_seg - alert.line_price) <= HIT_THRESHOLD
             if not hit_mask.any():
                 inconclusive += 1
@@ -994,17 +1234,17 @@ def parameter_sweep(
 
             if alert.direction == "up":
                 target_mask = eval_seg >= alert.line_price + target
-                stop_mask   = eval_seg <= alert.line_price - STOP_POINTS
+                stop_mask = eval_seg <= alert.line_price - STOP_POINTS
             else:
                 target_mask = eval_seg <= alert.line_price - target
-                stop_mask   = eval_seg >= alert.line_price + STOP_POINTS
+                stop_mask = eval_seg >= alert.line_price + STOP_POINTS
 
             target_hit = target_mask.any()
-            stop_hit   = stop_mask.any()
+            stop_hit = stop_mask.any()
 
             if target_hit and stop_hit:
                 target_ts = eval_seg.index[target_mask][0]
-                stop_ts   = eval_seg.index[stop_mask][0]
+                stop_ts = eval_seg.index[stop_mask][0]
                 if target_ts <= stop_ts:
                     correct += 1
                 else:
@@ -1017,11 +1257,14 @@ def parameter_sweep(
         decided = correct + incorrect
         wr = correct / decided if decided > 0 else 0.0
         marker = " ← current" if "(current)" in label else ""
-        print(f"  {label:<30}  {correct:>5}  {incorrect:>5}  {inconclusive:>5}  "
-              f"{decided:>7}  {wr:>5.1%}{marker}")
+        print(
+            f"  {label:<30}  {correct:>5}  {incorrect:>5}  {inconclusive:>5}  "
+            f"{decided:>7}  {wr:>5.1%}{marker}"
+        )
 
 
 # ── Stop loss sweep ──────────────────────────────────────────────────────────
+
 
 def stop_loss_sweep(
     all_alerts: list[Alert],
@@ -1030,9 +1273,13 @@ def stop_loss_sweep(
     """Sweep different stop loss distances to see impact on win rate."""
     print(f"\n{'═' * 70}")
     print("  STOP LOSS SWEEP")
-    print(f"  (Fixed +{TARGET_POINTS} pt target / {WINDOW_SECS // 60} min window, varying stop distance)")
+    print(
+        f"  (Fixed +{TARGET_POINTS} pt target / {WINDOW_SECS // 60} min window, varying stop distance)"
+    )
     print(f"{'═' * 70}")
-    print(f"  {'Stop (pts)':<12}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}  {'Avg P/L':>8}")
+    print(
+        f"  {'Stop (pts)':<12}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}  {'Avg P/L':>8}"
+    )
     print(f"  {'-'*12}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}  {'-'*8}")
 
     for stop in [8, 10, 12, 15, 20, 25, 30, 999]:
@@ -1042,27 +1289,27 @@ def stop_loss_sweep(
             if df is None:
                 continue
             prices = df["price"]
-            alert_ts   = pd.Timestamp(alert.alert_time)
+            alert_ts = pd.Timestamp(alert.alert_time)
             window_end = alert_ts + pd.Timedelta(seconds=WINDOW_SECS)
 
-            hit_seg  = prices[(prices.index > alert_ts) & (prices.index <= window_end)]
+            hit_seg = prices[(prices.index > alert_ts) & (prices.index <= window_end)]
             hit_mask = abs(hit_seg - alert.line_price) <= HIT_THRESHOLD
             if not hit_mask.any():
                 continue
 
-            hit_ts   = hit_mask.idxmax()
+            hit_ts = hit_mask.idxmax()
             eval_end = hit_ts + pd.Timedelta(seconds=WINDOW_SECS)
             eval_seg = prices[(prices.index > hit_ts) & (prices.index <= eval_end)]
 
             if alert.direction == "up":
                 target_mask = eval_seg >= alert.line_price + TARGET_POINTS
-                stop_mask   = eval_seg <= alert.line_price - stop
+                stop_mask = eval_seg <= alert.line_price - stop
             else:
                 target_mask = eval_seg <= alert.line_price - TARGET_POINTS
-                stop_mask   = eval_seg >= alert.line_price + stop
+                stop_mask = eval_seg >= alert.line_price + stop
 
             target_hit = target_mask.any()
-            stop_hit   = stop_mask.any()
+            stop_hit = stop_mask.any()
 
             if target_hit and stop_hit:
                 if eval_seg.index[target_mask][0] <= eval_seg.index[stop_mask][0]:
@@ -1081,11 +1328,14 @@ def stop_loss_sweep(
         ev = wr * TARGET_POINTS - (1 - wr) * effective_stop if stop < 999 else 0
         stop_label = f"-{stop} pts" if stop < 999 else "No stop"
         marker = " ← current" if stop == STOP_POINTS else ""
-        print(f"  {stop_label:<12}  {correct:>5}  {incorrect:>5}  {decided:>7}  "
-              f"{wr:>5.1%}  {ev:>+7.1f}{marker}")
+        print(
+            f"  {stop_label:<12}  {correct:>5}  {incorrect:>5}  {decided:>7}  "
+            f"{wr:>5.1%}  {ev:>+7.1f}{marker}"
+        )
 
 
 # ── Combinatorial filter sweep ──────────────────────────────────────────────
+
 
 def combinatorial_filter_sweep(all_alerts: list[Alert]) -> None:
     """Test every combination of filters and find the best that keeps ≥ 50 trades."""
@@ -1094,44 +1344,54 @@ def combinatorial_filter_sweep(all_alerts: list[Alert]) -> None:
     decided = [a for a in all_alerts if a.outcome in ("correct", "incorrect")]
 
     time_filters = {
-        "all_times":    lambda a: True,
-        "no_lunch":     lambda a: not ((11*60+30) <= a.alert_time.hour*60+a.alert_time.minute < (13*60)),
-        "afternoon_only": lambda a: (13*60) <= a.alert_time.hour*60+a.alert_time.minute < (15*60),
-        "no_power_hr":  lambda a: not ((15*60) <= a.alert_time.hour*60+a.alert_time.minute < (16*60)),
-        "lunch+afternoon": lambda a: (11*60+30) <= a.alert_time.hour*60+a.alert_time.minute < (15*60),
+        "all_times": lambda a: True,
+        "no_lunch": lambda a: not (
+            (11 * 60 + 30) <= a.alert_time.hour * 60 + a.alert_time.minute < (13 * 60)
+        ),
+        "afternoon_only": lambda a: (13 * 60)
+        <= a.alert_time.hour * 60 + a.alert_time.minute
+        < (15 * 60),
+        "no_power_hr": lambda a: not (
+            (15 * 60) <= a.alert_time.hour * 60 + a.alert_time.minute < (16 * 60)
+        ),
+        "lunch+afternoon": lambda a: (11 * 60 + 30)
+        <= a.alert_time.hour * 60 + a.alert_time.minute
+        < (15 * 60),
     }
 
     level_filters = {
-        "all_levels":  lambda a: True,
-        "IBL_only":    lambda a: a.level == "IBL",
-        "no_IBH":      lambda a: a.level != "IBH",
-        "IB_only":     lambda a: a.level in ("IBH", "IBL"),
-        "VWAP_only":   lambda a: a.level == "VWAP",
+        "all_levels": lambda a: True,
+        "IBL_only": lambda a: a.level == "IBL",
+        "no_IBH": lambda a: a.level != "IBH",
+        "IB_only": lambda a: a.level in ("IBH", "IBL"),
+        "VWAP_only": lambda a: a.level == "VWAP",
     }
 
     tick_filters = {
-        "any_tick":   lambda a: True,
-        "tick≥1000":  lambda a: a.features.get("tick_rate", 0) >= 1000,
-        "tick≥1500":  lambda a: a.features.get("tick_rate", 0) >= 1500,
-        "tick≥1750":  lambda a: a.features.get("tick_rate", 0) >= 1750,
-        "tick≥2000":  lambda a: a.features.get("tick_rate", 0) >= 2000,
+        "any_tick": lambda a: True,
+        "tick≥1000": lambda a: a.features.get("tick_rate", 0) >= 1000,
+        "tick≥1500": lambda a: a.features.get("tick_rate", 0) >= 1500,
+        "tick≥1750": lambda a: a.features.get("tick_rate", 0) >= 1750,
+        "tick≥2000": lambda a: a.features.get("tick_rate", 0) >= 2000,
     }
 
     test_count_filters = {
-        "test≥2":  lambda a: a.level_test_count >= 2,
-        "test≥3":  lambda a: a.level_test_count >= 3,
+        "test≥2": lambda a: a.level_test_count >= 2,
+        "test≥3": lambda a: a.level_test_count >= 3,
         "test=3-4": lambda a: 3 <= a.level_test_count <= 4,
     }
 
     session_filters = {
-        "any_session":  lambda a: True,
-        "mildly_red":   lambda a: -50 < a.features.get("session_move_pts", 0) <= 0,
+        "any_session": lambda a: True,
+        "mildly_red": lambda a: -50 < a.features.get("session_move_pts", 0) <= 0,
         "not_strong_green": lambda a: a.features.get("session_move_pts", 0) <= 50,
     }
 
     print(f"\n{'═' * 90}")
     print("  COMBINATORIAL FILTER SWEEP")
-    print(f"  (Testing all filter combinations, showing top 25 by win rate with ≥ 50 trades)")
+    print(
+        f"  (Testing all filter combinations, showing top 25 by win rate with ≥ 50 trades)"
+    )
     print(f"{'═' * 90}")
 
     results: list[tuple[str, int, int, int, float]] = []
@@ -1141,15 +1401,20 @@ def combinatorial_filter_sweep(all_alerts: list[Alert]) -> None:
             for tk_name, tk_fn in tick_filters.items():
                 for tc_name, tc_fn in test_count_filters.items():
                     for s_name, s_fn in session_filters.items():
-                        subset = [a for a in decided
-                                  if t_fn(a) and l_fn(a) and tk_fn(a) and tc_fn(a) and s_fn(a)]
+                        subset = [
+                            a
+                            for a in decided
+                            if t_fn(a) and l_fn(a) and tk_fn(a) and tc_fn(a) and s_fn(a)
+                        ]
                         w = sum(1 for a in subset if a.outcome == "correct")
                         l = sum(1 for a in subset if a.outcome == "incorrect")
                         t = w + l
                         if t < 50:
                             continue
                         wr = w / t
-                        combo_name = f"{t_name} | {l_name} | {tk_name} | {tc_name} | {s_name}"
+                        combo_name = (
+                            f"{t_name} | {l_name} | {tk_name} | {tc_name} | {s_name}"
+                        )
                         results.append((combo_name, w, l, t, wr))
 
     results.sort(key=lambda x: (-x[4], -x[3]))
@@ -1167,6 +1432,7 @@ def combinatorial_filter_sweep(all_alerts: list[Alert]) -> None:
 
 # ── Level-specific strategies ───────────────────────────────────────────────
 
+
 def level_specific_analysis(all_alerts: list[Alert]) -> None:
     """Apply different filter thresholds per level to maximize overall win rate."""
     decided = [a for a in all_alerts if a.outcome in ("correct", "incorrect")]
@@ -1182,26 +1448,35 @@ def level_specific_analysis(all_alerts: list[Alert]) -> None:
     # Define per-level filter options to try.
     level_options: dict[str, list[tuple[str, object]]] = {
         "IBH": [
-            ("IBH: all",            lambda a: True),
-            ("IBH: afternoon only", lambda a: (13*60) <= time_mins(a) < (15*60)),
-            ("IBH: tick≥1750",      lambda a: a.features.get("tick_rate", 0) >= 1750),
-            ("IBH: test≥3",         lambda a: a.level_test_count >= 3),
-            ("IBH: aftn+tick≥1750", lambda a: (13*60) <= time_mins(a) < (15*60)
-                                              and a.features.get("tick_rate", 0) >= 1750),
-            ("IBH: disabled",       lambda a: False),
+            ("IBH: all", lambda a: True),
+            ("IBH: afternoon only", lambda a: (13 * 60) <= time_mins(a) < (15 * 60)),
+            ("IBH: tick≥1750", lambda a: a.features.get("tick_rate", 0) >= 1750),
+            ("IBH: test≥3", lambda a: a.level_test_count >= 3),
+            (
+                "IBH: aftn+tick≥1750",
+                lambda a: (13 * 60) <= time_mins(a) < (15 * 60)
+                and a.features.get("tick_rate", 0) >= 1750,
+            ),
+            ("IBH: disabled", lambda a: False),
         ],
         "IBL": [
-            ("IBL: all",            lambda a: True),
-            ("IBL: tick≥1000",      lambda a: a.features.get("tick_rate", 0) >= 1000),
-            ("IBL: tick≥1750",      lambda a: a.features.get("tick_rate", 0) >= 1750),
+            ("IBL: all", lambda a: True),
+            ("IBL: tick≥1000", lambda a: a.features.get("tick_rate", 0) >= 1000),
+            ("IBL: tick≥1750", lambda a: a.features.get("tick_rate", 0) >= 1750),
         ],
         "VWAP": [
-            ("VWAP: all",            lambda a: True),
-            ("VWAP: afternoon only", lambda a: (13*60) <= time_mins(a) < (15*60)),
-            ("VWAP: tick≥1750",      lambda a: a.features.get("tick_rate", 0) >= 1750),
-            ("VWAP: no_lunch",       lambda a: not ((11*60+30) <= time_mins(a) < (13*60))),
-            ("VWAP: aftn+tick≥1750", lambda a: (13*60) <= time_mins(a) < (15*60)
-                                               and a.features.get("tick_rate", 0) >= 1750),
+            ("VWAP: all", lambda a: True),
+            ("VWAP: afternoon only", lambda a: (13 * 60) <= time_mins(a) < (15 * 60)),
+            ("VWAP: tick≥1750", lambda a: a.features.get("tick_rate", 0) >= 1750),
+            (
+                "VWAP: no_lunch",
+                lambda a: not ((11 * 60 + 30) <= time_mins(a) < (13 * 60)),
+            ),
+            (
+                "VWAP: aftn+tick≥1750",
+                lambda a: (13 * 60) <= time_mins(a) < (15 * 60)
+                and a.features.get("tick_rate", 0) >= 1750,
+            ),
         ],
     }
 
@@ -1245,10 +1520,12 @@ def level_specific_analysis(all_alerts: list[Alert]) -> None:
 
 # ── Composite scoring ───────────────────────────────────────────────────────
 
+
 def composite_scoring(all_alerts: list[Alert]) -> None:
     """Assign a composite score to each alert and sweep cutoffs."""
-    decided = [a for a in all_alerts
-               if a.outcome in ("correct", "incorrect") and a.features]
+    decided = [
+        a for a in all_alerts if a.outcome in ("correct", "incorrect") and a.features
+    ]
 
     print(f"\n{'═' * 70}")
     print("  COMPOSITE SCORING ANALYSIS")
@@ -1270,11 +1547,11 @@ def composite_scoring(all_alerts: list[Alert]) -> None:
         if (13 * 60) <= mins < (15 * 60):
             s += 2
         elif (10 * 60 + 30) <= mins < (11 * 60 + 30):
-            s -= 3    # first hour post-IB (was hard-filtered, now scored)
+            s -= 3  # first hour post-IB (was hard-filtered, now scored)
         elif (11 * 60 + 30) <= mins < (13 * 60):
-            s -= 1    # lunch
+            s -= 1  # lunch
         else:
-            s += 1    # power hour
+            s += 1  # power hour
 
         # Tick rate: higher is better
         tr = a.features.get("tick_rate", 0)
@@ -1288,7 +1565,7 @@ def composite_scoring(all_alerts: list[Alert]) -> None:
         # Test count: first test heavily penalized, #3 is sweet spot
         tc = a.level_test_count
         if tc == 1:
-            s -= 4    # first test (was hard-filtered, now scored)
+            s -= 4  # first test (was hard-filtered, now scored)
         elif tc == 3:
             s += 2
         elif tc == 4:
@@ -1321,7 +1598,9 @@ def composite_scoring(all_alerts: list[Alert]) -> None:
         print(f"  {sc:>6.0f}  {w:>5}  {l:>5}  {t:>5}  {wr:>5.1%}")
 
     print(f"\n  Cutoff sweep (only take alerts with score ≥ cutoff):")
-    print(f"  {'Cutoff':>7}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}  {'EV/trade':>9}")
+    print(
+        f"  {'Cutoff':>7}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}  {'EV/trade':>9}"
+    )
     print(f"  {'-'*7}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}  {'-'*9}")
 
     for cutoff in sorted(all_scores):
@@ -1337,6 +1616,7 @@ def composite_scoring(all_alerts: list[Alert]) -> None:
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
+
 
 def main() -> None:
     # --days N    : number of trading days to backtest (default 45)
@@ -1359,17 +1639,23 @@ def main() -> None:
     print(f"{'═' * 65}")
     print(f"  MNQ Backtest  |  {days[0]} → {days[-1]}  {period}")
     print(f"  Alert threshold : ±{ALERT_THRESHOLD} pts")
-    print(f"  Target          : +{TARGET_POINTS} pts from line within {WINDOW_SECS // 60} min")
-    print(f"  Incorrect       : line touched but target not reached within {WINDOW_SECS // 60} min")
-    print(f"  Inconclusive    : line never touched within {WINDOW_SECS // 60} min of alert")
+    print(
+        f"  Target          : +{TARGET_POINTS} pts from line within {WINDOW_SECS // 60} min"
+    )
+    print(
+        f"  Incorrect       : line touched but target not reached within {WINDOW_SECS // 60} min"
+    )
+    print(
+        f"  Inconclusive    : line never touched within {WINDOW_SECS // 60} min of alert"
+    )
     print(f"{'═' * 65}\n")
 
     client: db.Historical = db.Historical(key=DATABENTO_API_KEY)
     all_alerts: list[Alert] = []
-    day_dfs: dict[datetime.date, pd.DataFrame] = {}   # for parameter sweep
+    day_dfs: dict[datetime.date, pd.DataFrame] = {}  # for parameter sweep
 
     cum_correct = cum_incorrect = cum_inconc = 0
-    prior_levels: list[float] = []   # IBH, IBL, close from the previous session
+    prior_levels: list[float] = []  # IBH, IBL, close from the previous session
 
     for day_num, date in enumerate(days, 1):
         print(f"\n{'─' * 65}")
@@ -1394,68 +1680,86 @@ def main() -> None:
         ib = df[(df.index.time >= MARKET_OPEN) & (df.index.time < IB_END)]
         if not ib.empty:
             prior_levels = [
-                float(ib["price"].max()),   # prior IBH
-                float(ib["price"].min()),   # prior IBL
+                float(ib["price"].max()),  # prior IBH
+                float(ib["price"].min()),  # prior IBL
                 float(df["price"].iloc[-1]),  # prior session close
             ]
 
         c = sum(1 for a in alerts if a.outcome == "correct")
         i = sum(1 for a in alerts if a.outcome == "incorrect")
         n = sum(1 for a in alerts if a.outcome == "inconclusive")
-        cum_correct   += c
+        cum_correct += c
         cum_incorrect += i
-        cum_inconc    += n
+        cum_inconc += n
 
         print(f"  Trades fetched    : {len(df):,}")
-        print(f"  Alerts today      : {len(alerts)}  "
-              f"({c} correct  |  {i} incorrect  |  {n} inconclusive)")
+        print(
+            f"  Alerts today      : {len(alerts)}  "
+            f"({c} correct  |  {i} incorrect  |  {n} inconclusive)"
+        )
 
         # Per-alert detail for correct and incorrect outcomes.
         decided = [a for a in alerts if a.outcome in ("correct", "incorrect")]
         if decided:
+
             def fmt(dt: datetime.datetime | None) -> str:
                 if dt is None:
                     return "       —"
                 return dt.astimezone(PT).strftime("%H:%M:%S")
 
-            print(f"\n  {'Alert(PT)':>9}  {'Level':>5}  {'Line':>8}  {'Entry':>8}  "
-                  f"{'Dir':>6}  {'Hit(PT)':>8}  {'Done(PT)':>8}  Outcome")
-            print(f"  {'-'*9}  {'-'*5}  {'-'*8}  {'-'*8}  "
-                  f"{'-'*6}  {'-'*8}  {'-'*8}  {'-'*9}")
+            print(
+                f"\n  {'Alert(PT)':>9}  {'Level':>5}  {'Line':>8}  {'Entry':>8}  "
+                f"{'Dir':>6}  {'Hit(PT)':>8}  {'Done(PT)':>8}  Outcome"
+            )
+            print(
+                f"  {'-'*9}  {'-'*5}  {'-'*8}  {'-'*8}  "
+                f"{'-'*6}  {'-'*8}  {'-'*8}  {'-'*9}"
+            )
             for a in sorted(decided, key=lambda x: x.alert_time):
                 marker = "✓" if a.outcome == "correct" else "✗"
-                print(f"  {fmt(a.alert_time):>9}  "
-                      f"{a.level:>5}  "
-                      f"{a.line_price:>8.2f}  "
-                      f"{a.entry_price:>8.2f}  "
-                      f"{'↑ BUY' if a.direction == 'up' else '↓ SELL':>6}  "
-                      f"{fmt(a.hit_time):>8}  "
-                      f"{fmt(a.outcome_time):>8}  "
-                      f"{marker} {a.outcome}")
+                print(
+                    f"  {fmt(a.alert_time):>9}  "
+                    f"{a.level:>5}  "
+                    f"{a.line_price:>8.2f}  "
+                    f"{a.entry_price:>8.2f}  "
+                    f"{'↑ BUY' if a.direction == 'up' else '↓ SELL':>6}  "
+                    f"{fmt(a.hit_time):>8}  "
+                    f"{fmt(a.outcome_time):>8}  "
+                    f"{marker} {a.outcome}"
+                )
         print()
 
-        print(f"  Cumulative total  : "
-              f"{cum_correct} correct  |  {cum_incorrect} incorrect  |  {cum_inconc} inconclusive")
+        print(
+            f"  Cumulative total  : "
+            f"{cum_correct} correct  |  {cum_incorrect} incorrect  |  {cum_inconc} inconclusive"
+        )
 
-    build_model(all_alerts)
-    print_results(all_alerts, days)
-    parameter_sweep(all_alerts, day_dfs)
-    stop_loss_sweep(all_alerts, day_dfs)
-    combinatorial_filter_sweep(all_alerts)
-    level_specific_analysis(all_alerts)
-    composite_scoring(all_alerts)
-    ib_range_analysis(all_alerts)
-    direction_level_interaction(all_alerts)
-    day_of_week_scoring(all_alerts)
-    enhanced_composite_sweep(all_alerts)
+    # Split alerts into original levels and fib levels for separate analysis.
+    original_alerts = [a for a in all_alerts if not a.level.startswith("FIB_")]
+    fib_alerts = [a for a in all_alerts if a.level.startswith("FIB_")]
+
+    build_model(original_alerts)
+    print_results(original_alerts, days)
+    parameter_sweep(original_alerts, day_dfs)
+    stop_loss_sweep(original_alerts, day_dfs)
+    combinatorial_filter_sweep(original_alerts)
+    level_specific_analysis(original_alerts)
+    composite_scoring(original_alerts)
+    ib_range_analysis(original_alerts)
+    direction_level_interaction(original_alerts)
+    day_of_week_scoring(original_alerts)
+    enhanced_composite_sweep(original_alerts)
+    fib_level_analysis(fib_alerts)
 
 
 # ── IB range width analysis ──────────────────────────────────────────────────
 
+
 def ib_range_analysis(all_alerts: list[Alert]) -> None:
     """Analyze win rate by IB range width (IBH - IBL in points)."""
-    decided = [a for a in all_alerts
-               if a.outcome in ("correct", "incorrect") and a.features]
+    decided = [
+        a for a in all_alerts if a.outcome in ("correct", "incorrect") and a.features
+    ]
 
     print(f"\n{'═' * 70}")
     print("  IB RANGE WIDTH ANALYSIS")
@@ -1464,6 +1768,7 @@ def ib_range_analysis(all_alerts: list[Alert]) -> None:
 
     # Group alerts by their day, compute IB range for each day.
     from collections import defaultdict
+
     day_alerts: dict[datetime.date, list[Alert]] = defaultdict(list)
     for a in decided:
         day_alerts[a.date].append(a)
@@ -1503,17 +1808,21 @@ def ib_range_analysis(all_alerts: list[Alert]) -> None:
     q25 = ranges[len(ranges) // 4]
     q75 = ranges[3 * len(ranges) // 4]
 
-    win_rate_table([
-        (f"Narrow IB (< {q25:.0f} pts)",
-         [a for a, r in tagged if r < q25]),
-        (f"Normal IB ({q25:.0f}–{q75:.0f} pts)",
-         [a for a, r in tagged if q25 <= r <= q75]),
-        (f"Wide IB (> {q75:.0f} pts)",
-         [a for a, r in tagged if r > q75]),
-    ])
+    win_rate_table(
+        [
+            (f"Narrow IB (< {q25:.0f} pts)", [a for a, r in tagged if r < q25]),
+            (
+                f"Normal IB ({q25:.0f}–{q75:.0f} pts)",
+                [a for a, r in tagged if q25 <= r <= q75],
+            ),
+            (f"Wide IB (> {q75:.0f} pts)", [a for a, r in tagged if r > q75]),
+        ]
+    )
 
     # Sweep IB range thresholds.
-    print(f"\n  IB range filter sweep (only take alerts on days with IB range ≥ threshold):")
+    print(
+        f"\n  IB range filter sweep (only take alerts on days with IB range ≥ threshold):"
+    )
     print(f"  {'Min IB range':>14}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}")
     print(f"  {'-'*14}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}")
     for threshold in [0, 20, 30, 40, 50, 60, 80, 100]:
@@ -1529,6 +1838,7 @@ def ib_range_analysis(all_alerts: list[Alert]) -> None:
 
 # ── Direction × Level interaction ─────────────────────────────────────────────
 
+
 def direction_level_interaction(all_alerts: list[Alert]) -> None:
     """Show win rates for every direction × level combination."""
     decided = [a for a in all_alerts if a.outcome in ("correct", "incorrect")]
@@ -1543,21 +1853,27 @@ def direction_level_interaction(all_alerts: list[Alert]) -> None:
 
     for level in ["IBH", "IBL", "VWAP"]:
         for direction, dir_label in [("up", "BUY"), ("down", "SELL")]:
-            subset = [a for a in decided if a.level == level and a.direction == direction]
+            subset = [
+                a for a in decided if a.level == level and a.direction == direction
+            ]
             w = sum(1 for a in subset if a.outcome == "correct")
             l = sum(1 for a in subset if a.outcome == "incorrect")
             t = w + l
             wr = w / t if t > 0 else 0.0
             warn = "  ⚠ n<30" if 0 < t < 30 else ""
-            print(f"  {level} {dir_label:<30}  {w:>5}  {l:>5}  {t:>7}  {wr:>5.1%}{warn}")
+            print(
+                f"  {level} {dir_label:<30}  {w:>5}  {l:>5}  {t:>7}  {wr:>5.1%}{warn}"
+            )
 
 
 # ── Day of week scoring ───────────────────────────────────────────────────────
 
+
 def day_of_week_scoring(all_alerts: list[Alert]) -> None:
     """Analyze whether day of week should be a score component."""
-    decided = [a for a in all_alerts
-               if a.outcome in ("correct", "incorrect") and a.features]
+    decided = [
+        a for a in all_alerts if a.outcome in ("correct", "incorrect") and a.features
+    ]
 
     print(f"\n{'═' * 70}")
     print("  DAY OF WEEK AS POTENTIAL SCORE COMPONENT")
@@ -1565,7 +1881,9 @@ def day_of_week_scoring(all_alerts: list[Alert]) -> None:
     print(f"{'═' * 70}")
 
     days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-    print(f"  {'Day':<12}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}  {'Suggested score adj':>20}")
+    print(
+        f"  {'Day':<12}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}  {'Suggested score adj':>20}"
+    )
     print(f"  {'-'*12}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}  {'-'*20}")
 
     overall_w = sum(1 for a in decided if a.outcome == "correct")
@@ -1588,7 +1906,9 @@ def day_of_week_scoring(all_alerts: list[Alert]) -> None:
         else:
             suggestion = f" 0 ({delta:+.1%})"
         warn = "  ⚠ n<30" if 0 < t < 30 else ""
-        print(f"  {day_name:<12}  {w:>5}  {l:>5}  {t:>7}  {wr:>5.1%}  {suggestion:>20}{warn}")
+        print(
+            f"  {day_name:<12}  {w:>5}  {l:>5}  {t:>7}  {wr:>5.1%}  {suggestion:>20}{warn}"
+        )
 
     # Test what happens if we exclude worst day(s).
     print(f"\n  Impact of excluding worst day(s):")
@@ -1617,15 +1937,19 @@ def day_of_week_scoring(all_alerts: list[Alert]) -> None:
         l = sum(1 for a in remaining if a.outcome == "incorrect")
         t = w + l
         if t > 0:
-            print(f"  {f'- {day_name} ({day_wr:.0%})':<20}  {w:>5}  {l:>5}  {t:>7}  {w/t:>5.1%}")
+            print(
+                f"  {f'- {day_name} ({day_wr:.0%})':<20}  {w:>5}  {l:>5}  {t:>7}  {w/t:>5.1%}"
+            )
 
 
 # ── Enhanced composite sweep ─────────────────────────────────────────────────
 
+
 def enhanced_composite_sweep(all_alerts: list[Alert]) -> None:
     """Test adding new components (day of week, direction×level, IB range) to composite score."""
-    decided = [a for a in all_alerts
-               if a.outcome in ("correct", "incorrect") and a.features]
+    decided = [
+        a for a in all_alerts if a.outcome in ("correct", "incorrect") and a.features
+    ]
 
     print(f"\n{'═' * 70}")
     print("  ENHANCED COMPOSITE SCORING SWEEP")
@@ -1636,24 +1960,39 @@ def enhanced_composite_sweep(all_alerts: list[Alert]) -> None:
     def base_score(a: Alert) -> int:
         s = 0
         mins = a.alert_time.hour * 60 + a.alert_time.minute
-        if a.level == "IBL": s += 3
-        elif a.level == "IBH": s -= 1
-        if (13 * 60) <= mins < (15 * 60): s += 2
-        elif (10 * 60 + 30) <= mins < (11 * 60 + 30): s -= 3
-        elif (11 * 60 + 30) <= mins < (13 * 60): s -= 1
-        else: s += 1
+        if a.level == "IBL":
+            s += 3
+        elif a.level == "IBH":
+            s -= 1
+        if (13 * 60) <= mins < (15 * 60):
+            s += 2
+        elif (10 * 60 + 30) <= mins < (11 * 60 + 30):
+            s -= 3
+        elif (11 * 60 + 30) <= mins < (13 * 60):
+            s -= 1
+        else:
+            s += 1
         tr = a.features.get("tick_rate", 0)
-        if tr >= 2000: s += 2
-        elif tr >= 1750: s += 1
-        elif tr < 1000: s -= 2
+        if tr >= 2000:
+            s += 2
+        elif tr >= 1750:
+            s += 1
+        elif tr < 1000:
+            s -= 2
         tc = a.level_test_count
-        if tc == 1: s -= 4
-        elif tc == 3: s += 2
-        elif tc == 4: s += 1
-        elif tc >= 5: s -= 1
+        if tc == 1:
+            s -= 4
+        elif tc == 3:
+            s += 2
+        elif tc == 4:
+            s += 1
+        elif tc >= 5:
+            s -= 1
         session_move = a.features.get("session_move_pts", 0)
-        if -50 < session_move <= 0: s += 2
-        elif session_move > 50: s -= 1
+        if -50 < session_move <= 0:
+            s += 2
+        elif session_move > 50:
+            s -= 1
         return s
 
     # New component candidates.
@@ -1661,14 +2000,18 @@ def enhanced_composite_sweep(all_alerts: list[Alert]) -> None:
         """Day of week adjustment."""
         dow = a.alert_time.weekday()
         # Will fill in based on actual data — for now test with Fri bonus.
-        if dow == 4: return 1   # Friday
-        if dow == 3: return -1  # Thursday (historically worst)
+        if dow == 4:
+            return 1  # Friday
+        if dow == 3:
+            return -1  # Thursday (historically worst)
         return 0
 
     def direction_level_component(a: Alert) -> int:
         """Bonus for historically strong direction×level combos."""
-        if a.level == "IBL" and a.direction == "up": return 1    # IBL BUY = support bounce
-        if a.level == "IBH" and a.direction == "down": return -1 # IBH SELL = fade (historically weak)
+        if a.level == "IBL" and a.direction == "up":
+            return 1  # IBL BUY = support bounce
+        if a.level == "IBH" and a.direction == "down":
+            return -1  # IBH SELL = fade (historically weak)
         return 0
 
     def confluence_component(a: Alert) -> int:
@@ -1677,11 +2020,16 @@ def enhanced_composite_sweep(all_alerts: list[Alert]) -> None:
 
     # Test each new component individually, then together.
     component_combos = [
-        ("Baseline (current 5-factor)",    lambda a: 0),
-        ("+ Day of week",                  dow_component),
-        ("+ Direction×Level",              direction_level_component),
-        ("+ Prior confluence",             confluence_component),
-        ("+ All three new components",     lambda a: dow_component(a) + direction_level_component(a) + confluence_component(a)),
+        ("Baseline (current 5-factor)", lambda a: 0),
+        ("+ Day of week", dow_component),
+        ("+ Direction×Level", direction_level_component),
+        ("+ Prior confluence", confluence_component),
+        (
+            "+ All three new components",
+            lambda a: dow_component(a)
+            + direction_level_component(a)
+            + confluence_component(a),
+        ),
     ]
 
     for comp_label, comp_fn in component_combos:
@@ -1689,7 +2037,9 @@ def enhanced_composite_sweep(all_alerts: list[Alert]) -> None:
         scored = [(a, base_score(a) + comp_fn(a)) for a in decided]
         cutoffs = sorted(set(s for _, s in scored))
 
-        print(f"  {'Cutoff':>7}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}  {'EV/trade':>9}")
+        print(
+            f"  {'Cutoff':>7}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}  {'EV/trade':>9}"
+        )
         print(f"  {'-'*7}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}  {'-'*9}")
 
         for cutoff in cutoffs:
@@ -1702,6 +2052,138 @@ def enhanced_composite_sweep(all_alerts: list[Alert]) -> None:
             wr = w / t
             ev = wr * TARGET_POINTS - (1 - wr) * STOP_POINTS
             print(f"  {cutoff:>7.0f}  {w:>5}  {l:>5}  {t:>7}  {wr:>5.1%}  {ev:>+8.1f}")
+
+
+# ── Fibonacci level analysis ──────────────────────────────────────────────────
+
+
+def fib_level_analysis(fib_alerts: list[Alert]) -> None:
+    """Analyze win rates for each Fibonacci level derived from the IB range."""
+    decided = [a for a in fib_alerts if a.outcome in ("correct", "incorrect")]
+
+    print(f"\n{'═' * 90}")
+    print("  FIBONACCI LEVEL ANALYSIS")
+    print(
+        f"  (Fib retracements & extensions based on IB range, {len(decided)} decided alerts)"
+    )
+    print(f"{'═' * 90}")
+
+    if not decided:
+        print("  No decided fib alerts — skipping.")
+        return
+
+    # Overall win rate by fib level.
+    fib_names = sorted(set(a.level for a in decided))
+
+    print(
+        f"\n  {'Level':<25}  {'W':>5}  {'L':>5}  {'Inc':>5}  {'Total':>7}  {'Win%':>6}  {'EV/trade':>9}"
+    )
+    print(f"  {'-'*25}  {'-'*5}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}  {'-'*9}")
+
+    inconc_alerts = [a for a in fib_alerts if a.outcome == "inconclusive"]
+    for name in fib_names:
+        w = sum(1 for a in decided if a.level == name and a.outcome == "correct")
+        l = sum(1 for a in decided if a.level == name and a.outcome == "incorrect")
+        inc = sum(1 for a in inconc_alerts if a.level == name)
+        t = w + l
+        wr = w / t if t > 0 else 0.0
+        ev = wr * TARGET_POINTS - (1 - wr) * STOP_POINTS if t > 0 else 0.0
+        warn = "  ⚠ n<30" if 0 < t < 30 else ""
+        print(
+            f"  {name:<25}  {w:>5}  {l:>5}  {inc:>5}  {t:>7}  {wr:>5.1%}  {ev:>+8.1f}{warn}"
+        )
+
+    # Compare fib vs original levels.
+    print(f"\n  Summary:")
+    total_w = sum(1 for a in decided if a.outcome == "correct")
+    total_l = sum(1 for a in decided if a.outcome == "incorrect")
+    total = total_w + total_l
+    if total > 0:
+        wr = total_w / total
+        ev = wr * TARGET_POINTS - (1 - wr) * STOP_POINTS
+        print(
+            f"  All fib levels combined: {total_w}W / {total_l}L = {wr:.1%}  "
+            f"(EV {ev:+.1f} pts/trade, {total} trades)"
+        )
+
+    # Win rate by direction for each fib level.
+    print(
+        f"\n  {'Level × Direction':<35}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}"
+    )
+    print(f"  {'-'*35}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}")
+    for name in fib_names:
+        for direction, dir_label in [("up", "BUY"), ("down", "SELL")]:
+            subset = [
+                a for a in decided if a.level == name and a.direction == direction
+            ]
+            w = sum(1 for a in subset if a.outcome == "correct")
+            l = sum(1 for a in subset if a.outcome == "incorrect")
+            t = w + l
+            if t == 0:
+                continue
+            wr = w / t
+            warn = "  ⚠ n<30" if t < 30 else ""
+            print(
+                f"  {name + ' ' + dir_label:<35}  {w:>5}  {l:>5}  {t:>7}  {wr:>5.1%}{warn}"
+            )
+
+    # Win rate by time of day for fib levels that have enough data.
+    print(f"\n  {'Level × Time':<40}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}")
+    print(f"  {'-'*40}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}")
+
+    def time_bucket(a: Alert) -> str:
+        mins = a.alert_time.hour * 60 + a.alert_time.minute
+        if mins < 11 * 60 + 30:
+            return "first hour"
+        elif mins < 13 * 60:
+            return "lunch"
+        elif mins < 15 * 60:
+            return "afternoon"
+        else:
+            return "power hour"
+
+    for name in fib_names:
+        level_decided = [a for a in decided if a.level == name]
+        if len(level_decided) < 30:
+            continue
+        for tb in ["first hour", "lunch", "afternoon", "power hour"]:
+            subset = [a for a in level_decided if time_bucket(a) == tb]
+            w = sum(1 for a in subset if a.outcome == "correct")
+            l = sum(1 for a in subset if a.outcome == "incorrect")
+            t = w + l
+            if t == 0:
+                continue
+            wr = w / t
+            warn = "  ⚠ n<30" if t < 30 else ""
+            print(
+                f"  {name + ' / ' + tb:<40}  {w:>5}  {l:>5}  {t:>7}  {wr:>5.1%}{warn}"
+            )
+
+    # Win rate by test count for fib levels.
+    print(
+        f"\n  {'Level × Test Count':<35}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}"
+    )
+    print(f"  {'-'*35}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}")
+    for name in fib_names:
+        level_decided = [a for a in decided if a.level == name]
+        if len(level_decided) < 30:
+            continue
+        for tc_label, tc_fn in [
+            ("#1", lambda a: a.level_test_count == 1),
+            ("#2", lambda a: a.level_test_count == 2),
+            ("#3+", lambda a: a.level_test_count >= 3),
+        ]:
+            subset = [a for a in level_decided if tc_fn(a)]
+            w = sum(1 for a in subset if a.outcome == "correct")
+            l = sum(1 for a in subset if a.outcome == "incorrect")
+            t = w + l
+            if t == 0:
+                continue
+            wr = w / t
+            warn = "  ⚠ n<30" if t < 30 else ""
+            print(
+                f"  {name + ' / test ' + tc_label:<35}  {w:>5}  {l:>5}  {t:>7}  {wr:>5.1%}{warn}"
+            )
 
 
 if __name__ == "__main__":
