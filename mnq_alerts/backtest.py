@@ -1444,6 +1444,264 @@ def main() -> None:
     combinatorial_filter_sweep(all_alerts)
     level_specific_analysis(all_alerts)
     composite_scoring(all_alerts)
+    ib_range_analysis(all_alerts)
+    direction_level_interaction(all_alerts)
+    day_of_week_scoring(all_alerts)
+    enhanced_composite_sweep(all_alerts)
+
+
+# ── IB range width analysis ──────────────────────────────────────────────────
+
+def ib_range_analysis(all_alerts: list[Alert]) -> None:
+    """Analyze win rate by IB range width (IBH - IBL in points)."""
+    decided = [a for a in all_alerts
+               if a.outcome in ("correct", "incorrect") and a.features]
+
+    print(f"\n{'═' * 70}")
+    print("  IB RANGE WIDTH ANALYSIS")
+    print(f"  (Does a wider/narrower IB range predict better alert outcomes?)")
+    print(f"{'═' * 70}")
+
+    # Group alerts by their day, compute IB range for each day.
+    from collections import defaultdict
+    day_alerts: dict[datetime.date, list[Alert]] = defaultdict(list)
+    for a in decided:
+        day_alerts[a.date].append(a)
+
+    # We need IBH/IBL per day — extract from alert data.
+    day_ib: dict[datetime.date, float] = {}
+    for date, alerts in day_alerts.items():
+        ibh_alerts = [a for a in alerts if a.level == "IBH"]
+        ibl_alerts = [a for a in alerts if a.level == "IBL"]
+        if ibh_alerts and ibl_alerts:
+            ibh_price = ibh_alerts[0].line_price
+            ibl_price = ibl_alerts[0].line_price
+            day_ib[date] = ibh_price - ibl_price
+
+    if not day_ib:
+        print("  No days with both IBH and IBL alerts — skipping.")
+        return
+
+    ranges = sorted(day_ib.values())
+    median_range = ranges[len(ranges) // 2]
+
+    # Tag each alert with its day's IB range.
+    tagged = [(a, day_ib.get(a.date)) for a in decided]
+    tagged = [(a, r) for a, r in tagged if r is not None]
+
+    def win_rate_table(groups: list[tuple[str, list]]) -> None:
+        print(f"  {'Group':<35}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}")
+        print(f"  {'-'*35}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}")
+        for label, subset in groups:
+            w = sum(1 for a in subset if a.outcome == "correct")
+            l = sum(1 for a in subset if a.outcome == "incorrect")
+            t = w + l
+            wr = w / t if t > 0 else 0.0
+            warn = "  ⚠ n<30" if 0 < t < 30 else ""
+            print(f"  {label:<35}  {w:>5}  {l:>5}  {t:>7}  {wr:>5.1%}{warn}")
+
+    q25 = ranges[len(ranges) // 4]
+    q75 = ranges[3 * len(ranges) // 4]
+
+    win_rate_table([
+        (f"Narrow IB (< {q25:.0f} pts)",
+         [a for a, r in tagged if r < q25]),
+        (f"Normal IB ({q25:.0f}–{q75:.0f} pts)",
+         [a for a, r in tagged if q25 <= r <= q75]),
+        (f"Wide IB (> {q75:.0f} pts)",
+         [a for a, r in tagged if r > q75]),
+    ])
+
+    # Sweep IB range thresholds.
+    print(f"\n  IB range filter sweep (only take alerts on days with IB range ≥ threshold):")
+    print(f"  {'Min IB range':>14}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}")
+    print(f"  {'-'*14}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}")
+    for threshold in [0, 20, 30, 40, 50, 60, 80, 100]:
+        subset = [a for a, r in tagged if r >= threshold]
+        w = sum(1 for a in subset if a.outcome == "correct")
+        l = sum(1 for a in subset if a.outcome == "incorrect")
+        t = w + l
+        if t < 10:
+            continue
+        wr = w / t if t > 0 else 0.0
+        print(f"  {threshold:>14}  {w:>5}  {l:>5}  {t:>7}  {wr:>5.1%}")
+
+
+# ── Direction × Level interaction ─────────────────────────────────────────────
+
+def direction_level_interaction(all_alerts: list[Alert]) -> None:
+    """Show win rates for every direction × level combination."""
+    decided = [a for a in all_alerts if a.outcome in ("correct", "incorrect")]
+
+    print(f"\n{'═' * 70}")
+    print("  DIRECTION × LEVEL INTERACTION")
+    print(f"  (Which direction works best at each level?)")
+    print(f"{'═' * 70}")
+
+    print(f"  {'Combo':<35}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}")
+    print(f"  {'-'*35}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}")
+
+    for level in ["IBH", "IBL", "VWAP"]:
+        for direction, dir_label in [("up", "BUY"), ("down", "SELL")]:
+            subset = [a for a in decided if a.level == level and a.direction == direction]
+            w = sum(1 for a in subset if a.outcome == "correct")
+            l = sum(1 for a in subset if a.outcome == "incorrect")
+            t = w + l
+            wr = w / t if t > 0 else 0.0
+            warn = "  ⚠ n<30" if 0 < t < 30 else ""
+            print(f"  {level} {dir_label:<30}  {w:>5}  {l:>5}  {t:>7}  {wr:>5.1%}{warn}")
+
+
+# ── Day of week scoring ───────────────────────────────────────────────────────
+
+def day_of_week_scoring(all_alerts: list[Alert]) -> None:
+    """Analyze whether day of week should be a score component."""
+    decided = [a for a in all_alerts
+               if a.outcome in ("correct", "incorrect") and a.features]
+
+    print(f"\n{'═' * 70}")
+    print("  DAY OF WEEK AS POTENTIAL SCORE COMPONENT")
+    print(f"  (Should we add day-of-week to composite score?)")
+    print(f"{'═' * 70}")
+
+    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    print(f"  {'Day':<12}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}  {'Suggested score adj':>20}")
+    print(f"  {'-'*12}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}  {'-'*20}")
+
+    overall_w = sum(1 for a in decided if a.outcome == "correct")
+    overall_t = len(decided)
+    overall_wr = overall_w / overall_t if overall_t > 0 else 0.0
+
+    for i, day_name in enumerate(days):
+        subset = [a for a in decided if a.alert_time.weekday() == i]
+        w = sum(1 for a in subset if a.outcome == "correct")
+        l = sum(1 for a in subset if a.outcome == "incorrect")
+        t = w + l
+        wr = w / t if t > 0 else 0.0
+        delta = wr - overall_wr
+        if t < 30:
+            suggestion = "n/a (too few)"
+        elif delta > 0.05:
+            suggestion = f"+1 ({delta:+.1%})"
+        elif delta < -0.05:
+            suggestion = f"-1 ({delta:+.1%})"
+        else:
+            suggestion = f" 0 ({delta:+.1%})"
+        warn = "  ⚠ n<30" if 0 < t < 30 else ""
+        print(f"  {day_name:<12}  {w:>5}  {l:>5}  {t:>7}  {wr:>5.1%}  {suggestion:>20}{warn}")
+
+    # Test what happens if we exclude worst day(s).
+    print(f"\n  Impact of excluding worst day(s):")
+    day_wrs = []
+    for i in range(5):
+        subset = [a for a in decided if a.alert_time.weekday() == i]
+        w = sum(1 for a in subset if a.outcome == "correct")
+        t = len(subset)
+        day_wrs.append((i, days[i], w / t if t > 0 else 0.0, t))
+
+    day_wrs.sort(key=lambda x: x[2])  # worst first
+
+    remaining = list(decided)
+    print(f"  {'Excluded':<20}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}")
+    print(f"  {'-'*20}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}")
+
+    # Baseline
+    w = sum(1 for a in remaining if a.outcome == "correct")
+    l = sum(1 for a in remaining if a.outcome == "incorrect")
+    t = w + l
+    print(f"  {'(none)':<20}  {w:>5}  {l:>5}  {t:>7}  {w/t:>5.1%}")
+
+    for day_idx, day_name, day_wr, day_count in day_wrs[:3]:
+        remaining = [a for a in remaining if a.alert_time.weekday() != day_idx]
+        w = sum(1 for a in remaining if a.outcome == "correct")
+        l = sum(1 for a in remaining if a.outcome == "incorrect")
+        t = w + l
+        if t > 0:
+            print(f"  {f'- {day_name} ({day_wr:.0%})':<20}  {w:>5}  {l:>5}  {t:>7}  {w/t:>5.1%}")
+
+
+# ── Enhanced composite sweep ─────────────────────────────────────────────────
+
+def enhanced_composite_sweep(all_alerts: list[Alert]) -> None:
+    """Test adding new components (day of week, direction×level, IB range) to composite score."""
+    decided = [a for a in all_alerts
+               if a.outcome in ("correct", "incorrect") and a.features]
+
+    print(f"\n{'═' * 70}")
+    print("  ENHANCED COMPOSITE SCORING SWEEP")
+    print(f"  (Testing new score components on top of existing 5-factor score)")
+    print(f"{'═' * 70}")
+
+    # Current 5-factor score (baseline).
+    def base_score(a: Alert) -> int:
+        s = 0
+        mins = a.alert_time.hour * 60 + a.alert_time.minute
+        if a.level == "IBL": s += 3
+        elif a.level == "IBH": s -= 1
+        if (13 * 60) <= mins < (15 * 60): s += 2
+        elif (10 * 60 + 30) <= mins < (11 * 60 + 30): s -= 3
+        elif (11 * 60 + 30) <= mins < (13 * 60): s -= 1
+        else: s += 1
+        tr = a.features.get("tick_rate", 0)
+        if tr >= 2000: s += 2
+        elif tr >= 1750: s += 1
+        elif tr < 1000: s -= 2
+        tc = a.level_test_count
+        if tc == 1: s -= 4
+        elif tc == 3: s += 2
+        elif tc == 4: s += 1
+        elif tc >= 5: s -= 1
+        session_move = a.features.get("session_move_pts", 0)
+        if -50 < session_move <= 0: s += 2
+        elif session_move > 50: s -= 1
+        return s
+
+    # New component candidates.
+    def dow_component(a: Alert) -> int:
+        """Day of week adjustment."""
+        dow = a.alert_time.weekday()
+        # Will fill in based on actual data — for now test with Fri bonus.
+        if dow == 4: return 1   # Friday
+        if dow == 3: return -1  # Thursday (historically worst)
+        return 0
+
+    def direction_level_component(a: Alert) -> int:
+        """Bonus for historically strong direction×level combos."""
+        if a.level == "IBL" and a.direction == "up": return 1    # IBL BUY = support bounce
+        if a.level == "IBH" and a.direction == "down": return -1 # IBH SELL = fade (historically weak)
+        return 0
+
+    def confluence_component(a: Alert) -> int:
+        """Bonus for prior day level confluence."""
+        return 1 if a.prior_confluence else 0
+
+    # Test each new component individually, then together.
+    component_combos = [
+        ("Baseline (current 5-factor)",    lambda a: 0),
+        ("+ Day of week",                  dow_component),
+        ("+ Direction×Level",              direction_level_component),
+        ("+ Prior confluence",             confluence_component),
+        ("+ All three new components",     lambda a: dow_component(a) + direction_level_component(a) + confluence_component(a)),
+    ]
+
+    for comp_label, comp_fn in component_combos:
+        print(f"\n  {comp_label}:")
+        scored = [(a, base_score(a) + comp_fn(a)) for a in decided]
+        cutoffs = sorted(set(s for _, s in scored))
+
+        print(f"  {'Cutoff':>7}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}  {'EV/trade':>9}")
+        print(f"  {'-'*7}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}  {'-'*9}")
+
+        for cutoff in cutoffs:
+            above = [a for a, s in scored if s >= cutoff]
+            w = sum(1 for a in above if a.outcome == "correct")
+            l = sum(1 for a in above if a.outcome == "incorrect")
+            t = w + l
+            if t < 30:
+                continue
+            wr = w / t
+            ev = wr * TARGET_POINTS - (1 - wr) * STOP_POINTS
+            print(f"  {cutoff:>7.0f}  {w:>5}  {l:>5}  {t:>7}  {wr:>5.1%}  {ev:>+8.1f}")
 
 
 if __name__ == "__main__":
