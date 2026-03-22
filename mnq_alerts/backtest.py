@@ -1192,7 +1192,13 @@ def parameter_sweep(
         (10, 20 * 60, "+10 pts / 20 min"),
         (12, 15 * 60, "+12 pts / 15 min"),
         (12, 20 * 60, "+12 pts / 20 min"),
+        (15, 15 * 60, "+15 pts / 15 min"),
         (15, 20 * 60, "+15 pts / 20 min"),
+        (20, 15 * 60, "+20 pts / 15 min"),
+        (20, 20 * 60, "+20 pts / 20 min"),
+        (20, 30 * 60, "+20 pts / 30 min"),
+        (25, 20 * 60, "+25 pts / 20 min"),
+        (25, 30 * 60, "+25 pts / 30 min"),
     ]
 
     print(f"\n{'═' * 70}")
@@ -1200,9 +1206,9 @@ def parameter_sweep(
     print(f"  (Re-evaluates outcomes for every alert under different parameters)")
     print(f"{'═' * 70}")
     print(
-        f"  {'Params':<30}  {'W':>5}  {'L':>5}  {'Inc':>5}  {'Total':>7}  {'Win%':>6}"
+        f"  {'Params':<30}  {'W':>5}  {'L':>5}  {'Inc':>5}  {'Total':>7}  {'Win%':>6}  {'EV/trade':>9}"
     )
-    print(f"  {'-'*30}  {'-'*5}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}")
+    print(f"  {'-'*30}  {'-'*5}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}  {'-'*9}")
 
     for target, window, label in combos:
         correct = incorrect = inconclusive = 0
@@ -1256,10 +1262,11 @@ def parameter_sweep(
 
         decided = correct + incorrect
         wr = correct / decided if decided > 0 else 0.0
+        ev = wr * target - (1 - wr) * STOP_POINTS if decided > 0 else 0.0
         marker = " ← current" if "(current)" in label else ""
         print(
             f"  {label:<30}  {correct:>5}  {incorrect:>5}  {inconclusive:>5}  "
-            f"{decided:>7}  {wr:>5.1%}{marker}"
+            f"{decided:>7}  {wr:>5.1%}  {ev:>+8.1f}{marker}"
         )
 
 
@@ -1761,7 +1768,7 @@ def main() -> None:
     day_of_week_scoring(original_alerts)
     enhanced_composite_sweep(original_alerts)
     fib_level_analysis(fib_alerts)
-    combined_scoring_analysis(all_alerts, len(days))
+    combined_scoring_analysis(all_alerts, len(days), day_dfs)
 
 
 # ── IB range width analysis ──────────────────────────────────────────────────
@@ -2198,7 +2205,9 @@ def fib_level_analysis(fib_alerts: list[Alert]) -> None:
             )
 
 
-def combined_scoring_analysis(all_alerts: list[Alert], n_days: int) -> None:
+def combined_scoring_analysis(
+    all_alerts: list[Alert], n_days: int, day_dfs: dict | None = None
+) -> None:
     """Score ALL alerts (original + fib) with composite scoring and show combined stats."""
     decided = [
         a for a in all_alerts if a.outcome in ("correct", "incorrect") and a.features
@@ -2353,6 +2362,102 @@ def combined_scoring_analysis(all_alerts: list[Alert], n_days: int) -> None:
         print(f"\n  Expected value at 20 contracts ($2/pt):")
         print(f"    Per trade : {total_ev * 40:>+.2f}")
         print(f"    Per day   : {daily_ev:>+.0f}  ({total_apd:.1f} alerts/day)")
+
+    # Parameter sweep on live-system alerts only
+    if day_dfs:
+        live_alerts = [a for a, s in live_filtered]
+        _live_target_sweep(live_alerts, day_dfs, n_days)
+
+
+def _live_target_sweep(
+    live_alerts: list[Alert],
+    day_dfs: dict,
+    n_days: int,
+) -> None:
+    """Sweep target sizes on live-system-filtered alerts only."""
+    combos = [
+        (8, 15 * 60, "+8 pts / 15 min (current)"),
+        (10, 15 * 60, "+10 pts / 15 min"),
+        (10, 20 * 60, "+10 pts / 20 min"),
+        (12, 15 * 60, "+12 pts / 15 min"),
+        (12, 20 * 60, "+12 pts / 20 min"),
+        (15, 15 * 60, "+15 pts / 15 min"),
+        (15, 20 * 60, "+15 pts / 20 min"),
+        (20, 15 * 60, "+20 pts / 15 min"),
+        (20, 20 * 60, "+20 pts / 20 min"),
+        (20, 30 * 60, "+20 pts / 30 min"),
+        (25, 20 * 60, "+25 pts / 20 min"),
+        (25, 30 * 60, "+25 pts / 30 min"),
+    ]
+
+    print(f"\n{'═' * 90}")
+    print("  LIVE SYSTEM TARGET SWEEP")
+    print(
+        f"  (4 levels, score ≥ 3, direction-aware — re-evaluating {len(live_alerts)} alerts)"
+    )
+    print(f"{'═' * 90}")
+    print(
+        f"  {'Params':<30}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}  "
+        f"{'EV/trade':>9}  {'$/trade @20c':>12}  {'$/day':>8}"
+    )
+    print(
+        f"  {'-'*30}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}  "
+        f"{'-'*9}  {'-'*12}  {'-'*8}"
+    )
+
+    for target, window, label in combos:
+        correct = incorrect = 0
+
+        for alert in live_alerts:
+            df = day_dfs.get(alert.date)
+            if df is None:
+                continue
+
+            prices = df["price"]
+            alert_ts = pd.Timestamp(alert.alert_time)
+            window_end = alert_ts + pd.Timedelta(seconds=WINDOW_SECS)
+
+            hit_seg = prices[(prices.index > alert_ts) & (prices.index <= window_end)]
+            hit_mask = abs(hit_seg - alert.line_price) <= HIT_THRESHOLD
+            if not hit_mask.any():
+                continue  # inconclusive — skip
+
+            hit_ts = hit_mask.idxmax()
+            eval_end = hit_ts + pd.Timedelta(seconds=window)
+            eval_seg = prices[(prices.index > hit_ts) & (prices.index <= eval_end)]
+
+            if alert.direction == "up":
+                target_mask = eval_seg >= alert.line_price + target
+                stop_mask = eval_seg <= alert.line_price - STOP_POINTS
+            else:
+                target_mask = eval_seg <= alert.line_price - target
+                stop_mask = eval_seg >= alert.line_price + STOP_POINTS
+
+            target_hit = target_mask.any()
+            stop_hit = stop_mask.any()
+
+            if target_hit and stop_hit:
+                if eval_seg.index[target_mask][0] <= eval_seg.index[stop_mask][0]:
+                    correct += 1
+                else:
+                    incorrect += 1
+            elif target_hit:
+                correct += 1
+            else:
+                incorrect += 1
+
+        decided = correct + incorrect
+        if decided == 0:
+            continue
+        wr = correct / decided
+        ev = wr * target - (1 - wr) * STOP_POINTS
+        dollar_per_trade = ev * 40  # $2/pt × 20 contracts
+        dollar_per_day = dollar_per_trade * (decided / n_days)
+        marker = " ← current" if "(current)" in label else ""
+        print(
+            f"  {label:<30}  {correct:>5}  {incorrect:>5}  {decided:>7}  {wr:>5.1%}  "
+            f"{ev:>+8.1f}  {dollar_per_trade:>+11.0f}  {dollar_per_day:>+7.0f}{marker}"
+        )
 
 
 if __name__ == "__main__":
