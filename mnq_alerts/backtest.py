@@ -50,7 +50,6 @@ ALERT_THRESHOLD = 7.0    # points — zone entry (must match live config)
 EXIT_THRESHOLD  = 20.0   # points — zone exit (must match live config)
 HIT_THRESHOLD   = 1.0    # points — price within this = "touched the line"
 TARGET_POINTS   = 10.0   # points in recommended direction = correct
-STOP_POINTS     = 20.0   # points against recommendation = incorrect
 WINDOW_SECS     = 15 * 60  # 15-minute evaluation window
 FEATURE_SECS    = 3  * 60  # 3-minute approach window BEFORE alert fires
 
@@ -271,31 +270,23 @@ def simulate_and_evaluate(df: pd.DataFrame, date: datetime.date) -> list[Alert]:
         hit_ts = hit_mask.idxmax()
         alert.hit_time = hit_ts.to_pydatetime(warn=False)
 
-        # Phase 2: first tick where target (+10) or stop (-20) is hit.
+        # Phase 2: did price hit +TARGET_POINTS within 15 min of touching the line?
+        # Correct   = target reached within the window.
+        # Incorrect = line was touched but target not reached — regardless of whether
+        #             a stop was hit or time simply expired.
         eval_end = hit_ts + pd.Timedelta(seconds=WINDOW_SECS)
         eval_seg = prices[(prices.index > hit_ts) & (prices.index <= eval_end)]
-        if eval_seg.empty:
-            alert.outcome = "inconclusive"
-            continue
 
         if alert.direction == "up":
             target_mask = eval_seg >= alert.line_price + TARGET_POINTS
-            stop_mask   = eval_seg <= alert.line_price - STOP_POINTS
         else:
             target_mask = eval_seg <= alert.line_price - TARGET_POINTS
-            stop_mask   = eval_seg >= alert.line_price + STOP_POINTS
 
-        target_ts = eval_seg.index[target_mask][0] if target_mask.any() else None
-        stop_ts   = eval_seg.index[stop_mask][0]   if stop_mask.any()   else None
-
-        if target_ts is None and stop_ts is None:
-            alert.outcome = "inconclusive"
-        elif stop_ts is None or (target_ts is not None and target_ts <= stop_ts):
+        if target_mask.any():
             alert.outcome      = "correct"
-            alert.outcome_time = target_ts.to_pydatetime(warn=False)
+            alert.outcome_time = eval_seg.index[target_mask][0].to_pydatetime(warn=False)
         else:
-            alert.outcome      = "incorrect"
-            alert.outcome_time = stop_ts.to_pydatetime(warn=False)
+            alert.outcome = "incorrect"
 
     # ── Feature extraction (2-min approach window BEFORE alert fires) ────────
     # Window = [alert_ts - 2min, alert_ts]. All data is available at the
@@ -717,8 +708,9 @@ def main() -> None:
     print(f"{'═' * 65}")
     print(f"  MNQ Backtest  |  {days[0]} → {days[-1]}  {period}")
     print(f"  Alert threshold : ±{ALERT_THRESHOLD} pts")
-    print(f"  Target / Stop   : +{TARGET_POINTS} pts / -{STOP_POINTS} pts")
-    print(f"  Eval window     : {WINDOW_SECS // 60} min after touching line")
+    print(f"  Target          : +{TARGET_POINTS} pts from line within {WINDOW_SECS // 60} min")
+    print(f"  Incorrect       : line touched but target not reached within {WINDOW_SECS // 60} min")
+    print(f"  Inconclusive    : line never touched within {WINDOW_SECS // 60} min of alert")
     print(f"{'═' * 65}\n")
 
     client: db.Historical = db.Historical(key=DATABENTO_API_KEY)
