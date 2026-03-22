@@ -106,6 +106,7 @@ def run() -> None:
     ib_locked         = False
     ibh: float | None = None
     ibl: float | None = None
+    day_open: float | None = None
     last_session_date = None
     last_status_ts    = 0.0
     last_cache_ts     = 0.0
@@ -128,10 +129,15 @@ def run() -> None:
             ib_locked         = False
             ibh               = None
             ibl               = None
+            day_open          = None
             last_session_date = today
             last_cache_ts     = 0.0
             session_closed    = False
             print(f"\n[{now_pt.strftime('%Y-%m-%d')}] New session — state reset.")
+
+        # Record opening price for session context scoring.
+        if day_open is None:
+            day_open = price
 
         trades = get_session_trades()
 
@@ -157,7 +163,15 @@ def run() -> None:
             # During replay ts_et lags wall time; only notify for live trades.
             trade_lag = (now - ts_et).total_seconds()
             if trade_lag < 60:
-                fired = alert_manager.check_and_notify(price)
+                # Compute tick rate: trades per minute in the last 3 minutes.
+                window_start = ts_et - datetime.timedelta(minutes=3)
+                recent = trades[trades.index >= window_start]
+                tick_rate = len(recent) / 3.0 if not recent.empty else 0.0
+                session_move = price - day_open if day_open is not None else None
+                fired = alert_manager.check_and_notify(
+                    price, now_et=ts_et.time(), tick_rate=tick_rate,
+                    session_move_pts=session_move,
+                )
                 for alert_id, line_name, line_price, direction in fired:
                     evaluator.add(alert_id, line_price, direction, ts_et, today.isoformat())
                 evaluator.update(price, ts_et)
