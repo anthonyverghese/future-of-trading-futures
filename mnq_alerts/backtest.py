@@ -249,15 +249,23 @@ def simulate_and_evaluate(df: pd.DataFrame, date: datetime.date) -> list[Alert]:
     # ── Feature extraction (2-min approach window BEFORE alert fires) ────────
     # Window = [alert_ts - 2min, alert_ts]. All data is available at the
     # moment the alert fires — zero look-ahead bias.
+    #
+    # Note: inconclusive alerts (price entered zone but never touched line)
+    # are excluded from feature extraction and model training because we have
+    # no outcome label. This means the model is trained only on alerts where
+    # price did touch the line — a selection bias. Approach patterns that
+    # predict failure-to-touch are invisible to the model.
     for alert in alerts:
-        if alert.outcome not in ("correct", "incorrect") or alert.outcome_time is None:
-            continue
+        if alert.outcome not in ("correct", "incorrect"):
+            continue  # inconclusive: no outcome label to train on
 
         alert_ts     = pd.Timestamp(alert.alert_time)
         window_start = alert_ts - pd.Timedelta(seconds=FEATURE_SECS)
         window       = df[(df.index >= window_start) & (df.index <= alert_ts)]
 
         if len(window) < 3:
+            # Too few ticks in approach window (e.g. alert fired very close
+            # to IB end) — skip rather than compute degenerate features.
             continue
 
         prices_arr = window["price"].values
@@ -276,11 +284,13 @@ def simulate_and_evaluate(df: pd.DataFrame, date: datetime.date) -> list[Alert]:
         #                  negative = price moving AWAY from the line (retreat).
         # direction="up": price is above the line; approaching = moving DOWN.
         # direction="down": price is below the line; approaching = moving UP.
-        def toward(val: float) -> float:
-            """Positive = moving toward the line."""
-            return -val if alert.direction == "up" else val
+        is_up = alert.direction == "up"
 
-        overall_change   = prices_arr[-1] - prices_arr[0]
+        def toward(val: float) -> float:
+            """Positive = moving toward the line. Call only within this iteration."""
+            return -val if is_up else val
+
+        overall_change    = prices_arr[-1] - prices_arr[0]
         approach_momentum = toward(overall_change)   # >0 = consistent approach
 
         # Linear regression slope — more robust to noise than endpoint diff.
@@ -298,18 +308,26 @@ def simulate_and_evaluate(df: pd.DataFrame, date: datetime.date) -> list[Alert]:
         approach_accel = approach_second - approach_first
 
         # Volatility and normalized approach momentum.
-        volatility         = float(np.std(prices_arr))
-        norm_approach      = approach_momentum / volatility if volatility > 1e-9 else 0.0
+        volatility    = float(np.std(prices_arr))
+        norm_approach = approach_momentum / volatility if volatility > 1e-9 else 0.0
 
         # ── Pullback feature ──────────────────────────────────────────────────
-        # Max pullback: furthest price moved AWAY from the line during the
-        # approach window. Measures how much the approach was interrupted.
-        # direction="up": away = price moving up; pullback = max(prices) - prices[-1]
-        # direction="down": away = price moving down; pullback = prices[-1] - min(prices)
-        if alert.direction == "up":
-            max_pullback = max(0.0, float(np.max(prices_arr)) - prices_arr[-1])
+        # Max pullback: how far price moved AGAINST the approach direction
+        # relative to where it started. Measures interruption quality.
+        #
+        # direction="up" (descending toward line): pullback = price going higher
+        #   than the opening of the approach window.
+        #   max_pullback = max(0, max(prices) - prices[0])
+        #   → 0 for a clean descent; positive if price spiked up mid-approach.
+        #
+        # direction="down" (ascending toward line): pullback = price going lower
+        #   than the opening of the approach window.
+        #   max_pullback = max(0, prices[0] - min(prices))
+        #   → 0 for a clean ascent; positive if price dipped down mid-approach.
+        if is_up:
+            max_pullback = max(0.0, float(np.max(prices_arr)) - prices_arr[0])
         else:
-            max_pullback = max(0.0, prices_arr[-1] - float(np.min(prices_arr)))
+            max_pullback = max(0.0, prices_arr[0] - float(np.min(prices_arr)))
 
         # ── Volume and activity features ──────────────────────────────────────
         first_vol  = int(np.sum(first_sizes))
