@@ -31,7 +31,6 @@ def calculate_fib_levels(ibh: float, ibl: float) -> dict[str, float]:
     """
     ib_range = ibh - ibl
     return {
-        "FIB_RET_0.236": ibl + 0.236 * ib_range,
         "FIB_EXT_LO_1.272": ibl - 0.272 * ib_range,
         "FIB_EXT_HI_1.272": ibh + 0.272 * ib_range,
     }

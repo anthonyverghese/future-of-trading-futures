@@ -24,8 +24,8 @@ from notifications import send_notification
 _TICKER = "MNQ"
 
 # Minimum composite score to fire a notification.
-# 180-day backtest: ≥ 3 → 79.5% (410 trades), ≥ 4 → 81.3% (252 trades).
 _MIN_SCORE = 3
+
 
 # Signal strength tiers shown in notifications (180-day backtest).
 _TIER_LABELS: dict[int, tuple[str, str]] = {
@@ -76,15 +76,17 @@ def _composite_score(
     now_et: datetime.time | None,
     tick_rate: float | None,
     session_move_pts: float | None,
+    direction: str | None = None,
 ) -> int:
-    """Compute composite alert quality score (90-day backtest-derived weights).
+    """Compute composite alert quality score (180-day backtest-derived weights).
 
     Components (each contributes an integer score):
-      Level:         IBL +3, VWAP 0, IBH -1
-      Time of day:   afternoon +2, power hour +1, lunch -1, first hour -3
-      Tick rate:     ≥2000 +2, ≥1750 +1, <1000 -2
-      Test count:    #1 -4, #3 +2, #4 +1, #5+ -1
-      Session move:  mildly red +2, strongly green -1
+      Level:           IBL +3, FIB_EXT_LO_1.272 +2, FIB_RET/EXT_HI +1, VWAP 0, IBH -1
+      Direction×Level: strong combos +1, weak combos -1
+      Time of day:     afternoon +2, power hour +1, lunch -1, first hour -3
+      Tick rate:       ≥2000 +2, ≥1750 +1, <1000 -2
+      Test count:      #1 -4, #3 +2, #4 +1, #5+ -1
+      Session move:    mildly red +2, strongly green -1
     """
     s = 0
 
@@ -95,8 +97,22 @@ def _composite_score(
         s -= 1
     elif level_name == "FIB_EXT_LO_1.272":
         s += 2  # 78.5% win rate, EV +2.0
-    elif level_name in ("FIB_RET_0.236", "FIB_EXT_HI_1.272"):
+    elif level_name == "FIB_EXT_HI_1.272":
         s += 1  # 77.8% win rate, EV +1.8
+
+    # Direction × Level interaction (180-day backtest)
+    if direction is not None:
+        combo = (level_name, direction)
+        # Strong combos: ≥79% win rate with decent sample
+        if combo in (
+            ("FIB_EXT_HI_1.272", "up"),  # 83.4% (157 trades)
+            ("FIB_EXT_LO_1.272", "down"),  # 81.3% (235 trades)
+            ("IBL", "down"),  # 79.6% (285 trades)
+        ):
+            s += 1
+        # Weak combos: ≤73% win rate
+        elif combo in (("IBH", "up"),):  # 72.5% (244 trades)
+            s -= 1
 
     # Time of day
     if now_et is not None:
@@ -157,8 +173,12 @@ class AlertManager:
     def update_levels(
         self, ibh: float | None, ibl: float | None, vwap: float | None
     ) -> None:
-        """Register or update price levels. Pass None to skip a level."""
-        for name, price in {"IBH": ibh, "IBL": ibl, "VWAP": vwap}.items():
+        """Register or update price levels. Pass None to skip a level.
+
+        IBH is intentionally excluded — 180-day backtest showed it barely
+        clears score ≥ 3 (11 trades in 180 days) and adds no value.
+        """
+        for name, price in {"IBL": ibl, "VWAP": vwap}.items():
             if price is None:
                 continue
             if name not in self._levels:
@@ -203,12 +223,14 @@ class AlertManager:
         fired: list[tuple[int, str, float, str]] = []
         for level in self._levels.values():
             if level.update(current_price):
+                direction = "up" if current_price > level.price else "down"
                 score = _composite_score(
                     level.name,
                     level.entry_count,
                     now_et,
                     tick_rate,
                     session_move_pts,
+                    direction=direction,
                 )
 
                 if score < _MIN_SCORE:
@@ -217,8 +239,6 @@ class AlertManager:
                         f"(test #{level.entry_count}), price {current_price:.2f}"
                     )
                     continue
-
-                direction = "up" if current_price > level.price else "down"
                 tier_label, tier_wr = _score_tier(score)
                 title, body = _build_message(
                     level.name,
@@ -292,7 +312,6 @@ def _build_message(
         "IBH": ("BUY", "IBH support retest", "SELL", "IBH resistance fade"),
         "IBL": ("BUY", "IBL support bounce", "SELL", "IBL breakdown retest"),
         "VWAP": ("BUY", "VWAP support hold", "SELL", "VWAP resistance fade"),
-        "FIB_RET_0.236": ("BUY", "Fib 23.6% support", "SELL", "Fib 23.6% breakdown"),
         "FIB_EXT_LO_1.272": (
             "BUY",
             "Fib 1.272 ext bounce",

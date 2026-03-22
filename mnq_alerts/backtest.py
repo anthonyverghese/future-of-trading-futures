@@ -1543,6 +1543,17 @@ def composite_scoring(all_alerts: list[Alert]) -> None:
         elif a.level == "IBH":
             s -= 1
 
+        # Direction × Level interaction
+        combo = (a.level, a.direction)
+        if combo in (
+            ("FIB_EXT_HI_1.272", "up"),
+            ("FIB_EXT_LO_1.272", "down"),
+            ("IBL", "down"),
+        ):
+            s += 1
+        elif combo in (("IBH", "up"),):
+            s -= 1
+
         # Time of day: afternoon best (+2), first hour worst (-3), lunch -1
         if (13 * 60) <= mins < (15 * 60):
             s += 2
@@ -1750,6 +1761,7 @@ def main() -> None:
     day_of_week_scoring(original_alerts)
     enhanced_composite_sweep(original_alerts)
     fib_level_analysis(fib_alerts)
+    combined_scoring_analysis(all_alerts, len(days))
 
 
 # ── IB range width analysis ──────────────────────────────────────────────────
@@ -2184,6 +2196,163 @@ def fib_level_analysis(fib_alerts: list[Alert]) -> None:
             print(
                 f"  {name + ' / test ' + tc_label:<35}  {w:>5}  {l:>5}  {t:>7}  {wr:>5.1%}{warn}"
             )
+
+
+def combined_scoring_analysis(all_alerts: list[Alert], n_days: int) -> None:
+    """Score ALL alerts (original + fib) with composite scoring and show combined stats."""
+    decided = [
+        a for a in all_alerts if a.outcome in ("correct", "incorrect") and a.features
+    ]
+
+    print(f"\n{'═' * 90}")
+    print("  COMBINED SCORING ANALYSIS (ALL LEVELS: IBH/IBL/VWAP + Fib)")
+    print(
+        f"  (Composite score applied to all {len(decided)} decided alerts across {n_days} days)"
+    )
+    print(f"{'═' * 90}")
+
+    def score_alert(a: Alert) -> int:
+        """Must match _composite_score() in alert_manager.py exactly."""
+        s = 0
+        mins = a.alert_time.hour * 60 + a.alert_time.minute
+
+        # Level quality
+        if a.level == "IBL":
+            s += 3
+        elif a.level == "IBH":
+            s -= 1
+        elif a.level == "FIB_EXT_LO_1.272":
+            s += 2
+        elif a.level == "FIB_EXT_HI_1.272":
+            s += 1
+
+        # Direction × Level interaction
+        combo = (a.level, a.direction)
+        if combo in (
+            ("FIB_EXT_HI_1.272", "up"),
+            ("FIB_EXT_LO_1.272", "down"),
+            ("IBL", "down"),
+        ):
+            s += 1
+        elif combo in (("IBH", "up"),):
+            s -= 1
+
+        # Time of day
+        if (13 * 60) <= mins < (15 * 60):
+            s += 2
+        elif (10 * 60 + 30) <= mins < (11 * 60 + 30):
+            s -= 3
+        elif (11 * 60 + 30) <= mins < (13 * 60):
+            s -= 1
+        else:
+            s += 1
+
+        # Tick rate
+        tr = a.features.get("tick_rate", 0)
+        if tr >= 2000:
+            s += 2
+        elif tr >= 1750:
+            s += 1
+        elif tr < 1000:
+            s -= 2
+
+        # Test count
+        tc = a.level_test_count
+        if tc == 1:
+            s -= 4
+        elif tc == 3:
+            s += 2
+        elif tc == 4:
+            s += 1
+        elif tc >= 5:
+            s -= 1
+
+        # Session context
+        session_move = a.features.get("session_move_pts", 0)
+        if -50 < session_move <= 0:
+            s += 2
+        elif session_move > 50:
+            s -= 1
+
+        return s
+
+    scored = [(a, score_alert(a)) for a in decided]
+
+    # Live system levels only (no IBH, no FIB_RET_0.236).
+    _LIVE_LEVELS = {"IBL", "VWAP", "FIB_EXT_LO_1.272", "FIB_EXT_HI_1.272"}
+
+    live_filtered = [(a, s) for a, s in scored if a.level in _LIVE_LEVELS and s >= 3]
+
+    # --- All-levels cutoff sweep (for reference) ---
+    all_scores = sorted(set(s for _, s in scored))
+    print(f"\n  Cutoff sweep (all levels, uniform cutoff):")
+    print(
+        f"  {'Cutoff':>7}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}  "
+        f"{'EV/trade':>9}  {'Alerts/day':>10}  {'$/day @20c':>11}"
+    )
+    print(
+        f"  {'-'*7}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}  "
+        f"{'-'*9}  {'-'*10}  {'-'*11}"
+    )
+
+    for cutoff in sorted(all_scores):
+        above = [a for a, s in scored if s >= cutoff]
+        w = sum(1 for a in above if a.outcome == "correct")
+        l = sum(1 for a in above if a.outcome == "incorrect")
+        t = w + l
+        if t < 10:
+            continue
+        wr = w / t
+        ev_pts = wr * TARGET_POINTS - (1 - wr) * STOP_POINTS
+        alerts_per_day = t / n_days
+        daily_dollar = ev_pts * 40 * alerts_per_day
+        marker = " ← current" if cutoff == 3 else ""
+        print(
+            f"  {cutoff:>7.0f}  {w:>5}  {l:>5}  {t:>7}  {wr:>5.1%}  "
+            f"{ev_pts:>+8.1f}  {alerts_per_day:>10.1f}  {daily_dollar:>+10.0f}{marker}"
+        )
+
+    # --- Live system: per-level breakdown ---
+    print(
+        f"\n  LIVE SYSTEM (4 levels: IBL, VWAP, FIB_EXT_LO_1.272, FIB_EXT_HI_1.272, score ≥ 3):"
+    )
+    print(
+        f"  {'Level':<25}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}  "
+        f"{'EV/trade':>9}  {'Alerts/day':>10}"
+    )
+    print(f"  {'-'*25}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}  {'-'*9}  {'-'*10}")
+    level_names = sorted(set(a.level for a, _ in live_filtered))
+    for name in level_names:
+        level_alerts = [a for a, s in live_filtered if a.level == name]
+        w = sum(1 for a in level_alerts if a.outcome == "correct")
+        l = sum(1 for a in level_alerts if a.outcome == "incorrect")
+        t = w + l
+        if t == 0:
+            continue
+        wr = w / t
+        ev_pts = wr * TARGET_POINTS - (1 - wr) * STOP_POINTS
+        apd = t / n_days
+        print(
+            f"  {name:<25}  {w:>5}  {l:>5}  {t:>7}  {wr:>5.1%}  "
+            f"{ev_pts:>+8.1f}  {apd:>10.1f}"
+        )
+
+    # Grand total for live system
+    total_w = sum(1 for a, _ in live_filtered if a.outcome == "correct")
+    total_l = sum(1 for a, _ in live_filtered if a.outcome == "incorrect")
+    total_t = total_w + total_l
+    if total_t > 0:
+        total_wr = total_w / total_t
+        total_ev = total_wr * TARGET_POINTS - (1 - total_wr) * STOP_POINTS
+        total_apd = total_t / n_days
+        daily_ev = total_ev * 40 * total_apd
+        print(
+            f"\n  {'TOTAL':<25}  {total_w:>5}  {total_l:>5}  {total_t:>7}  {total_wr:>5.1%}  "
+            f"{total_ev:>+8.1f}  {total_apd:>10.1f}"
+        )
+        print(f"\n  Expected value at 20 contracts ($2/pt):")
+        print(f"    Per trade : {total_ev * 40:>+.2f}")
+        print(f"    Per day   : {daily_ev:>+.0f}  ({total_apd:.1f} alerts/day)")
 
 
 if __name__ == "__main__":
