@@ -121,8 +121,24 @@ def get_trading_days(n: int = 45) -> list[datetime.date]:
     return sorted(days)
 
 
+CACHE_DIR = os.path.join(os.path.dirname(__file__), "data_cache")
+
+
+def _cache_path(date: datetime.date) -> str:
+    return os.path.join(CACHE_DIR, f"MNQ_{date}.parquet")
+
+
 def fetch_trades(client: db.Historical, date: datetime.date) -> pd.DataFrame:
-    """Fetch RTH trades for one day. Returns DataFrame with ET DatetimeIndex."""
+    """Fetch RTH trades for one day. Returns DataFrame with ET DatetimeIndex.
+
+    Results are cached to data_cache/MNQ_<date>.parquet so subsequent runs
+    load from disk instead of re-downloading from Databento.
+    """
+    path = _cache_path(date)
+    if os.path.exists(path):
+        print(f"    [cache] loading {date} from disk", flush=True)
+        return pd.read_parquet(path)
+
     start = ET.localize(datetime.datetime.combine(date, MARKET_OPEN)).isoformat()
     end   = ET.localize(datetime.datetime.combine(date, MARKET_CLOSE)).isoformat()
 
@@ -150,6 +166,10 @@ def fetch_trades(client: db.Historical, date: datetime.date) -> pd.DataFrame:
         return pd.DataFrame(columns=["price", "size"])
 
     df = pd.DataFrame(rows, columns=["ts", "price", "size"]).set_index("ts").sort_index()
+
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    df.to_parquet(path)
+    print(f"    [cache] saved {date} ({len(df):,} trades)", flush=True)
     return df
 
 
