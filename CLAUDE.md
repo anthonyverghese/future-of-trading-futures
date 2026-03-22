@@ -59,7 +59,7 @@ Requires Python 3.9+. The `databento` SDK includes a compiled Rust extension
 
 | Setting | Default | Description |
 |---|---|---|
-| `ALERT_THRESHOLD_POINTS` | 10 | Points from a level to trigger alert |
+| `ALERT_THRESHOLD_POINTS` | 7 | Points from a level to trigger alert |
 | `MARKET_OPEN` | 9:30 AM ET | RTH start |
 | `MARKET_CLOSE` | 4:00 PM ET | RTH end |
 | `IB_END` | 10:30 AM ET | IB window close |

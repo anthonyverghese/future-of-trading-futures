@@ -45,13 +45,13 @@ MARKET_OPEN   = datetime.time(9,  30)
 IB_END        = datetime.time(10, 30)
 MARKET_CLOSE  = datetime.time(16,  0)
 
-ALERT_THRESHOLD = 10.0   # points — zone entry (must match live config)
+ALERT_THRESHOLD = 7.0    # points — zone entry (must match live config)
 EXIT_THRESHOLD  = 20.0   # points — zone exit (must match live config)
 HIT_THRESHOLD   = 1.0    # points — price within this = "touched the line"
 TARGET_POINTS   = 10.0   # points in recommended direction = correct
 STOP_POINTS     = 20.0   # points against recommendation = incorrect
 WINDOW_SECS     = 15 * 60  # 15-minute evaluation window
-FEATURE_SECS    = 2  * 60  # 2-minute feature window before outcome
+FEATURE_SECS    = 2  * 60  # 2-minute approach window BEFORE alert fires
 
 
 # ── Data structures ───────────────────────────────────────────────────────────
@@ -246,70 +246,70 @@ def simulate_and_evaluate(df: pd.DataFrame, date: datetime.date) -> list[Alert]:
             alert.outcome      = "incorrect"
             alert.outcome_time = stop_ts.to_pydatetime(warn=False)
 
-    # ── Feature extraction (2-min window after alert fires) ──────────────────
-    # Uses data available at decision time — no look-ahead bias.
+    # ── Feature extraction (2-min approach window BEFORE alert fires) ────────
+    # Window = [alert_ts - 2min, alert_ts]. All data is available at the
+    # moment the alert fires — zero look-ahead bias.
     for alert in alerts:
         if alert.outcome not in ("correct", "incorrect") or alert.outcome_time is None:
             continue
 
         alert_ts     = pd.Timestamp(alert.alert_time)
-        window_end   = alert_ts + pd.Timedelta(seconds=FEATURE_SECS)
-        window       = df[(df.index >= alert_ts) & (df.index <= window_end)]
+        window_start = alert_ts - pd.Timedelta(seconds=FEATURE_SECS)
+        window       = df[(df.index >= window_start) & (df.index <= alert_ts)]
 
         if len(window) < 3:
             continue
 
-        prices = window["price"].values
-        sizes  = window["size"].values
-        n      = len(prices)
+        prices_arr = window["price"].values
+        sizes_arr  = window["size"].values
+        n          = len(prices_arr)
 
-        # Split window into two equal halves for sub-window momentum analysis.
+        # Split window into two equal halves.
         mid = n // 2
-        first_prices  = prices[:mid]  if mid >= 2 else prices[:1]
-        second_prices = prices[mid:]  if n - mid >= 2 else prices[-1:]
-        first_sizes   = sizes[:mid]
-        second_sizes  = sizes[mid:]
+        first_prices  = prices_arr[:mid]  if mid >= 2 else prices_arr[:1]
+        second_prices = prices_arr[mid:]  if n - mid >= 2 else prices_arr[-1:]
+        first_sizes   = sizes_arr[:mid]
+        second_sizes  = sizes_arr[mid:]
 
-        # ── Momentum features ─────────────────────────────────────────────────
-        # sign convention: positive = moving toward recommended target,
-        #                  negative = moving toward stop loss.
-        def signed(val: float) -> float:
-            return val if alert.direction == "up" else -val
+        # ── Approach momentum features ────────────────────────────────────────
+        # Sign convention: positive = price moving TOWARD the line (approach),
+        #                  negative = price moving AWAY from the line (retreat).
+        # direction="up": price is above the line; approaching = moving DOWN.
+        # direction="down": price is below the line; approaching = moving UP.
+        def toward(val: float) -> float:
+            """Positive = moving toward the line."""
+            return -val if alert.direction == "up" else val
 
-        overall_change = prices[-1] - prices[0]
-        signed_momentum = signed(overall_change)
+        overall_change   = prices_arr[-1] - prices_arr[0]
+        approach_momentum = toward(overall_change)   # >0 = consistent approach
 
         # Linear regression slope — more robust to noise than endpoint diff.
         x = np.arange(n, dtype=float)
-        slope = float(np.polyfit(x, prices, 1)[0])
-        signed_slope = signed(slope)
+        slope = float(np.polyfit(x, prices_arr, 1)[0])
+        approach_slope = toward(slope)
 
-        # Sub-window momentum: first and second halves.
+        # Sub-window momentum: first half (early approach) and second half (late).
         first_change  = (first_prices[-1]  - first_prices[0])  if len(first_prices)  >= 2 else 0.0
         second_change = (second_prices[-1] - second_prices[0]) if len(second_prices) >= 2 else 0.0
-        signed_first  = signed(first_change)
-        signed_second = signed(second_change)
+        approach_first  = toward(first_change)
+        approach_second = toward(second_change)
 
-        # Acceleration: is momentum strengthening (+) or dying (-)?
-        momentum_accel = signed_second - signed_first
+        # Acceleration: is approach strengthening (+) or stalling/reversing (-)?
+        approach_accel = approach_second - approach_first
 
-        # Volatility and normalized momentum.
-        volatility         = float(np.std(prices))
-        normalized_momentum = signed_momentum / volatility if volatility > 1e-9 else 0.0
+        # Volatility and normalized approach momentum.
+        volatility         = float(np.std(prices_arr))
+        norm_approach      = approach_momentum / volatility if volatility > 1e-9 else 0.0
 
-        # ── Excursion features ────────────────────────────────────────────────
-        # Max Adverse Excursion (MAE): how far price moved against recommendation.
-        # Max Favorable Excursion (MFE): how far price moved toward target.
+        # ── Pullback feature ──────────────────────────────────────────────────
+        # Max pullback: furthest price moved AWAY from the line during the
+        # approach window. Measures how much the approach was interrupted.
+        # direction="up": away = price moving up; pullback = max(prices) - prices[-1]
+        # direction="down": away = price moving down; pullback = prices[-1] - min(prices)
         if alert.direction == "up":
-            mae = alert.line_price - float(np.min(prices))   # below line = bad
-            mfe = float(np.max(prices)) - alert.line_price   # above line = good
+            max_pullback = max(0.0, float(np.max(prices_arr)) - prices_arr[-1])
         else:
-            mae = float(np.max(prices)) - alert.line_price   # above line = bad
-            mfe = alert.line_price - float(np.min(prices))   # below line = good
-
-        mae = max(mae, 0.0)
-        mfe = max(mfe, 0.0)
-        mfe_mae_ratio = mfe / (mae + 1.0)  # > 1 = more favorable than adverse
+            max_pullback = max(0.0, prices_arr[-1] - float(np.min(prices_arr)))
 
         # ── Volume and activity features ──────────────────────────────────────
         first_vol  = int(np.sum(first_sizes))
@@ -323,18 +323,16 @@ def simulate_and_evaluate(df: pd.DataFrame, date: datetime.date) -> list[Alert]:
         ) - (9 * 60 + 30)
 
         alert.features = {
-            # Momentum
-            "signed_momentum":    signed_momentum,
-            "signed_slope":       signed_slope,
-            "signed_first_half":  signed_first,
-            "signed_second_half": signed_second,
-            "momentum_accel":     momentum_accel,
-            "norm_momentum":      normalized_momentum,
-            # Excursion
+            # Approach momentum (positive = moving toward line)
+            "approach_momentum":  approach_momentum,
+            "approach_slope":     approach_slope,
+            "approach_first":     approach_first,
+            "approach_second":    approach_second,
+            "approach_accel":     approach_accel,
+            "norm_approach":      norm_approach,
+            # Approach quality
             "volatility":         volatility,
-            "mae":                mae,
-            "mfe":                mfe,
-            "mfe_mae_ratio":      mfe_mae_ratio,
+            "max_pullback":       max_pullback,
             # Volume / activity
             "volume_trend":       volume_trend,
             "tick_rate":          tick_rate,
@@ -368,27 +366,6 @@ def build_model(all_alerts: list[Alert]) -> None:
     n_correct   = sum(1 for a in labeled if a.outcome == "correct")
     n_incorrect = sum(1 for a in labeled if a.outcome == "incorrect")
     print(f"  Samples: {len(labeled)}  ({n_correct} correct, {n_incorrect} incorrect)")
-
-    # ── Diagnostic: how many samples had price hit the line before the
-    # 2-minute feature window ended? Those samples contain post-hit data
-    # and the model's output would arrive too late to act on in live trading.
-    hit_before_window = [
-        a for a in labeled
-        if a.hit_time is not None and a.alert_time is not None
-        and (a.hit_time - a.alert_time).total_seconds() < FEATURE_SECS
-    ]
-    pct = len(hit_before_window) / len(labeled) * 100 if labeled else 0
-    print(f"\n  ⚠ Line hit before 2-min window ended: "
-          f"{len(hit_before_window)}/{len(labeled)} samples ({pct:.1f}%)")
-    print(f"  For these alerts, the model sees post-hit data and would arrive")
-    print(f"  too late to be actionable in live trading.")
-
-    # Filter to only samples where the line was NOT hit during the feature window.
-    clean = [a for a in labeled if a not in set(hit_before_window)]
-    n_clean_correct   = sum(1 for a in clean if a.outcome == "correct")
-    n_clean_incorrect = sum(1 for a in clean if a.outcome == "incorrect")
-    print(f"\n  Clean samples (line hit AFTER 2-min window): "
-          f"{len(clean)}  ({n_clean_correct} correct, {n_clean_incorrect} incorrect)")
 
     if len(labeled) < 6 or min(n_correct, n_incorrect) < 2:
         print("  Insufficient samples for reliable model — skipping.")

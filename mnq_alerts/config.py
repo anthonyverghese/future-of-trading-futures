@@ -24,7 +24,7 @@ DATABENTO_SYMBOL  = "MNQ.c.0"     # Continuous front-month MNQ (auto-rolled)
 
 # ── Alerts ─────────────────────────────────────────────────────────────────────
 
-ALERT_THRESHOLD_POINTS = 10  # Notify when MNQ is within this many points of a level
+ALERT_THRESHOLD_POINTS = 7   # Notify when MNQ is within this many points of a level
 ALERT_EXIT_POINTS      = 20  # Points away from reference to reset the alert zone
 CHECK_INTERVAL_SECONDS = 30  # How often to poll during RTH
 
