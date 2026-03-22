@@ -2283,9 +2283,42 @@ def combined_scoring_analysis(
         elif session_move > 50:
             s -= 1
 
+        # Outcome streak
+        cw = a.features.get("consecutive_wins", 0)
+        cl = a.features.get("consecutive_losses", 0)
+        if cw >= 2:
+            s += 2
+        elif cl >= 2:
+            s -= 3
+
         return s
 
-    scored = [(a, score_alert(a)) for a in decided]
+    # Score alerts chronologically so streak tracking works correctly.
+    # Alerts must be sorted by time so that consecutive_wins/losses reflect
+    # the outcomes of earlier alerts when scoring later ones.
+    decided_sorted = sorted(decided, key=lambda a: a.alert_time)
+    scored = []
+    recent_outcomes: list[str] = []
+    for a in decided_sorted:
+        # Compute streak from prior resolved alerts
+        cons_wins = 0
+        for o in reversed(recent_outcomes):
+            if o == "correct":
+                cons_wins += 1
+            else:
+                break
+        cons_losses = 0
+        for o in reversed(recent_outcomes):
+            if o == "incorrect":
+                cons_losses += 1
+            else:
+                break
+        a.features["consecutive_wins"] = cons_wins
+        a.features["consecutive_losses"] = cons_losses
+        s = score_alert(a)
+        scored.append((a, s))
+        if a.outcome in ("correct", "incorrect"):
+            recent_outcomes.append(a.outcome)
 
     # Live system levels only (no IBH, no FIB_RET_0.236).
     _LIVE_LEVELS = {"IBL", "VWAP", "FIB_EXT_LO_1.272", "FIB_EXT_HI_1.272"}
@@ -2367,6 +2400,7 @@ def combined_scoring_analysis(
     if day_dfs:
         live_alerts = [a for a, s in live_filtered]
         _live_target_sweep(live_alerts, day_dfs, n_days)
+        _experimental_factors(live_alerts, day_dfs, n_days)
 
 
 def _live_target_sweep(
@@ -2457,6 +2491,366 @@ def _live_target_sweep(
         print(
             f"  {label:<30}  {correct:>5}  {incorrect:>5}  {decided:>7}  {wr:>5.1%}  "
             f"{ev:>+8.1f}  {dollar_per_trade:>+11.0f}  {dollar_per_day:>+7.0f}{marker}"
+        )
+
+
+def _experimental_factors(
+    live_alerts: list[Alert],
+    day_dfs: dict,
+    n_days: int,
+) -> None:
+    """Test 6 experimental factors on live-system-filtered alerts."""
+    decided = [
+        a for a in live_alerts if a.outcome in ("correct", "incorrect") and a.features
+    ]
+    if not decided:
+        return
+
+    def _print_groups(title: str, groups: list[tuple[str, list[Alert]]]) -> None:
+        print(f"\n  {title}")
+        print(
+            f"  {'Group':<40}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}  {'EV':>6}"
+        )
+        print(f"  {'-'*40}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}  {'-'*6}")
+        for label, subset in groups:
+            w = sum(1 for a in subset if a.outcome == "correct")
+            l = sum(1 for a in subset if a.outcome == "incorrect")
+            t = w + l
+            if t == 0:
+                continue
+            wr = w / t
+            ev = wr * TARGET_POINTS - (1 - wr) * STOP_POINTS
+            warn = "  ⚠ n<30" if t < 30 else ""
+            print(
+                f"  {label:<40}  {w:>5}  {l:>5}  {t:>7}  {wr:>5.1%}  {ev:>+5.1f}{warn}"
+            )
+
+    print(f"\n{'═' * 90}")
+    print("  EXPERIMENTAL FACTOR ANALYSIS (live system alerts only)")
+    print(f"  ({len(decided)} decided alerts across {n_days} days)")
+    print(f"{'═' * 90}")
+
+    # ── 1. IB Range Width ─────────────────────────────────────────────────────
+    # Compute IB range for each day from day_dfs.
+    day_ib_range: dict[datetime.date, float] = {}
+    for date, df in day_dfs.items():
+        ib = df[(df.index.time >= MARKET_OPEN) & (df.index.time < IB_END)]
+        if not ib.empty:
+            day_ib_range[date] = float(ib["price"].max()) - float(ib["price"].min())
+
+    alerts_with_ib = [
+        (a, day_ib_range.get(a.date, 0)) for a in decided if a.date in day_ib_range
+    ]
+    ib_ranges = sorted(r for _, r in alerts_with_ib)
+    if ib_ranges:
+        q1 = ib_ranges[len(ib_ranges) // 4]
+        q2 = ib_ranges[len(ib_ranges) // 2]
+        q3 = ib_ranges[3 * len(ib_ranges) // 4]
+        _print_groups(
+            "1. IB RANGE WIDTH",
+            [
+                (f"Narrow (< {q1:.0f} pts)", [a for a, r in alerts_with_ib if r < q1]),
+                (
+                    f"Normal ({q1:.0f}–{q2:.0f} pts)",
+                    [a for a, r in alerts_with_ib if q1 <= r < q2],
+                ),
+                (
+                    f"Wide ({q2:.0f}–{q3:.0f} pts)",
+                    [a for a, r in alerts_with_ib if q2 <= r < q3],
+                ),
+                (
+                    f"Very wide (≥ {q3:.0f} pts)",
+                    [a for a, r in alerts_with_ib if r >= q3],
+                ),
+            ],
+        )
+
+    # ── 2. Prior Day Level Confluence ─────────────────────────────────────────
+    _print_groups(
+        "2. PRIOR DAY LEVEL CONFLUENCE",
+        [
+            ("With confluence", [a for a in decided if a.prior_confluence]),
+            ("Without confluence", [a for a in decided if not a.prior_confluence]),
+        ],
+    )
+
+    # ── 3. Approach Momentum ─────────────────────────────────────────────────
+    mom_alerts = [
+        (a, a.features.get("approach_momentum", 0))
+        for a in decided
+        if "approach_momentum" in a.features
+    ]
+    if mom_alerts:
+        moms = sorted(m for _, m in mom_alerts)
+        mq1 = moms[len(moms) // 4]
+        mq2 = moms[len(moms) // 2]
+        mq3 = moms[3 * len(moms) // 4]
+        _print_groups(
+            "3. APPROACH MOMENTUM (speed toward level)",
+            [
+                (f"Q1: slow (< {mq1:.1f})", [a for a, m in mom_alerts if m < mq1]),
+                (
+                    f"Q2: moderate ({mq1:.1f}–{mq2:.1f})",
+                    [a for a, m in mom_alerts if mq1 <= m < mq2],
+                ),
+                (
+                    f"Q3: fast ({mq2:.1f}–{mq3:.1f})",
+                    [a for a, m in mom_alerts if mq2 <= m < mq3],
+                ),
+                (
+                    f"Q4: very fast (≥ {mq3:.1f})",
+                    [a for a, m in mom_alerts if m >= mq3],
+                ),
+            ],
+        )
+
+        # Also test approach volatility
+        vol_alerts = [
+            (a, a.features.get("volatility", 0))
+            for a in decided
+            if "volatility" in a.features
+        ]
+        if vol_alerts:
+            vols = sorted(v for _, v in vol_alerts)
+            vq2 = vols[len(vols) // 2]
+            _print_groups(
+                "   APPROACH VOLATILITY (choppiness on approach)",
+                [
+                    (
+                        f"Low volatility (< {vq2:.1f})",
+                        [a for a, v in vol_alerts if v < vq2],
+                    ),
+                    (
+                        f"High volatility (≥ {vq2:.1f})",
+                        [a for a, v in vol_alerts if v >= vq2],
+                    ),
+                ],
+            )
+
+    # ── 4. Multi-Level Proximity ──────────────────────────────────────────────
+    # For each alert, check if another live level was within 20 pts at alert time.
+    # We need to reconstruct level prices per day.
+    PROXIMITY_PTS = 20
+    proximity_results = []
+    for a in decided:
+        df = day_dfs.get(a.date)
+        if df is None:
+            continue
+        # Reconstruct levels for this day
+        ib = df[(df.index.time >= MARKET_OPEN) & (df.index.time < IB_END)]
+        if ib.empty:
+            continue
+        ibh = float(ib["price"].max())
+        ibl = float(ib["price"].min())
+        ib_range = ibh - ibl
+
+        # VWAP at alert time
+        session = df[
+            (df.index.time >= MARKET_OPEN) & (df.index <= pd.Timestamp(a.alert_time))
+        ]
+        if session.empty or session["size"].sum() == 0:
+            continue
+        vwap = float((session["price"] * session["size"]).sum() / session["size"].sum())
+
+        all_levels = {
+            "IBL": ibl,
+            "VWAP": vwap,
+            "FIB_EXT_LO_1.272": ibl - 0.272 * ib_range,
+            "FIB_EXT_HI_1.272": ibh + 0.272 * ib_range,
+        }
+        # Count how many OTHER levels are within PROXIMITY_PTS of this alert's level
+        nearby = sum(
+            1
+            for name, price in all_levels.items()
+            if name != a.level and abs(price - a.line_price) <= PROXIMITY_PTS
+        )
+        proximity_results.append((a, nearby))
+
+    if proximity_results:
+        _print_groups(
+            "4. MULTI-LEVEL PROXIMITY (other levels within 20 pts)",
+            [
+                ("No nearby levels", [a for a, n in proximity_results if n == 0]),
+                ("1 nearby level", [a for a, n in proximity_results if n == 1]),
+                ("2+ nearby levels", [a for a, n in proximity_results if n >= 2]),
+            ],
+        )
+
+    # ── 5. Partial Profit Taking ──────────────────────────────────────────────
+    # Simulate: half at +4, half rides to +12 (or stopped at -20).
+    # Compare average P/L vs current all-in +8.
+    print(f"\n  5. PARTIAL PROFIT SIMULATION")
+    print(f"  (Compare all-in +8 vs half@+4 + half@+12, same -20 stop)")
+    print(
+        f"  {'Strategy':<40}  {'Avg P/L':>8}  {'Win%':>6}  {'$/trade @20c':>12}  {'$/day':>8}"
+    )
+    print(f"  {'-'*40}  {'-'*8}  {'-'*6}  {'-'*12}  {'-'*8}")
+
+    # Current: all-in +8
+    current_w = sum(1 for a in decided if a.outcome == "correct")
+    current_l = len(decided) - current_w
+    current_wr = current_w / len(decided)
+    current_ev = current_wr * TARGET_POINTS - (1 - current_wr) * STOP_POINTS
+    current_dollar = current_ev * 40
+    current_daily = current_dollar * (len(decided) / n_days)
+    print(
+        f"  {'All-in +8 pts (current)':<40}  {current_ev:>+7.1f}  {current_wr:>5.1%}  {current_dollar:>+11.0f}  {current_daily:>+7.0f}"
+    )
+
+    # Partial: half at +4, half at +12
+    partial_pnl = []
+    for alert in decided:
+        df = day_dfs.get(alert.date)
+        if df is None:
+            continue
+        prices = df["price"]
+        alert_ts = pd.Timestamp(alert.alert_time)
+        window_end = alert_ts + pd.Timedelta(seconds=WINDOW_SECS)
+
+        hit_seg = prices[(prices.index > alert_ts) & (prices.index <= window_end)]
+        hit_mask = abs(hit_seg - alert.line_price) <= HIT_THRESHOLD
+        if not hit_mask.any():
+            continue
+
+        hit_ts = hit_mask.idxmax()
+        eval_end = hit_ts + pd.Timedelta(seconds=15 * 60)
+        eval_seg = prices[(prices.index > hit_ts) & (prices.index <= eval_end)]
+        if eval_seg.empty:
+            continue
+
+        if alert.direction == "up":
+            t1_mask = eval_seg >= alert.line_price + 4
+            t2_mask = eval_seg >= alert.line_price + 12
+            stop_mask = eval_seg <= alert.line_price - STOP_POINTS
+        else:
+            t1_mask = eval_seg <= alert.line_price - 4
+            t2_mask = eval_seg <= alert.line_price - 12
+            stop_mask = eval_seg >= alert.line_price + STOP_POINTS
+
+        t1_hit = t1_mask.any()
+        t2_hit = t2_mask.any()
+        stop_hit = stop_mask.any()
+
+        # Determine order of events
+        t1_ts = eval_seg.index[t1_mask][0] if t1_hit else None
+        t2_ts = eval_seg.index[t2_mask][0] if t2_hit else None
+        stop_ts = eval_seg.index[stop_mask][0] if stop_hit else None
+
+        # Half 1: +4 target
+        half1 = 0.0
+        if t1_hit and (stop_ts is None or t1_ts <= stop_ts):
+            half1 = 4.0
+        elif stop_hit:
+            half1 = -20.0
+        else:
+            half1 = -20.0  # time expired = loss
+
+        # Half 2: +12 target (only if not stopped before +4)
+        half2 = 0.0
+        if t2_hit and (stop_ts is None or t2_ts <= stop_ts):
+            half2 = 12.0
+        elif stop_hit:
+            half2 = -20.0
+        else:
+            half2 = -20.0
+
+        partial_pnl.append((half1 + half2) / 2)  # average of two halves
+
+    if partial_pnl:
+        avg_partial = sum(partial_pnl) / len(partial_pnl)
+        partial_wr = sum(1 for p in partial_pnl if p > 0) / len(partial_pnl)
+        partial_dollar = avg_partial * 40
+        partial_daily = partial_dollar * (len(partial_pnl) / n_days)
+        print(
+            f"  {'Half@+4, half@+12':<40}  {avg_partial:>+7.1f}  {partial_wr:>5.1%}  {partial_dollar:>+11.0f}  {partial_daily:>+7.0f}"
+        )
+
+    # Also test half@+4, half@+16
+    partial_pnl2 = []
+    for alert in decided:
+        df = day_dfs.get(alert.date)
+        if df is None:
+            continue
+        prices = df["price"]
+        alert_ts = pd.Timestamp(alert.alert_time)
+        window_end = alert_ts + pd.Timedelta(seconds=WINDOW_SECS)
+
+        hit_seg = prices[(prices.index > alert_ts) & (prices.index <= window_end)]
+        hit_mask = abs(hit_seg - alert.line_price) <= HIT_THRESHOLD
+        if not hit_mask.any():
+            continue
+
+        hit_ts = hit_mask.idxmax()
+        eval_end = hit_ts + pd.Timedelta(seconds=20 * 60)
+        eval_seg = prices[(prices.index > hit_ts) & (prices.index <= eval_end)]
+        if eval_seg.empty:
+            continue
+
+        if alert.direction == "up":
+            t1_mask = eval_seg >= alert.line_price + 4
+            t2_mask = eval_seg >= alert.line_price + 16
+            stop_mask = eval_seg <= alert.line_price - STOP_POINTS
+        else:
+            t1_mask = eval_seg <= alert.line_price - 4
+            t2_mask = eval_seg <= alert.line_price - 16
+            stop_mask = eval_seg >= alert.line_price + STOP_POINTS
+
+        t1_hit = t1_mask.any()
+        t2_hit = t2_mask.any()
+        stop_hit = stop_mask.any()
+
+        t1_ts = eval_seg.index[t1_mask][0] if t1_hit else None
+        t2_ts = eval_seg.index[t2_mask][0] if t2_hit else None
+        stop_ts = eval_seg.index[stop_mask][0] if stop_hit else None
+
+        half1 = 4.0 if (t1_hit and (stop_ts is None or t1_ts <= stop_ts)) else -20.0
+        half2 = 16.0 if (t2_hit and (stop_ts is None or t2_ts <= stop_ts)) else -20.0
+        partial_pnl2.append((half1 + half2) / 2)
+
+    if partial_pnl2:
+        avg_p2 = sum(partial_pnl2) / len(partial_pnl2)
+        wr_p2 = sum(1 for p in partial_pnl2 if p > 0) / len(partial_pnl2)
+        dollar_p2 = avg_p2 * 40
+        daily_p2 = dollar_p2 * (len(partial_pnl2) / n_days)
+        print(
+            f"  {'Half@+4, half@+16 (20min)':<40}  {avg_p2:>+7.1f}  {wr_p2:>5.1%}  {dollar_p2:>+11.0f}  {daily_p2:>+7.0f}"
+        )
+
+    # ── 6. Consecutive Outcome Streaks ────────────────────────────────────────
+    # Sort alerts chronologically and check if outcomes are auto-correlated.
+    sorted_alerts = sorted(decided, key=lambda a: a.alert_time)
+    streak_data = []  # (previous N outcomes, this outcome)
+    for i, a in enumerate(sorted_alerts):
+        if i < 3:
+            continue
+        prev3 = [sorted_alerts[j].outcome for j in range(i - 3, i)]
+        streak_data.append((prev3, a))
+
+    if streak_data:
+        # After 3 consecutive correct
+        after_3w = [a for prev, a in streak_data if all(p == "correct" for p in prev)]
+        after_3l = [a for prev, a in streak_data if all(p == "incorrect" for p in prev)]
+        after_2w = [a for prev, a in streak_data if prev[-2:] == ["correct", "correct"]]
+        after_2l = [
+            a for prev, a in streak_data if prev[-2:] == ["incorrect", "incorrect"]
+        ]
+        after_mixed = [
+            a
+            for prev, a in streak_data
+            if not (
+                all(p == "correct" for p in prev) or all(p == "incorrect" for p in prev)
+            )
+        ]
+
+        _print_groups(
+            "6. CONSECUTIVE OUTCOME ANALYSIS (does streaking matter?)",
+            [
+                ("After 3 consecutive wins", after_3w),
+                ("After 2 consecutive wins", after_2w),
+                ("After mixed results", after_mixed),
+                ("After 2 consecutive losses", after_2l),
+                ("After 3 consecutive losses", after_3l),
+            ],
         )
 
 

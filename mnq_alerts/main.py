@@ -212,6 +212,8 @@ def run() -> None:
                     now_et=ts_et.time(),
                     tick_rate=tick_rate,
                     session_move_pts=session_move,
+                    consecutive_wins=evaluator.consecutive_wins,
+                    consecutive_losses=evaluator.consecutive_losses,
                 )
                 for alert_id, line_name, line_price, direction in fired:
                     evaluator.add(

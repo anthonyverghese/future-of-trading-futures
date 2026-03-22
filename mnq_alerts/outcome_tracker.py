@@ -41,6 +41,7 @@ class OutcomeEvaluator:
 
     def __init__(self) -> None:
         self._pending: list[_PendingEval] = []
+        self._recent_outcomes: list[str] = []  # chronological: "correct"/"incorrect"
 
     def add(
         self,
@@ -53,6 +54,28 @@ class OutcomeEvaluator:
         self._pending.append(
             _PendingEval(alert_id, line_price, direction, alert_time, date_str)
         )
+
+    @property
+    def consecutive_wins(self) -> int:
+        """Count of consecutive 'correct' outcomes at the tail of the history."""
+        count = 0
+        for outcome in reversed(self._recent_outcomes):
+            if outcome == "correct":
+                count += 1
+            else:
+                break
+        return count
+
+    @property
+    def consecutive_losses(self) -> int:
+        """Count of consecutive 'incorrect' outcomes at the tail of the history."""
+        count = 0
+        for outcome in reversed(self._recent_outcomes):
+            if outcome == "incorrect":
+                count += 1
+            else:
+                break
+        return count
 
     def update(self, current_price: float, current_time: datetime.datetime) -> None:
         """Process one trade tick against all pending evaluations."""
@@ -82,12 +105,15 @@ class OutcomeEvaluator:
 
                 if target_hit:
                     update_alert_outcome(ev.alert_id, "correct", ev.date_str)
+                    self._recent_outcomes.append("correct")
                     resolved.append(ev)
                 elif stop_hit:
                     update_alert_outcome(ev.alert_id, "incorrect", ev.date_str)
+                    self._recent_outcomes.append("incorrect")
                     resolved.append(ev)
                 elif elapsed_mins >= EVAL_WINDOW_MINS:
                     update_alert_outcome(ev.alert_id, "incorrect", ev.date_str)
+                    self._recent_outcomes.append("incorrect")
                     resolved.append(ev)
 
         for ev in resolved:

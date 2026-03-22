@@ -6,10 +6,11 @@ Stay silent while price remains in the zone. Reset when price exits, so the
 next entry triggers a fresh alert.
 
 Composite scoring (180-day backtest, +8 target / -20 stop):
-  Score ≥ 3 → 79.5% win rate (410 trades)
-  Score ≥ 4 → 81.3% win rate (252 trades)
-  Score ≥ 5 → 80.5% win rate (133 trades)
+  Score ≥ 3 → 79.9% win rate (740 trades)
+  Score ≥ 4 → 80.4% win rate (301 trades)
+  Score ≥ 5 → 81.2% win rate (181 trades)
   Minimum cutoff = 3; alerts below are suppressed.
+  Includes streak tracking: +2 after 2+ wins, -3 after 2+ losses.
 """
 
 from __future__ import annotations
@@ -30,9 +31,9 @@ _MIN_SCORE = 3
 # Signal strength tiers shown in notifications (180-day backtest).
 _TIER_LABELS: dict[int, tuple[str, str]] = {
     # score_min: (tier_label, backtest_win_rate for this bucket)
-    3: ("Good", "76.6%"),  # score 3: 121W/37L
-    4: ("Strong", "82.4%"),  # score 4: 98W/21L
-    5: ("Elite", "82.8%"),  # score 5+: 107W/26L
+    3: ("Good", "79.0%"),  # score 3: 584W/155L
+    4: ("Strong", "79.9%"),  # score 4: 353W/89L
+    5: ("Elite", "82.9%"),  # score 5+: 645W/133L
 }
 
 
@@ -77,6 +78,8 @@ def _composite_score(
     tick_rate: float | None,
     session_move_pts: float | None,
     direction: str | None = None,
+    consecutive_wins: int = 0,
+    consecutive_losses: int = 0,
 ) -> int:
     """Compute composite alert quality score (180-day backtest-derived weights).
 
@@ -87,6 +90,7 @@ def _composite_score(
       Tick rate:       ≥2000 +2, ≥1750 +1, <1000 -2
       Test count:      #1 -4, #3 +2, #4 +1, #5+ -1
       Session move:    mildly red +2, strongly green -1
+      Streak:          2+ wins +2, 2+ losses -3
     """
     s = 0
 
@@ -152,6 +156,12 @@ def _composite_score(
         elif session_move_pts > 50:
             s -= 1  # strongly green
 
+    # Outcome streak (180-day backtest: 2+W → 85.5%, 2+L → 52.6%)
+    if consecutive_wins >= 2:
+        s += 2
+    elif consecutive_losses >= 2:
+        s -= 3
+
     return s
 
 
@@ -206,6 +216,8 @@ class AlertManager:
         now_et: datetime.time | None = None,
         tick_rate: float | None = None,
         session_move_pts: float | None = None,
+        consecutive_wins: int = 0,
+        consecutive_losses: int = 0,
     ) -> list[tuple[int, str, float, str]]:
         """
         Fire a notification for any level whose zone is newly entered.
@@ -231,6 +243,8 @@ class AlertManager:
                     tick_rate,
                     session_move_pts,
                     direction=direction,
+                    consecutive_wins=consecutive_wins,
+                    consecutive_losses=consecutive_losses,
                 )
 
                 if score < _MIN_SCORE:
