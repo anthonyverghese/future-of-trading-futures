@@ -52,34 +52,36 @@ HIT_THRESHOLD   = 1.0    # points — price within this = "touched the line"
 TARGET_POINTS   = 10.0   # points in recommended direction = correct
 STOP_POINTS     = 20.0   # points against recommendation = incorrect
 WINDOW_SECS     = 15 * 60  # 15-minute evaluation window
-FEATURE_SECS    = 2  * 60  # 2-minute approach window BEFORE alert fires
+FEATURE_SECS    = 3  * 60  # 3-minute approach window BEFORE alert fires
 
 
 # ── Data structures ───────────────────────────────────────────────────────────
 
 @dataclass
 class Alert:
-    date:         datetime.date
-    alert_time:   datetime.datetime
-    level:        str           # VWAP, IBH, or IBL
-    line_price:   float         # level price locked at zone entry
-    entry_price:  float         # MNQ price when alert fired
-    direction:    str           # 'up' = BUY rec, 'down' = SELL rec
-    hit_time:     datetime.datetime | None = None
-    outcome_time: datetime.datetime | None = None
-    outcome:      str = "inconclusive"
-    features:     dict = field(default_factory=dict)
-    cv_pred:      int | None = None   # 0=predicted incorrect (avoid), 1=predicted correct
+    date:             datetime.date
+    alert_time:       datetime.datetime
+    level:            str           # VWAP, IBH, or IBL
+    line_price:       float         # level price locked at zone entry
+    entry_price:      float         # MNQ price when alert fired
+    direction:        str           # 'up' = BUY rec, 'down' = SELL rec
+    level_test_count: int  = 1      # which test of this level today (1 = first touch)
+    hit_time:         datetime.datetime | None = None
+    outcome_time:     datetime.datetime | None = None
+    outcome:          str = "inconclusive"
+    features:         dict = field(default_factory=dict)
+    cv_pred:          int | None = None   # 0=predicted incorrect (avoid), 1=predicted correct
 
 
 class ZoneState:
     """Alert zone state — mirrors the live LevelState logic exactly."""
 
     def __init__(self, name: str, price: float) -> None:
-        self.name    = name
-        self.price   = price
-        self.in_zone = False
+        self.name        = name
+        self.price       = price
+        self.in_zone     = False
         self.ref: float | None = None
+        self.entry_count = 0   # cumulative zone entries today for this level
 
     def update(self, current_price: float, new_level_price: float | None = None) -> bool:
         """Returns True if an alert should fire (zone just entered).
@@ -98,8 +100,9 @@ class ZoneState:
             return False
 
         if abs(current_price - self.price) <= ALERT_THRESHOLD:
-            self.in_zone = True
-            self.ref = self.price
+            self.in_zone     = True
+            self.ref         = self.price
+            self.entry_count += 1
             return True
 
         return False
@@ -167,9 +170,12 @@ def simulate_and_evaluate(df: pd.DataFrame, date: datetime.date) -> list[Alert]:
     ibh = float(ib["price"].max())
     ibl = float(ib["price"].min())
 
-    # Compute running VWAP from 9:30 (cumulative sum — O(n), not O(n²)).
+    # Compute running VWAP, session high/low from 9:30 (all O(n), no look-ahead).
     df = df.copy()
-    df["vwap"] = (df["price"] * df["size"]).cumsum() / df["size"].cumsum()
+    df["vwap"]         = (df["price"] * df["size"]).cumsum() / df["size"].cumsum()
+    df["session_high"] = df["price"].cummax()
+    df["session_low"]  = df["price"].cummin()
+    day_open = float(df["price"].iloc[0])
 
     # ── Alert zone simulation (post-IB only) ─────────────────────────────────
     zones = {
@@ -202,6 +208,7 @@ def simulate_and_evaluate(df: pd.DataFrame, date: datetime.date) -> list[Alert]:
                     line_price=zone.ref,
                     entry_price=price,
                     direction=direction,
+                    level_test_count=zone.entry_count,
                 ))
 
     # ── Outcome evaluation (vectorized — no iterrows) ─────────────────────────
@@ -336,10 +343,33 @@ def simulate_and_evaluate(df: pd.DataFrame, date: datetime.date) -> list[Alert]:
         volume_trend = second_vol - first_vol   # positive = participation increasing
         tick_rate    = n / (FEATURE_SECS / 60)  # trades per minute in the window
 
-        # ── Context features ──────────────────────────────────────────────────
-        alert_mins = (
-            alert.alert_time.hour * 60 + alert.alert_time.minute
-        ) - (9 * 60 + 30)
+        # ── Session context features ───────────────────────────────────────────
+        # Look up session high/low at alert time (all computed cumulatively, no look-ahead).
+        row_at_alert      = df.loc[:alert_ts, ["session_high", "session_low"]].iloc[-1]
+        session_high_now  = float(row_at_alert["session_high"])
+        session_low_now   = float(row_at_alert["session_low"])
+
+        # How far has MNQ moved from today's open? Positive = above open (green day).
+        session_move_pts  = alert.entry_price - day_open
+
+        # Does the trade direction align with the day's trend?
+        # direction="up" = BUY; direction="down" = SELL.
+        # Trend-following: BUY on a green day, or SELL on a red day.
+        day_bullish   = alert.entry_price > day_open
+        trade_bullish = alert.direction == "up"
+        trend_alignment = 1 if day_bullish == trade_bullish else -1
+
+        # Distance from today's session extremes at alert time.
+        dist_from_high = session_high_now - alert.entry_price   # 0 = at session high
+        dist_from_low  = alert.entry_price - session_low_now    # 0 = at session low
+
+        # ── Time-of-day bucket features (ET) ──────────────────────────────────
+        # alert_time is tz-aware in ET.
+        alert_time_mins = alert.alert_time.hour * 60 + alert.alert_time.minute
+        alert_mins      = alert_time_mins - (9 * 60 + 30)  # minutes since open
+        is_first_hour   = 1 if (10*60+30) <= alert_time_mins < (11*60+30) else 0
+        is_lunch        = 1 if (11*60+30) <= alert_time_mins < (13*60)    else 0
+        is_power_hour   = 1 if (15*60)    <= alert_time_mins < (16*60)    else 0
 
         alert.features = {
             # Approach momentum (positive = moving toward line)
@@ -355,8 +385,19 @@ def simulate_and_evaluate(df: pd.DataFrame, date: datetime.date) -> list[Alert]:
             # Volume / activity
             "volume_trend":       volume_trend,
             "tick_rate":          tick_rate,
-            # Context
+            # Time of day
             "time_of_day_mins":   alert_mins,
+            "is_first_hour":      is_first_hour,
+            "is_lunch":           is_lunch,
+            "is_power_hour":      is_power_hour,
+            # Session / market context
+            "session_move_pts":   session_move_pts,
+            "trend_alignment":    trend_alignment,
+            "dist_from_high":     dist_from_high,
+            "dist_from_low":      dist_from_low,
+            # Level quality
+            "level_test_count":   alert.level_test_count,
+            # Alert context
             "entry_distance":     abs(alert.entry_price - alert.line_price),
             "level_IBH":          1 if alert.level == "IBH"  else 0,
             "level_IBL":          1 if alert.level == "IBL"  else 0,
