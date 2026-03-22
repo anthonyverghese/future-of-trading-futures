@@ -110,10 +110,21 @@ class ZoneState:
 
 # ── Data fetching ─────────────────────────────────────────────────────────────
 
-def get_trading_days(n: int = 45) -> list[datetime.date]:
-    """Return the last n trading weekdays (weekends excluded; holidays not filtered)."""
+def get_trading_days(n: int = 45, offset: int = 0) -> list[datetime.date]:
+    """Return n trading weekdays ending offset trading days before yesterday.
+
+    offset=0  → most recent 45 days (default)
+    offset=45 → the 45 days prior to that (out-of-sample validation period)
+    """
     days: list[datetime.date] = []
     d = datetime.datetime.now(ET).date() - datetime.timedelta(days=1)
+    # Skip `offset` trading days first.
+    skipped = 0
+    while skipped < offset:
+        if d.weekday() < 5:
+            skipped += 1
+        d -= datetime.timedelta(days=1)
+    # Then collect n trading days.
     while len(days) < n:
         if d.weekday() < 5:
             days.append(d)
@@ -674,16 +685,6 @@ def print_results(all_alerts: list[Alert], days: list[datetime.date]) -> None:
     win_rate_table(groups)
 
     print(f"\n{'─' * 55}")
-    print("  WIN RATE BY TREND ALIGNMENT")
-    print(f"{'─' * 55}")
-    with_trend     = [a for a in decided if a.features.get("trend_alignment",  0) ==  1]
-    counter_trend  = [a for a in decided if a.features.get("trend_alignment",  0) == -1]
-    win_rate_table([
-        ("With trend (BUY on green / SELL on red)", with_trend),
-        ("Counter-trend",                           counter_trend),
-    ])
-
-    print(f"\n{'─' * 55}")
     print("  WIN RATE BY DAY DIRECTION (MNQ vs open at alert time)")
     print(f"{'─' * 55}")
     green_day = [a for a in decided if a.features.get("session_move_pts", 0) > 0]
@@ -705,9 +706,16 @@ def print_results(all_alerts: list[Alert], days: list[datetime.date]) -> None:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main() -> None:
-    days = get_trading_days(45)
+    # Pass --offset 45 to run on the prior 45-day period (out-of-sample).
+    # Pass --offset 0 (default) for the most recent 45 days.
+    offset = 0
+    if "--offset" in sys.argv:
+        offset = int(sys.argv[sys.argv.index("--offset") + 1])
+
+    days = get_trading_days(45, offset=offset)
+    period = f"(offset {offset}d)" if offset else "(most recent)"
     print(f"{'═' * 65}")
-    print(f"  MNQ Backtest  |  {days[0]} → {days[-1]}")
+    print(f"  MNQ Backtest  |  {days[0]} → {days[-1]}  {period}")
     print(f"  Alert threshold : ±{ALERT_THRESHOLD} pts")
     print(f"  Target / Stop   : +{TARGET_POINTS} pts / -{STOP_POINTS} pts")
     print(f"  Eval window     : {WINDOW_SECS // 60} min after touching line")
