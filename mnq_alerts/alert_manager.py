@@ -269,7 +269,6 @@ class AlertManager:
                     tier_wr=tier_wr,
                 )
                 print(f"[ALERT] {title} | {body}")
-                send_notification(title, body)
                 alert_id = log_alert(
                     ticker=_TICKER,
                     line=level.name,
@@ -277,6 +276,7 @@ class AlertManager:
                     current_price=current_price,
                     direction=direction,
                 )
+                send_notification(title, body)
                 fired.append((alert_id, level.name, level.price, direction))
         return fired
 
