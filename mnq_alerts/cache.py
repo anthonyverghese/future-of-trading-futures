@@ -256,6 +256,59 @@ def get_daily_summary(date_str: str) -> dict[str, int]:
     return result
 
 
+def load_pending_alerts(date_str: str) -> list[dict]:
+    """Load alerts with no outcome yet for the given date.
+
+    Returns a list of dicts with keys: alert_id, line_price, direction,
+    alert_time (datetime), date_str, hit_time (datetime or None).
+    Used to resume outcome tracking after a restart.
+    """
+    if not os.path.exists(ALERTS_LOG_PATH):
+        return []
+    try:
+        with sqlite3.connect(ALERTS_LOG_PATH) as conn:
+            _ensure_alerts_schema(conn)
+            rows = conn.execute(
+                """SELECT id, line_price, direction, date, time, hit_time
+                   FROM alerts
+                   WHERE date = ? AND outcome IS NULL AND direction IS NOT NULL
+                   ORDER BY id""",
+                (date_str,),
+            ).fetchall()
+    except Exception:
+        return []
+
+    results = []
+    for row in rows:
+        alert_id, line_price, direction, date, time_str, hit_time_str = row
+        # Parse alert_time from date + time columns (e.g. "2026-03-23" + "12:09:03 PDT")
+        try:
+            # Strip timezone abbreviation — we know it's local time on the server.
+            time_clean = time_str.rsplit(" ", 1)[0] if " " in time_str else time_str
+            alert_dt = datetime.datetime.strptime(
+                f"{date} {time_clean}", "%Y-%m-%d %H:%M:%S"
+            )
+        except (ValueError, TypeError):
+            continue
+        hit_dt = None
+        if hit_time_str:
+            try:
+                hit_dt = datetime.datetime.fromisoformat(hit_time_str)
+            except (ValueError, TypeError):
+                pass
+        results.append(
+            {
+                "alert_id": alert_id,
+                "line_price": line_price,
+                "direction": direction,
+                "alert_time": alert_dt,
+                "date_str": date,
+                "hit_time": hit_dt,
+            }
+        )
+    return results
+
+
 def load_recent_outcomes(limit: int = 10) -> list[str]:
     """Load the most recent decided outcomes from alerts_log.db.
 

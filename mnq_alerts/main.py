@@ -34,6 +34,7 @@ from cache import (
     clear_if_stale,
     get_daily_summary,
     get_replay_start,
+    load_pending_alerts,
     load_recent_outcomes,
     load_trades,
     save_trades,
@@ -146,6 +147,7 @@ def run() -> None:
     alert_manager = AlertManager()
     prior_outcomes = load_recent_outcomes()
     evaluator = OutcomeEvaluator(prior_outcomes)
+    evaluator.restore(load_pending_alerts(datetime.datetime.now(ET).date().isoformat()))
     if prior_outcomes:
         print(
             f"[streak] Loaded {len(prior_outcomes)} prior outcomes from DB "

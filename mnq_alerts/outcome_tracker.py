@@ -58,6 +58,23 @@ class OutcomeEvaluator:
             _PendingEval(alert_id, line_price, direction, alert_time, date_str)
         )
 
+    def restore(self, pending_alerts: list[dict]) -> None:
+        """Re-populate pending evaluations from DB rows after a restart."""
+        for a in pending_alerts:
+            ev = _PendingEval(
+                alert_id=a["alert_id"],
+                line_price=a["line_price"],
+                direction=a["direction"],
+                alert_time=a["alert_time"],
+                date_str=a["date_str"],
+                hit_time=a.get("hit_time"),
+            )
+            self._pending.append(ev)
+        if pending_alerts:
+            print(
+                f"[outcome] Restored {len(pending_alerts)} pending evaluations from DB."
+            )
+
     @property
     def consecutive_wins(self) -> int:
         """Count of consecutive 'correct' outcomes at the tail of the history."""
