@@ -28,7 +28,7 @@ from config import (
     MARKET_OPEN_HOUR,
     MARKET_OPEN_MIN,
 )
-from levels import calculate_fib_levels, calculate_initial_balance, calculate_vwap
+from levels import calculate_fib_levels
 from cache import (
     CACHE_INTERVAL_SECONDS,
     clear_if_stale,
@@ -152,6 +152,19 @@ def run() -> None:
     last_cache_ts = 0.0
     session_closed = False
 
+    # Incremental VWAP: O(1) per tick instead of scanning the full DataFrame.
+    vwap_sum_pv = 0.0  # Σ(price × size)
+    vwap_sum_vol = 0  # Σ(size)
+    vwap: float | None = None
+
+    # Incremental IB: track high/low during 9:30–10:30 without DataFrame scan.
+    ib_high = -float("inf")
+    ib_low = float("inf")
+    ib_has_trades = False
+
+    # Tick rate: count trades in a rolling window for live ticks only.
+    tick_times: list[datetime.datetime] = []
+
     for price, size, ts_et in trade_stream(session_start=session_start):
         now = datetime.datetime.now(ET)
         now_pt = now.astimezone(LOCAL_TZ)
@@ -173,19 +186,42 @@ def run() -> None:
             last_session_date = today
             last_cache_ts = 0.0
             session_closed = False
+            vwap_sum_pv = 0.0
+            vwap_sum_vol = 0
+            vwap = None
+            ib_high = -float("inf")
+            ib_low = float("inf")
+            ib_has_trades = False
+            tick_times = []
             print(f"\n[{now_pt.strftime('%Y-%m-%d')}] New session — state reset.")
 
         # Record opening price for session context scoring.
         if day_open is None:
             day_open = price
 
-        trades = get_session_trades()
+        trade_time = ts_et.time()
+
+        # Update incremental VWAP (9:30 AM – 4:00 PM ET).
+        if MARKET_OPEN <= trade_time < MARKET_CLOSE:
+            vwap_sum_pv += price * size
+            vwap_sum_vol += size
+            if vwap_sum_vol > 0:
+                vwap = vwap_sum_pv / vwap_sum_vol
+                alert_manager.update_levels(ibh=None, ibl=None, vwap=vwap)
+
+        # Update incremental IB high/low (9:30–10:30 AM ET).
+        if not ib_locked and MARKET_OPEN <= trade_time < IB_END:
+            if price > ib_high:
+                ib_high = price
+            if price < ib_low:
+                ib_low = price
+            ib_has_trades = True
 
         # Lock in IBH/IBL once after 10:30 AM ET (fixed for the session).
         # Use the trade's own timestamp so replay doesn't lock IB prematurely.
-        if ts_et.time() >= IB_END and not ib_locked:
-            ibh, ibl = calculate_initial_balance(trades)
-            if ibh is not None and ibl is not None:
+        if trade_time >= IB_END and not ib_locked:
+            if ib_has_trades:
+                ibh, ibl = ib_high, ib_low
                 alert_manager.update_levels(ibh=ibh, ibl=ibl, vwap=None)
                 print(
                     f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] "
@@ -204,23 +240,22 @@ def run() -> None:
                     f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] IB period done but no trade data yet."
                 )
 
-        # Recalculate VWAP on every trade tick for real-time accuracy.
-        vwap = calculate_vwap(trades)
-        if vwap is not None:
-            alert_manager.update_levels(ibh=None, ibl=None, vwap=vwap)
-
-        if ts_et.time() >= IB_END:
+        if trade_time >= IB_END:
             # During replay ts_et lags wall time; only notify for live trades.
             trade_lag = (now - ts_et).total_seconds()
             if trade_lag < 60:
-                # Compute tick rate: trades per minute in the last 3 minutes.
+                # Compute tick rate from rolling window (O(1) amortized).
+                tick_times.append(ts_et)
                 window_start = ts_et - datetime.timedelta(minutes=3)
-                recent = trades[trades.index >= window_start]
-                tick_rate = len(recent) / 3.0 if not recent.empty else 0.0
+                # Trim old entries from the front.
+                while tick_times and tick_times[0] < window_start:
+                    tick_times.pop(0)
+                tick_rate = len(tick_times) / 3.0
+
                 session_move = price - day_open if day_open is not None else None
                 fired = alert_manager.check_and_notify(
                     price,
-                    now_et=ts_et.time(),
+                    now_et=trade_time,
                     tick_rate=tick_rate,
                     session_move_pts=session_move,
                     consecutive_wins=evaluator.consecutive_wins,
@@ -234,7 +269,7 @@ def run() -> None:
 
                 # Close session once market shuts — mark remaining evals unresolved,
                 # then exit cleanly so systemd does not restart the process.
-                if not session_closed and ts_et.time() >= MARKET_CLOSE:
+                if not session_closed and trade_time >= MARKET_CLOSE:
                     evaluator.close_session()
                     session_closed = True
 
