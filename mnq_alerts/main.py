@@ -212,6 +212,43 @@ def run() -> None:
         now_pt = now.astimezone(LOCAL_TZ)
         today = now.date()
 
+        # Close session once market shuts — must check before the is_market_open
+        # guard below, otherwise post-market trades hit `continue` and this
+        # block is never reached.
+        if (
+            not session_closed
+            and last_session_date == today
+            and now.time() >= MARKET_CLOSE
+        ):
+            evaluator.close_session()
+            session_closed = True
+
+            summary = get_daily_summary(today.isoformat())
+            total = sum(summary.values())
+            if total > 0:
+                wr = (
+                    summary["correct"]
+                    / (summary["correct"] + summary["incorrect"])
+                    * 100
+                    if (summary["correct"] + summary["incorrect"]) > 0
+                    else 0
+                )
+                send_notification(
+                    f"MNQ Daily Summary — {today.strftime('%m/%d')}",
+                    f"{total} alerts today\n"
+                    f"✓ {summary['correct']} correct\n"
+                    f"✗ {summary['incorrect']} incorrect\n"
+                    f"? {summary['inconclusive']} inconclusive\n"
+                    f"Win rate: {wr:.0f}%",
+                )
+
+            save_trades(get_session_trades())
+            print(
+                f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] "
+                f"Market closed. Shutting down."
+            )
+            sys.exit(0)
+
         # Skip trades outside RTH — futures trade 24/5 but we only alert during RTH.
         if not is_market_open(now):
             continue
@@ -308,38 +345,6 @@ def run() -> None:
                         alert_id, line_price, direction, ts_et, today.isoformat()
                     )
                 evaluator.update(price, ts_et)
-
-                # Close session once market shuts — mark remaining evals unresolved,
-                # then exit cleanly so systemd does not restart the process.
-                if not session_closed and trade_time >= MARKET_CLOSE:
-                    evaluator.close_session()
-                    session_closed = True
-
-                    # Send daily summary notification.
-                    summary = get_daily_summary(today.isoformat())
-                    total = sum(summary.values())
-                    if total > 0:
-                        wr = (
-                            summary["correct"]
-                            / (summary["correct"] + summary["incorrect"])
-                            * 100
-                            if (summary["correct"] + summary["incorrect"]) > 0
-                            else 0
-                        )
-                        send_notification(
-                            f"MNQ Daily Summary — {today.strftime('%m/%d')}",
-                            f"{total} alerts today\n"
-                            f"✓ {summary['correct']} correct\n"
-                            f"✗ {summary['incorrect']} incorrect\n"
-                            f"? {summary['inconclusive']} inconclusive\n"
-                            f"Win rate: {wr:.0f}%",
-                        )
-
-                    print(
-                        f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] "
-                        f"Market closed. Shutting down."
-                    )
-                    sys.exit(0)
             else:
                 alert_manager.advance_state(price)
                 # Evaluate pending outcomes during replay too — a restart
