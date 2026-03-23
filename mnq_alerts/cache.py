@@ -184,7 +184,16 @@ def log_alert(
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (date_str, time_str, ticker, line, line_price, current_price, direction),
         )
-        upsert_daily_stats(date_str, notifications_delta=1, conn=conn)
+        # Inline the daily_stats upsert — calling upsert_daily_stats() here
+        # triggers _ensure_alerts_schema DDL which implicitly commits the
+        # pending INSERT transaction and can cause "database is locked".
+        conn.execute(
+            """INSERT INTO daily_stats (date, notifications_sent, correct_recs, incorrect_recs)
+               VALUES (?, 1, 0, 0)
+               ON CONFLICT(date) DO UPDATE SET
+                   notifications_sent = notifications_sent + 1""",
+            (date_str,),
+        )
         return cur.lastrowid
 
 
@@ -208,9 +217,21 @@ def update_alert_outcome(alert_id: int, outcome: str, date_str: str) -> None:
             (outcome, alert_id),
         )
         if outcome == "correct":
-            upsert_daily_stats(date_str, correct_delta=1, conn=conn)
+            conn.execute(
+                """INSERT INTO daily_stats (date, notifications_sent, correct_recs, incorrect_recs)
+                   VALUES (?, 0, 1, 0)
+                   ON CONFLICT(date) DO UPDATE SET
+                       correct_recs = correct_recs + 1""",
+                (date_str,),
+            )
         elif outcome == "incorrect":
-            upsert_daily_stats(date_str, incorrect_delta=1, conn=conn)
+            conn.execute(
+                """INSERT INTO daily_stats (date, notifications_sent, correct_recs, incorrect_recs)
+                   VALUES (?, 0, 0, 1)
+                   ON CONFLICT(date) DO UPDATE SET
+                       incorrect_recs = incorrect_recs + 1""",
+                (date_str,),
+            )
 
 
 def get_daily_summary(date_str: str) -> dict[str, int]:
@@ -261,29 +282,15 @@ def upsert_daily_stats(
     date: str,
     ibh: float | None = None,
     ibl: float | None = None,
-    notifications_delta: int = 0,
-    correct_delta: int = 0,
-    incorrect_delta: int = 0,
-    conn: sqlite3.Connection | None = None,
 ) -> None:
-    """Insert or update the daily_stats row for the given date."""
-
-    def _do(c: sqlite3.Connection) -> None:
-        _ensure_alerts_schema(c)
-        c.execute(
+    """Insert or update the daily_stats row for the given date (IBH/IBL only)."""
+    with sqlite3.connect(ALERTS_LOG_PATH) as conn:
+        _ensure_alerts_schema(conn)
+        conn.execute(
             """INSERT INTO daily_stats (date, ibh, ibl, notifications_sent, correct_recs, incorrect_recs)
-               VALUES (?, ?, ?, ?, ?, ?)
+               VALUES (?, ?, ?, 0, 0, 0)
                ON CONFLICT(date) DO UPDATE SET
-                   ibh                = COALESCE(excluded.ibh, ibh),
-                   ibl                = COALESCE(excluded.ibl, ibl),
-                   notifications_sent = notifications_sent + excluded.notifications_sent,
-                   correct_recs       = correct_recs       + excluded.correct_recs,
-                   incorrect_recs     = incorrect_recs     + excluded.incorrect_recs""",
-            (date, ibh, ibl, notifications_delta, correct_delta, incorrect_delta),
+                   ibh = COALESCE(excluded.ibh, ibh),
+                   ibl = COALESCE(excluded.ibl, ibl)""",
+            (date, ibh, ibl),
         )
-
-    if conn is not None:
-        _do(conn)
-    else:
-        with sqlite3.connect(ALERTS_LOG_PATH) as c:
-            _do(c)
