@@ -235,6 +235,10 @@ class AlertManager:
         fired: list[tuple[int, str, float, str]] = []
         for level in self._levels.values():
             if level.update(current_price):
+                # Defensive: never notify if price drifted beyond threshold
+                # (shouldn't happen, but guards against stale-state edge cases).
+                if abs(current_price - level.price) > ALERT_THRESHOLD_POINTS:
+                    continue
                 direction = "up" if current_price > level.price else "down"
                 score = _composite_score(
                     level.name,
