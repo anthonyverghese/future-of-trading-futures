@@ -6,10 +6,10 @@ Stay silent while price remains in the zone. Reset when price exits, so the
 next entry triggers a fresh alert.
 
 Composite scoring (180-day backtest, +8 target / -20 stop):
-  Score ≥ 3 → 79.9% win rate (740 trades)
-  Score ≥ 4 → 80.4% win rate (301 trades)
-  Score ≥ 5 → 81.2% win rate (181 trades)
-  Minimum cutoff = 3; alerts below are suppressed.
+  Score ≥ 3 → 79.9% win rate (740 trades, ~16/day)
+  Score ≥ 4 → 80.4% win rate (301 trades, ~7/day)
+  Score ≥ 5 → 81.2% win rate (181 trades, ~4/day)
+  Minimum cutoff = 4; alerts below are suppressed.
   Includes streak tracking: +2 after 2+ wins, -3 after 2+ losses.
 """
 
@@ -25,15 +25,16 @@ from notifications import send_notification
 _TICKER = "MNQ"
 
 # Minimum composite score to fire a notification.
-_MIN_SCORE = 3
+# Raised from 3→4 to reduce alert volume from ~16/day to ~7/day (80.4% WR).
+_MIN_SCORE = 4
 
 
 # Signal strength tiers shown in notifications (180-day backtest).
 _TIER_LABELS: dict[int, tuple[str, str]] = {
     # score_min: (tier_label, backtest_win_rate for this bucket)
-    3: ("Good", "79.0%"),  # score 3: 584W/155L
-    4: ("Strong", "79.9%"),  # score 4: 353W/89L
-    5: ("Elite", "82.9%"),  # score 5+: 645W/133L
+    4: ("Good", "79.9%"),  # score 4: 353W/89L
+    5: ("Strong", "82.9%"),  # score 5+: 645W/133L
+    6: ("Elite", "85.5%"),  # score 6+: top tier
 }
 
 
@@ -88,7 +89,7 @@ def _composite_score(
       Direction×Level: strong combos +1, weak combos -1
       Time of day:     afternoon +2, power hour +1, lunch -1, first hour -3
       Tick rate:       ≥2000 +2, ≥1750 +1, <1000 -2
-      Test count:      #1 -4, #3 +2, #4 +1, #5+ -1
+      Test count:      #1 -4, #3 +2, #4 +1, #5 -2, #6+ -4
       Session move:    mildly red +2, strongly green -1
       Streak:          2+ wins +2, 2+ losses -3
     """
@@ -139,15 +140,18 @@ def _composite_score(
         elif tick_rate < 1000:
             s -= 2
 
-    # Test count
+    # Test count — #3 is the sweet spot; heavy decay after #4 to prevent
+    # flooding (today saw 10 IBL and 7 FIB alerts from excessive retests).
     if entry_count == 1:
         s -= 4  # first test
     elif entry_count == 3:
         s += 2
     elif entry_count == 4:
         s += 1
-    elif entry_count >= 5:
-        s -= 1
+    elif entry_count == 5:
+        s -= 2
+    elif entry_count >= 6:
+        s -= 4  # effectively kills alerts past 5th retest
 
     # Session context
     if session_move_pts is not None:
@@ -167,11 +171,11 @@ def _composite_score(
 
 def _score_tier(score: int) -> tuple[str, str]:
     """Return (tier_label, backtest_win_rate) for a given composite score."""
-    if score >= 5:
+    if score >= 6:
+        return _TIER_LABELS[6]
+    elif score >= 5:
         return _TIER_LABELS[5]
-    elif score >= 4:
-        return _TIER_LABELS[4]
-    return _TIER_LABELS[3]
+    return _TIER_LABELS[4]
 
 
 class AlertManager:
@@ -224,10 +228,10 @@ class AlertManager:
 
         All filtering is done via composite score (first-test and first-hour
         are penalized in the score rather than hard-blocked):
-          - Score < 3 → suppressed
-          - Score 3 → Good (76.6%)
-          - Score 4 → Strong (82.4%)
-          - Score 5+ → Elite (82.8%)
+          - Score < 4 → suppressed
+          - Score 4 → Good (79.9%)
+          - Score 5 → Strong (82.9%)
+          - Score 6+ → Elite (85.5%)
 
         Returns a list of (alert_id, line_name, line_price, direction) for each
         fired alert so the caller can register them with OutcomeEvaluator.

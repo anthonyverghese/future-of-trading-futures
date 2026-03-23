@@ -1580,7 +1580,8 @@ def composite_scoring(all_alerts: list[Alert]) -> None:
         elif tr < 1000:
             s -= 2
 
-        # Test count: first test heavily penalized, #3 is sweet spot
+        # Test count: first test heavily penalized, #3 is sweet spot,
+        # heavy decay after #4 to prevent flooding from excessive retests.
         tc = a.level_test_count
         if tc == 1:
             s -= 4  # first test (was hard-filtered, now scored)
@@ -1588,8 +1589,10 @@ def composite_scoring(all_alerts: list[Alert]) -> None:
             s += 2
         elif tc == 4:
             s += 1
-        elif tc >= 5:
-            s -= 1
+        elif tc == 5:
+            s -= 2
+        elif tc >= 6:
+            s -= 4  # effectively kills alerts past 5th retest
 
         # Session context: mildly red is best
         session_move = a.features.get("session_move_pts", 0)
