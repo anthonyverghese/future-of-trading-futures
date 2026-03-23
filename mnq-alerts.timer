@@ -2,7 +2,7 @@
 Description=Start MNQ Alert System at market open (9:30 AM ET, weekdays)
 
 [Timer]
-OnCalendar=Mon..Fri *-*-* 09:30:00
+OnCalendar=Mon..Fri *-*-* 09:30:00 America/New_York
 Persistent=true
 
 [Install]

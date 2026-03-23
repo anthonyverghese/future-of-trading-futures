@@ -162,6 +162,26 @@ def run() -> None:
     ib_low = float("inf")
     ib_has_trades = False
 
+    # Seed incremental accumulators from cached trades so VWAP/IB are
+    # correct from the first live tick (no need to re-derive from replay).
+    if not cached_trades.empty:
+        rth = cached_trades.between_time("09:30", "16:00", inclusive="left")
+        if not rth.empty:
+            vwap_sum_pv = float((rth["Price"] * rth["Size"]).sum())
+            vwap_sum_vol = int(rth["Size"].sum())
+            if vwap_sum_vol > 0:
+                vwap = vwap_sum_pv / vwap_sum_vol
+            day_open = float(rth["Price"].iloc[0])
+        ib = cached_trades.between_time("09:30", "10:30", inclusive="left")
+        if not ib.empty:
+            ib_high = float(ib["Price"].max())
+            ib_low = float(ib["Price"].min())
+            ib_has_trades = True
+        print(
+            f"[cache] Seeded VWAP from {len(rth)} cached trades "
+            f"(VWAP: {f'{vwap:.2f}' if vwap else 'N/A'})"
+        )
+
     # Tick rate: count trades in a rolling window for live ticks only.
     tick_times: list[datetime.datetime] = []
 
