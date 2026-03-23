@@ -58,53 +58,28 @@ class OutcomeEvaluator:
             _PendingEval(alert_id, line_price, direction, alert_time, date_str)
         )
 
-    def restore(self, pending_alerts: list[dict], now: datetime.datetime) -> None:
+    def restore(self, pending_alerts: list[dict]) -> None:
         """Re-populate pending evaluations from DB rows after a restart.
 
-        Alerts whose evaluation window has already expired are resolved
-        immediately rather than resumed:
-          - No hit + 15 min past alert_time → inconclusive
-          - Hit + 15 min past hit_time → incorrect (target not reached)
+        All unresolved alerts are resumed — the trade replay that runs on
+        startup will feed their prices through update(), correctly resolving
+        any that hit target/stop/expiry while the app was down.
         """
-        resumed = 0
-        expired = 0
         for a in pending_alerts:
-            alert_time = a["alert_time"]
-            hit_time = a.get("hit_time")
-            alert_id = a["alert_id"]
-            date_str = a["date_str"]
-
-            if hit_time is None:
-                # Waiting for line hit — check if alert window expired.
-                if (now - alert_time).total_seconds() / 60 >= EVAL_WINDOW_MINS:
-                    update_alert_outcome(alert_id, "inconclusive", date_str)
-                    expired += 1
-                    continue
-            else:
-                # Line was hit — check if move window expired.
-                if (now - hit_time).total_seconds() / 60 >= EVAL_WINDOW_MINS:
-                    update_alert_outcome(alert_id, "incorrect", date_str)
-                    self._recent_outcomes.append("incorrect")
-                    expired += 1
-                    continue
-
-            # Still within window — resume tracking.
             self._pending.append(
                 _PendingEval(
-                    alert_id=alert_id,
+                    alert_id=a["alert_id"],
                     line_price=a["line_price"],
                     direction=a["direction"],
-                    alert_time=alert_time,
-                    date_str=date_str,
-                    hit_time=hit_time,
+                    alert_time=a["alert_time"],
+                    date_str=a["date_str"],
+                    hit_time=a.get("hit_time"),
                 )
             )
-            resumed += 1
-
-        if resumed or expired:
+        if pending_alerts:
             print(
-                f"[outcome] Restored {resumed} pending evaluation(s), "
-                f"resolved {expired} expired."
+                f"[outcome] Restored {len(pending_alerts)} pending "
+                f"evaluation(s) from DB."
             )
 
     @property

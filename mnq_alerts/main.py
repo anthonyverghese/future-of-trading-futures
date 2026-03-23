@@ -147,10 +147,7 @@ def run() -> None:
     alert_manager = AlertManager()
     prior_outcomes = load_recent_outcomes()
     evaluator = OutcomeEvaluator(prior_outcomes)
-    evaluator.restore(
-        load_pending_alerts(datetime.datetime.now(ET).date().isoformat()),
-        now=datetime.datetime.now(),
-    )
+    evaluator.restore(load_pending_alerts(datetime.datetime.now(ET).date().isoformat()))
     if prior_outcomes:
         print(
             f"[streak] Loaded {len(prior_outcomes)} prior outcomes from DB "
@@ -345,6 +342,10 @@ def run() -> None:
                     sys.exit(0)
             else:
                 alert_manager.advance_state(price)
+                # Evaluate pending outcomes during replay too — a restart
+                # mid-evaluation needs the replayed trades to determine
+                # whether the target/stop was hit while the app was down.
+                evaluator.update(price, ts_et)
 
         # Save trade cache every CACHE_INTERVAL_SECONDS.
         now_ts = time.time()
