@@ -39,9 +39,12 @@ class OutcomeEvaluator:
     Call close_session() when RTH ends to mark remaining alerts 'unresolved'.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, prior_outcomes: list[str] | None = None) -> None:
         self._pending: list[_PendingEval] = []
-        self._recent_outcomes: list[str] = []  # chronological: "correct"/"incorrect"
+        # chronological: "correct"/"incorrect" — seeded from DB for cross-session streaks
+        self._recent_outcomes: list[str] = (
+            list(prior_outcomes) if prior_outcomes else []
+        )
 
     def add(
         self,

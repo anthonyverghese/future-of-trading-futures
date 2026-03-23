@@ -33,6 +33,7 @@ from cache import (
     CACHE_INTERVAL_SECONDS,
     clear_if_stale,
     get_replay_start,
+    load_recent_outcomes,
     load_trades,
     save_trades,
     upsert_daily_stats,
@@ -131,7 +132,15 @@ def run() -> None:
     session_start = get_replay_start(cached_trades)
 
     alert_manager = AlertManager()
-    evaluator = OutcomeEvaluator()
+    prior_outcomes = load_recent_outcomes()
+    evaluator = OutcomeEvaluator(prior_outcomes)
+    if prior_outcomes:
+        print(
+            f"[streak] Loaded {len(prior_outcomes)} prior outcomes from DB "
+            f"(last: {prior_outcomes[-1]}, "
+            f"wins: {evaluator.consecutive_wins}, "
+            f"losses: {evaluator.consecutive_losses})"
+        )
     ib_locked = False
     ibh: float | None = None
     ibl: float | None = None
@@ -154,7 +163,7 @@ def run() -> None:
         if last_session_date != today:
             reset_session()
             alert_manager = AlertManager()
-            evaluator = OutcomeEvaluator()
+            evaluator = OutcomeEvaluator(load_recent_outcomes())
             ib_locked = False
             ibh = None
             ibl = None

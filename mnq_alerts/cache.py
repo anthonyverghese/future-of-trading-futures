@@ -56,7 +56,9 @@ def save_trades(trades: pd.DataFrame) -> None:
 
     df = trades.copy()
     df.index = df.index.asi8  # nanoseconds since epoch (UTC)
-    df = df.reset_index().rename(columns={"index": "ts_ns", "Price": "price", "Size": "size"})
+    df = df.reset_index().rename(
+        columns={"index": "ts_ns", "Price": "price", "Size": "size"}
+    )
     df["date"] = today
 
     with sqlite3.connect(CACHE_PATH) as conn:
@@ -80,7 +82,8 @@ def load_trades() -> pd.DataFrame:
         with sqlite3.connect(CACHE_PATH) as conn:
             df = pd.read_sql(
                 "SELECT ts_ns, price, size FROM trades WHERE date = ? ORDER BY ts_ns",
-                conn, params=(today,),
+                conn,
+                params=(today,),
             )
     except Exception:
         return _empty_trades()
@@ -129,7 +132,12 @@ def _ensure_alerts_schema(conn: sqlite3.Connection) -> None:
         )
     """)
     # Migrate older schemas that may be missing the new columns.
-    for col in ["current_price REAL", "direction TEXT", "hit_time TEXT", "outcome TEXT"]:
+    for col in [
+        "current_price REAL",
+        "direction TEXT",
+        "hit_time TEXT",
+        "outcome TEXT",
+    ]:
         try:
             conn.execute(f"ALTER TABLE alerts ADD COLUMN {col}")
         except sqlite3.OperationalError:
@@ -197,6 +205,28 @@ def update_alert_outcome(alert_id: int, outcome: str, date_str: str) -> None:
         upsert_daily_stats(date_str, correct_delta=1)
     elif outcome == "incorrect":
         upsert_daily_stats(date_str, incorrect_delta=1)
+
+
+def load_recent_outcomes(limit: int = 10) -> list[str]:
+    """Load the most recent decided outcomes from alerts_log.db.
+
+    Returns a chronological list of 'correct'/'incorrect' strings,
+    oldest first, so streak tracking can persist across sessions.
+    """
+    if not os.path.exists(ALERTS_LOG_PATH):
+        return []
+    try:
+        with sqlite3.connect(ALERTS_LOG_PATH) as conn:
+            rows = conn.execute(
+                """SELECT outcome FROM alerts
+                   WHERE outcome IN ('correct', 'incorrect')
+                   ORDER BY id DESC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        # Rows come newest-first; reverse to chronological order.
+        return [r[0] for r in reversed(rows)]
+    except Exception:
+        return []
 
 
 def upsert_daily_stats(
