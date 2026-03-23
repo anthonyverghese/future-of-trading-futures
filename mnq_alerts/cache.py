@@ -101,14 +101,20 @@ def load_trades() -> pd.DataFrame:
 def get_replay_start(cached_trades: pd.DataFrame) -> datetime.datetime:
     """
     Return the timestamp to start replaying from.
-    If cached trades exist, replay only from 1 second past the last checkpoint
-    (the cached trades already cover everything before that point).
-    Otherwise replay from 9:30 AM ET today.
+    If cached trades exist AND cover from near session open, replay from 1
+    second past the last checkpoint.  Otherwise replay from 9:30 AM ET so
+    VWAP and IB are calculated from the full session.
     """
     now_et = datetime.datetime.now(ET)
     session_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
 
     if cached_trades.empty:
+        return session_open
+
+    first_ts = cached_trades.index[0].to_pydatetime()
+    # If the cache doesn't start within 10 minutes of session open,
+    # it's from a mid-session restart — replay the full session.
+    if (first_ts - session_open).total_seconds() > 600:
         return session_open
 
     last_ts = cached_trades.index[-1].to_pydatetime()

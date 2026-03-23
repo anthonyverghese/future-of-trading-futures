@@ -130,8 +130,18 @@ def run() -> None:
     # Clear stale cache from a previous session before loading.
     clear_if_stale()
     cached_trades = load_trades()
-    load_session_cache(cached_trades)
     session_start = get_replay_start(cached_trades)
+
+    # If replaying from session open, the replay covers the full session —
+    # don't seed from a partial cache or it will be double-counted.
+    replaying_full_session = session_start.time() <= MARKET_OPEN
+    use_cache = not cached_trades.empty and not replaying_full_session
+    if not cached_trades.empty and replaying_full_session:
+        print(
+            "[cache] Partial cache — replaying full session (cache not used for seeding)."
+        )
+    if use_cache:
+        load_session_cache(cached_trades)
 
     alert_manager = AlertManager()
     prior_outcomes = load_recent_outcomes()
@@ -147,9 +157,7 @@ def run() -> None:
     ibh: float | None = None
     ibl: float | None = None
     day_open: float | None = None
-    last_session_date = (
-        datetime.datetime.now(ET).date() if not cached_trades.empty else None
-    )
+    last_session_date = datetime.datetime.now(ET).date() if use_cache else None
     last_status_ts = 0.0
     last_cache_ts = 0.0
     session_closed = False
@@ -166,7 +174,7 @@ def run() -> None:
 
     # Seed incremental accumulators from cached trades so VWAP/IB are
     # correct from the first live tick (no need to re-derive from replay).
-    if not cached_trades.empty:
+    if use_cache:
         rth = cached_trades.between_time("09:30", "16:00", inclusive="left")
         if not rth.empty:
             vwap_sum_pv = float((rth["Price"] * rth["Size"]).sum())
