@@ -207,6 +207,28 @@ def update_alert_outcome(alert_id: int, outcome: str, date_str: str) -> None:
         upsert_daily_stats(date_str, incorrect_delta=1)
 
 
+def get_daily_summary(date_str: str) -> dict[str, int]:
+    """Return outcome counts for a given date: {correct, incorrect, inconclusive}."""
+    result = {"correct": 0, "incorrect": 0, "inconclusive": 0}
+    if not os.path.exists(ALERTS_LOG_PATH):
+        return result
+    try:
+        with sqlite3.connect(ALERTS_LOG_PATH) as conn:
+            _ensure_alerts_schema(conn)
+            rows = conn.execute(
+                """SELECT outcome, COUNT(*) FROM alerts
+                   WHERE date = ? AND outcome IS NOT NULL
+                   GROUP BY outcome""",
+                (date_str,),
+            ).fetchall()
+        for outcome, count in rows:
+            if outcome in result:
+                result[outcome] = count
+    except Exception:
+        pass
+    return result
+
+
 def load_recent_outcomes(limit: int = 10) -> list[str]:
     """Load the most recent decided outcomes from alerts_log.db.
 

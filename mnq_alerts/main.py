@@ -32,6 +32,7 @@ from levels import calculate_fib_levels, calculate_initial_balance, calculate_vw
 from cache import (
     CACHE_INTERVAL_SECONDS,
     clear_if_stale,
+    get_daily_summary,
     get_replay_start,
     load_recent_outcomes,
     load_trades,
@@ -44,6 +45,7 @@ from market_data import (
     reset_session,
     trade_stream,
 )
+from notifications import send_notification
 from outcome_tracker import OutcomeEvaluator
 
 ET = pytz.timezone("America/New_York")
@@ -235,6 +237,27 @@ def run() -> None:
                 if not session_closed and ts_et.time() >= MARKET_CLOSE:
                     evaluator.close_session()
                     session_closed = True
+
+                    # Send daily summary notification.
+                    summary = get_daily_summary(today.isoformat())
+                    total = sum(summary.values())
+                    if total > 0:
+                        wr = (
+                            summary["correct"]
+                            / (summary["correct"] + summary["incorrect"])
+                            * 100
+                            if (summary["correct"] + summary["incorrect"]) > 0
+                            else 0
+                        )
+                        send_notification(
+                            f"MNQ Daily Summary — {today.strftime('%m/%d')}",
+                            f"{total} alerts today\n"
+                            f"✓ {summary['correct']} correct\n"
+                            f"✗ {summary['incorrect']} incorrect\n"
+                            f"? {summary['inconclusive']} inconclusive\n"
+                            f"Win rate: {wr:.0f}%",
+                        )
+
                     print(
                         f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] "
                         f"Market closed. Shutting down."
