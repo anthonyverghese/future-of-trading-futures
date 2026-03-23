@@ -349,11 +349,12 @@ def run() -> None:
                     f"VWAP: {f'{vwap:.2f}' if vwap else 'N/A'}"
                 )
             else:
-                ib_str = (
-                    f"IBH: {ibh:.2f} | IBL: {ibl:.2f}"
-                    if ib_locked
-                    else "IB window active"
-                )
+                if ib_locked:
+                    ib_str = f"IBH: {ibh:.2f} | IBL: {ibl:.2f}"
+                elif ib_has_trades:
+                    ib_str = f"IB forming — H: {ib_high:.2f} | L: {ib_low:.2f}"
+                else:
+                    ib_str = "IB window active (no trades yet)"
                 print(
                     f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] "
                     f"MNQ: {price:.2f} | "
