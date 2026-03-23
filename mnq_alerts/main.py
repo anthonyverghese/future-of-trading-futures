@@ -147,7 +147,9 @@ def run() -> None:
     ibh: float | None = None
     ibl: float | None = None
     day_open: float | None = None
-    last_session_date = None
+    last_session_date = (
+        datetime.datetime.now(ET).date() if not cached_trades.empty else None
+    )
     last_status_ts = 0.0
     last_cache_ts = 0.0
     session_closed = False
@@ -171,12 +173,22 @@ def run() -> None:
             vwap_sum_vol = int(rth["Size"].sum())
             if vwap_sum_vol > 0:
                 vwap = vwap_sum_pv / vwap_sum_vol
+                alert_manager.update_levels(ibh=None, ibl=None, vwap=vwap)
             day_open = float(rth["Price"].iloc[0])
         ib = cached_trades.between_time("09:30", "10:30", inclusive="left")
         if not ib.empty:
             ib_high = float(ib["Price"].max())
             ib_low = float(ib["Price"].min())
             ib_has_trades = True
+        # If cache contains trades past 10:30, IB is already locked.
+        last_cached_time = cached_trades.index[-1].to_pydatetime().time()
+        if last_cached_time >= IB_END and ib_has_trades:
+            ibh, ibl = ib_high, ib_low
+            ib_locked = True
+            alert_manager.update_levels(ibh=ibh, ibl=ibl, vwap=vwap)
+            fib_levels = calculate_fib_levels(ibh, ibl)
+            alert_manager.update_fib_levels(fib_levels)
+            print(f"[cache] IB already locked — IBH: {ibh:.2f}, IBL: {ibl:.2f}")
         print(
             f"[cache] Seeded VWAP from {len(rth)} cached trades "
             f"(VWAP: {f'{vwap:.2f}' if vwap else 'N/A'})"
