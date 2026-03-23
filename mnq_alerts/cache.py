@@ -184,7 +184,7 @@ def log_alert(
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (date_str, time_str, ticker, line, line_price, current_price, direction),
         )
-        upsert_daily_stats(date_str, notifications_delta=1)
+        upsert_daily_stats(date_str, notifications_delta=1, conn=conn)
         return cur.lastrowid
 
 
@@ -207,10 +207,10 @@ def update_alert_outcome(alert_id: int, outcome: str, date_str: str) -> None:
             "UPDATE alerts SET outcome = ? WHERE id = ?",
             (outcome, alert_id),
         )
-    if outcome == "correct":
-        upsert_daily_stats(date_str, correct_delta=1)
-    elif outcome == "incorrect":
-        upsert_daily_stats(date_str, incorrect_delta=1)
+        if outcome == "correct":
+            upsert_daily_stats(date_str, correct_delta=1, conn=conn)
+        elif outcome == "incorrect":
+            upsert_daily_stats(date_str, incorrect_delta=1, conn=conn)
 
 
 def get_daily_summary(date_str: str) -> dict[str, int]:
@@ -264,11 +264,13 @@ def upsert_daily_stats(
     notifications_delta: int = 0,
     correct_delta: int = 0,
     incorrect_delta: int = 0,
+    conn: sqlite3.Connection | None = None,
 ) -> None:
     """Insert or update the daily_stats row for the given date."""
-    with sqlite3.connect(ALERTS_LOG_PATH) as conn:
-        _ensure_alerts_schema(conn)
-        conn.execute(
+
+    def _do(c: sqlite3.Connection) -> None:
+        _ensure_alerts_schema(c)
+        c.execute(
             """INSERT INTO daily_stats (date, ibh, ibl, notifications_sent, correct_recs, incorrect_recs)
                VALUES (?, ?, ?, ?, ?, ?)
                ON CONFLICT(date) DO UPDATE SET
@@ -279,3 +281,9 @@ def upsert_daily_stats(
                    incorrect_recs     = incorrect_recs     + excluded.incorrect_recs""",
             (date, ibh, ibl, notifications_delta, correct_delta, incorrect_delta),
         )
+
+    if conn is not None:
+        _do(conn)
+    else:
+        with sqlite3.connect(ALERTS_LOG_PATH) as c:
+            _do(c)
