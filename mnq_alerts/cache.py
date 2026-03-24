@@ -167,15 +167,22 @@ def log_alert(
     line_price: float,
     current_price: float,
     direction: str,
+    trade_ts: datetime.datetime | None = None,
 ) -> int:
     """
     Persist a sent push notification to the permanent alerts log.
     Returns the alert id for outcome tracking.
     direction: 'up' if price was above the line (buy bias), 'down' if below (sell bias).
+    trade_ts: the Databento trade timestamp that triggered the alert (preferred
+              over wall clock so alert time and hit_time use the same source).
     """
-    now_local = datetime.datetime.now().astimezone()
-    date_str = now_local.strftime("%Y-%m-%d")
-    time_str = now_local.strftime("%H:%M:%S %Z")
+    if trade_ts is not None:
+        date_str = trade_ts.strftime("%Y-%m-%d")
+        time_str = trade_ts.strftime("%H:%M:%S %Z")
+    else:
+        now_local = datetime.datetime.now().astimezone()
+        date_str = now_local.strftime("%Y-%m-%d")
+        time_str = now_local.strftime("%H:%M:%S %Z")
 
     with sqlite3.connect(ALERTS_LOG_PATH) as conn:
         _ensure_alerts_schema(conn)

@@ -339,6 +339,7 @@ def run() -> None:
                     session_move_pts=session_move,
                     consecutive_wins=evaluator.consecutive_wins,
                     consecutive_losses=evaluator.consecutive_losses,
+                    trade_ts=ts_et,
                 )
                 for alert_id, line_name, line_price, direction in fired:
                     evaluator.add(

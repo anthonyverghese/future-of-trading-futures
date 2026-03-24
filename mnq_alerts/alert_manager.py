@@ -222,6 +222,7 @@ class AlertManager:
         session_move_pts: float | None = None,
         consecutive_wins: int = 0,
         consecutive_losses: int = 0,
+        trade_ts: datetime.datetime | None = None,
     ) -> list[tuple[int, str, float, str]]:
         """
         Fire a notification for any level whose zone is newly entered.
@@ -279,6 +280,7 @@ class AlertManager:
                     line_price=level.price,
                     current_price=current_price,
                     direction=direction,
+                    trade_ts=trade_ts,
                 )
                 send_notification(title, body)
                 fired.append((alert_id, level.name, level.price, direction))
