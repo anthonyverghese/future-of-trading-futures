@@ -5,11 +5,11 @@ Rule: alert once when price enters the zone (within ALERT_THRESHOLD_POINTS).
 Stay silent while price remains in the zone. Reset when price exits, so the
 next entry triggers a fresh alert.
 
-Composite scoring (180-day backtest, +8 target / -20 stop):
-  Score ≥ 3 → 79.9% win rate (740 trades, ~16/day)
-  Score ≥ 4 → 80.4% win rate (301 trades, ~7/day)
-  Score ≥ 5 → 81.2% win rate (181 trades, ~4/day)
-  Minimum cutoff = 4; alerts below are suppressed.
+Composite scoring (206-day backtest, +8 target / -20 stop):
+  Score ≥ 3 → ~79% win rate at ~4 alerts/day
+  Score ≥ 4 → ~80% win rate at ~1.6 alerts/day
+  Score ≥ 5 → ~81% win rate at ~1 alert/day
+  Minimum cutoff = 3; alerts below are suppressed.
   Includes streak tracking: +2 after 2+ wins, -3 after 2+ losses.
 """
 
@@ -25,16 +25,17 @@ from notifications import send_notification
 _TICKER = "MNQ"
 
 # Minimum composite score to fire a notification.
-# Raised from 3→4 to reduce alert volume from ~16/day to ~7/day (80.4% WR).
-_MIN_SCORE = 4
+# Score ≥3 → ~79% win rate at ~4 alerts/day (206-day backtest).
+_MIN_SCORE = 3
 
 
-# Signal strength tiers shown in notifications (180-day backtest).
+# Signal strength tiers shown in notifications (206-day backtest).
 _TIER_LABELS: dict[int, tuple[str, str]] = {
     # score_min: (tier_label, backtest_win_rate for this bucket)
-    4: ("Good", "79.9%"),  # score 4: 353W/89L
-    5: ("Strong", "82.9%"),  # score 5+: 645W/133L
-    6: ("Elite", "85.5%"),  # score 6+: top tier
+    3: ("Decent", "~79%"),  # score 3
+    4: ("Good", "~80%"),  # score 4
+    5: ("Strong", "~81%"),  # score 5+
+    6: ("Elite", "~83%"),  # score 6+: top tier
 }
 
 
@@ -175,7 +176,9 @@ def _score_tier(score: int) -> tuple[str, str]:
         return _TIER_LABELS[6]
     elif score >= 5:
         return _TIER_LABELS[5]
-    return _TIER_LABELS[4]
+    elif score >= 4:
+        return _TIER_LABELS[4]
+    return _TIER_LABELS[3]
 
 
 class AlertManager:
@@ -229,10 +232,11 @@ class AlertManager:
 
         All filtering is done via composite score (first-test and first-hour
         are penalized in the score rather than hard-blocked):
-          - Score < 4 → suppressed
-          - Score 4 → Good (79.9%)
-          - Score 5 → Strong (82.9%)
-          - Score 6+ → Elite (85.5%)
+          - Score < 3 → suppressed
+          - Score 3 → Decent (~79%)
+          - Score 4 → Good (~80%)
+          - Score 5 → Strong (~81%)
+          - Score 6+ → Elite (~83%)
 
         Returns a list of (alert_id, line_name, line_price, direction) for each
         fired alert so the caller can register them with OutcomeEvaluator.
