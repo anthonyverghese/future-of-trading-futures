@@ -359,13 +359,11 @@ def _build_message(
         action = "WATCH"
         setup_name = f"{level_name} test"
 
-    arrow = "↑" if action == "BUY" else "↓"
-    side_str = f"{distance:.1f} pts {'above' if above_line else 'below'}"
+    dot = "🟢" if action == "BUY" else "🔴"
 
-    title = f"{arrow} {action} ({tier_label}) — {setup_name}"
+    title = f"{dot} {action} {dot} MNQ @ {current_price:.2f}"
     body = (
-        f"{level_name} @ {level_price:.2f} | MNQ @ {current_price:.2f} ({side_str})\n"
-        f"{time_label.capitalize()}, {_ordinal(entry_count - 1)} retest | "
-        f"Score {score} — {tier_wr} win rate"
+        f"{level_name} @ {level_price:.2f} | {tier_label} ({tier_wr})\n"
+        f"{_ordinal(entry_count - 1)} retest, {time_label}"
     )
     return title, body
