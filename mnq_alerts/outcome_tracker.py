@@ -58,6 +58,28 @@ class OutcomeEvaluator:
             _PendingEval(alert_id, line_price, direction, alert_time, date_str)
         )
 
+    def add_untracked(
+        self,
+        line_price: float,
+        direction: str,
+        alert_time: datetime.datetime,
+    ) -> None:
+        """Track a suppressed zone entry for streak computation only.
+
+        These don't get logged to the DB or sent as notifications, but their
+        outcomes feed into consecutive_wins/losses — matching how the backtest
+        computes streaks across ALL zone entries, not just filtered ones.
+        """
+        self._pending.append(
+            _PendingEval(
+                alert_id=-1,  # sentinel: not in DB
+                line_price=line_price,
+                direction=direction,
+                alert_time=alert_time,
+                date_str="",
+            )
+        )
+
     def restore(self, pending_alerts: list[dict]) -> None:
         """Re-populate pending evaluations from DB rows after a restart.
 
@@ -107,18 +129,21 @@ class OutcomeEvaluator:
     def update(self, current_price: float, current_time: datetime.datetime) -> None:
         """Process one trade tick against all pending evaluations."""
         resolved: list[_PendingEval] = []
+        tracked = lambda ev: ev.alert_id != -1  # noqa: E731
 
         for ev in self._pending:
             if ev.hit_time is None:
                 if abs(current_price - ev.line_price) <= HIT_THRESHOLD:
                     # Price touched the line — start the move evaluation window.
                     ev.hit_time = current_time
-                    update_alert_hit(ev.alert_id, current_time.isoformat())
+                    if tracked(ev):
+                        update_alert_hit(ev.alert_id, current_time.isoformat())
                 elif (
                     current_time - ev.alert_time
                 ).total_seconds() / 60 >= EVAL_WINDOW_MINS:
                     # Price never reached the line within 15 minutes — inconclusive.
-                    update_alert_outcome(ev.alert_id, "inconclusive", ev.date_str)
+                    if tracked(ev):
+                        update_alert_outcome(ev.alert_id, "inconclusive", ev.date_str)
                     resolved.append(ev)
             else:
                 elapsed_mins = (current_time - ev.hit_time).total_seconds() / 60
@@ -131,15 +156,18 @@ class OutcomeEvaluator:
                     stop_hit = current_price >= ev.line_price + STOP_POINTS
 
                 if target_hit:
-                    update_alert_outcome(ev.alert_id, "correct", ev.date_str)
+                    if tracked(ev):
+                        update_alert_outcome(ev.alert_id, "correct", ev.date_str)
                     self._recent_outcomes.append("correct")
                     resolved.append(ev)
                 elif stop_hit:
-                    update_alert_outcome(ev.alert_id, "incorrect", ev.date_str)
+                    if tracked(ev):
+                        update_alert_outcome(ev.alert_id, "incorrect", ev.date_str)
                     self._recent_outcomes.append("incorrect")
                     resolved.append(ev)
                 elif elapsed_mins >= EVAL_WINDOW_MINS:
-                    update_alert_outcome(ev.alert_id, "incorrect", ev.date_str)
+                    if tracked(ev):
+                        update_alert_outcome(ev.alert_id, "incorrect", ev.date_str)
                     self._recent_outcomes.append("incorrect")
                     resolved.append(ev)
 
@@ -149,5 +177,6 @@ class OutcomeEvaluator:
     def close_session(self) -> None:
         """Mark all still-pending evaluations as 'inconclusive' at session end."""
         for ev in self._pending:
-            update_alert_outcome(ev.alert_id, "inconclusive", ev.date_str)
+            if ev.alert_id != -1:
+                update_alert_outcome(ev.alert_id, "inconclusive", ev.date_str)
         self._pending.clear()

@@ -233,10 +233,14 @@ class AlertManager:
           - Score 6 → Strong (~85%)
           - Score 7+ → Elite (~88%)
 
-        Returns a list of (alert_id, line_name, line_price, direction) for each
-        fired alert so the caller can register them with OutcomeEvaluator.
+        Returns (fired, all_zone_entries) where:
+          fired: list of (alert_id, line_name, line_price, direction) for notified alerts
+          all_zone_entries: list of (line_name, line_price, direction) for ALL zone
+            entries (including suppressed), so the caller can track outcomes for
+            streak computation — matching what the backtest does.
         """
         fired: list[tuple[int, str, float, str]] = []
+        all_zone_entries: list[tuple[str, float, str]] = []
         for level in self._levels.values():
             if level.update(current_price):
                 # Defensive: never notify if price drifted beyond threshold
@@ -244,6 +248,10 @@ class AlertManager:
                 if abs(current_price - level.price) > ALERT_THRESHOLD_POINTS:
                     continue
                 direction = "up" if current_price > level.price else "down"
+
+                # Track every zone entry for streak computation.
+                all_zone_entries.append((level.name, level.price, direction))
+
                 score = _composite_score(
                     level.name,
                     level.entry_count,
@@ -283,7 +291,7 @@ class AlertManager:
                 )
                 send_notification(title, body)
                 fired.append((alert_id, level.name, level.price, direction))
-        return fired
+        return fired, all_zone_entries
 
 
 def _ordinal(n: int) -> str:

@@ -332,7 +332,7 @@ def run() -> None:
                 tick_rate = len(tick_times) / 3.0
 
                 session_move = price - day_open if day_open is not None else None
-                fired = alert_manager.check_and_notify(
+                fired, all_zone_entries = alert_manager.check_and_notify(
                     price,
                     now_et=trade_time,
                     tick_rate=tick_rate,
@@ -341,10 +341,17 @@ def run() -> None:
                     consecutive_losses=evaluator.consecutive_losses,
                     trade_ts=ts_et,
                 )
+                fired_levels = set()
                 for alert_id, line_name, line_price, direction in fired:
                     evaluator.add(
                         alert_id, line_price, direction, ts_et, today.isoformat()
                     )
+                    fired_levels.add((line_name, line_price, direction))
+                # Track suppressed zone entries for streak computation —
+                # matches how the backtest computes streaks across ALL entries.
+                for line_name, line_price, direction in all_zone_entries:
+                    if (line_name, line_price, direction) not in fired_levels:
+                        evaluator.add_untracked(line_price, direction, ts_et)
                 evaluator.update(price, ts_et)
             else:
                 alert_manager.advance_state(price)
