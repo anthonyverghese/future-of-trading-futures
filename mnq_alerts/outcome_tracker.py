@@ -13,9 +13,15 @@ A recommendation is inconclusive if price never reaches the line within
 from __future__ import annotations
 
 import datetime
+import json
+import os
 from dataclasses import dataclass, field
 
 from cache import update_alert_hit, update_alert_outcome
+
+# Persists recent outcomes (tracked + untracked) so streaks survive restarts.
+_STREAK_FILE = os.path.join(os.path.dirname(__file__), "streak_outcomes.json")
+_STREAK_LIMIT = 20  # keep the last N outcomes
 
 HIT_THRESHOLD = 1.0  # points — price within this distance = "hit the line"
 MOVE_POINTS = 8.0  # points price must move in recommended direction (target)
@@ -41,10 +47,40 @@ class OutcomeEvaluator:
 
     def __init__(self, prior_outcomes: list[str] | None = None) -> None:
         self._pending: list[_PendingEval] = []
-        # chronological: "correct"/"incorrect" — seeded from DB for cross-session streaks
-        self._recent_outcomes: list[str] = (
-            list(prior_outcomes) if prior_outcomes else []
-        )
+        # Load streaks from file (includes untracked outcomes), falling back
+        # to DB-only outcomes passed in by the caller.
+        saved = self._load_streak_file()
+        if saved is not None:
+            self._recent_outcomes: list[str] = saved
+        else:
+            self._recent_outcomes: list[str] = (
+                list(prior_outcomes) if prior_outcomes else []
+            )
+
+    @staticmethod
+    def _load_streak_file() -> list[str] | None:
+        """Load recent outcomes from streak file, or None if not found."""
+        try:
+            with open(_STREAK_FILE) as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return data[-_STREAK_LIMIT:]
+        except (FileNotFoundError, json.JSONDecodeError, TypeError):
+            pass
+        return None
+
+    def _save_streak_file(self) -> None:
+        """Persist recent outcomes to disk so streaks survive restarts."""
+        try:
+            with open(_STREAK_FILE, "w") as f:
+                json.dump(self._recent_outcomes[-_STREAK_LIMIT:], f)
+        except OSError:
+            pass
+
+    def _record_outcome(self, outcome: str) -> None:
+        """Append outcome and persist to disk."""
+        self._recent_outcomes.append(outcome)
+        self._save_streak_file()
 
     def add(
         self,
@@ -158,17 +194,17 @@ class OutcomeEvaluator:
                 if target_hit:
                     if tracked(ev):
                         update_alert_outcome(ev.alert_id, "correct", ev.date_str)
-                    self._recent_outcomes.append("correct")
+                    self._record_outcome("correct")
                     resolved.append(ev)
                 elif stop_hit:
                     if tracked(ev):
                         update_alert_outcome(ev.alert_id, "incorrect", ev.date_str)
-                    self._recent_outcomes.append("incorrect")
+                    self._record_outcome("incorrect")
                     resolved.append(ev)
                 elif elapsed_mins >= EVAL_WINDOW_MINS:
                     if tracked(ev):
                         update_alert_outcome(ev.alert_id, "incorrect", ev.date_str)
-                    self._recent_outcomes.append("incorrect")
+                    self._record_outcome("incorrect")
                     resolved.append(ev)
 
         for ev in resolved:

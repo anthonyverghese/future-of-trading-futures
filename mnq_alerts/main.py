@@ -148,13 +148,11 @@ def run() -> None:
     prior_outcomes = load_recent_outcomes()
     evaluator = OutcomeEvaluator(prior_outcomes)
     evaluator.restore(load_pending_alerts(datetime.datetime.now(ET).date().isoformat()))
-    if prior_outcomes:
-        print(
-            f"[streak] Loaded {len(prior_outcomes)} prior outcomes from DB "
-            f"(last: {prior_outcomes[-1]}, "
-            f"wins: {evaluator.consecutive_wins}, "
-            f"losses: {evaluator.consecutive_losses})"
-        )
+    print(
+        f"[streak] Loaded outcomes "
+        f"(wins: {evaluator.consecutive_wins}, "
+        f"losses: {evaluator.consecutive_losses})"
+    )
     ib_locked = False
     ibh: float | None = None
     ibl: float | None = None
