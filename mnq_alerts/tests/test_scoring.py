@@ -203,32 +203,37 @@ class TestEntryCount:
 
 
 class TestSessionMove:
-    def test_strongly_red_minus50_plus1(self):
-        assert composite_score(**_base(session_move_pts=-50.0)) == 1
-
     def test_strongly_red_minus100_plus1(self):
         assert composite_score(**_base(session_move_pts=-100.0)) == 1
 
-    def test_mildly_red_minus49_minus1(self):
-        assert composite_score(**_base(session_move_pts=-49.0)) == -1
+    def test_strongly_red_minus50_plus1(self):
+        assert composite_score(**_base(session_move_pts=-50.0)) == 1
 
-    def test_mildly_red_minus1_minus1(self):
-        assert composite_score(**_base(session_move_pts=-1.0)) == -1
+    def test_mildly_red_sweet_spot_plus2(self):
+        # (-20, -10]: 80.6% WR — best mildly red sub-bucket
+        assert composite_score(**_base(session_move_pts=-15.0)) == 2
 
-    def test_mildly_red_zero_minus1(self):
-        assert composite_score(**_base(session_move_pts=0.0)) == -1
+    def test_mildly_red_other_zero(self):
+        # (-50, -20] and (-10, 0]: near baseline
+        assert composite_score(**_base(session_move_pts=-5.0)) == 0
+        assert composite_score(**_base(session_move_pts=-30.0)) == 0
 
-    def test_mildly_green_1_minus3(self):
-        assert composite_score(**_base(session_move_pts=1.0)) == -3
+    def test_mildly_green_sweet_spot_plus2(self):
+        # (10, 20]: 80.7% WR — best mildly green sub-bucket
+        assert composite_score(**_base(session_move_pts=15.0)) == 2
 
-    def test_mildly_green_50_minus3(self):
-        assert composite_score(**_base(session_move_pts=50.0)) == -3
+    def test_near_zero_green_minus3(self):
+        # (0, 10]: 68.9% — worst bucket
+        assert composite_score(**_base(session_move_pts=5.0)) == -3
 
-    def test_strongly_green_51_plus1(self):
-        assert composite_score(**_base(session_move_pts=51.0)) == 1
+    def test_mildly_green_other_zero(self):
+        # (20, 50]: ~74% — baseline
+        assert composite_score(**_base(session_move_pts=35.0)) == 0
 
-    def test_strongly_green_100_plus1(self):
-        assert composite_score(**_base(session_move_pts=100.0)) == 1
+    def test_strongly_green_zero(self):
+        # >50: 73.1% — near baseline
+        assert composite_score(**_base(session_move_pts=51.0)) == 0
+        assert composite_score(**_base(session_move_pts=100.0)) == 0
 
     def test_none_session_move_zero(self):
         assert composite_score(**_base(session_move_pts=None)) == 0
@@ -348,7 +353,7 @@ class TestCombined:
             entry_count=1,  # -1
             now_et=datetime.time(10, 30),  # 0
             tick_rate=1000.0,  # 0
-            session_move_pts=25.0,  # -3 (mildly green)
+            session_move_pts=5.0,  # -3 (near-zero green)
             consecutive_losses=3,  # -4
         )
         assert score == -1 + (-1) + (-1) + 0 + 0 + (-3) + (-4)  # -10
@@ -378,7 +383,7 @@ class TestCombined:
             entry_count=1,  # -1
             now_et=datetime.time(11, 0),  # 0
             tick_rate=1500.0,  # 0
-            session_move_pts=30.0,  # -3
+            session_move_pts=5.0,  # -3 (near-zero green)
             consecutive_losses=0,
         )
         assert score == -6

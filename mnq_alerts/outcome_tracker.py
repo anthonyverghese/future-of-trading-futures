@@ -80,7 +80,8 @@ class OutcomeEvaluator:
             self._on_outcome = update_alert_outcome
 
         # Load streaks from file (includes untracked outcomes), falling back
-        # to DB-only outcomes passed in by the caller.
+        # to DB-only outcomes passed in by the caller.  When falling back,
+        # persist to disk so future restarts don't lose the seed.
         saved = self._load_streak_file()
         if saved is not None:
             self._recent_outcomes: list[str] = saved
@@ -88,6 +89,8 @@ class OutcomeEvaluator:
             self._recent_outcomes: list[str] = (
                 list(prior_outcomes) if prior_outcomes else []
             )
+            if self._recent_outcomes:
+                self._save_streak_file()
 
     def add(
         self,

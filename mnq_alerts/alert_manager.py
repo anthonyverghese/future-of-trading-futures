@@ -225,7 +225,7 @@ class AlertManager:
                 # Track every zone entry for streak computation.
                 all_zone_entries.append((level.name, level.price, direction))
 
-                score = composite_score(
+                score, bd = composite_score(
                     level.name,
                     level.entry_count,
                     now_et,
@@ -234,12 +234,13 @@ class AlertManager:
                     direction=direction,
                     consecutive_wins=consecutive_wins,
                     consecutive_losses=consecutive_losses,
+                    breakdown=True,
                 )
 
                 if score < MIN_SCORE:
                     print(
-                        f"[ALERT suppressed — low score ({score})] {level.name} zone entered "
-                        f"(test #{level.entry_count}), price {current_price:.2f}"
+                        f"[ALERT suppressed — score {score}] {level.name} zone entered "
+                        f"(test #{level.entry_count}), price {current_price:.2f} | {bd}"
                     )
                     continue
                 tier_label, tier_wr = score_tier(score)
