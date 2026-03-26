@@ -140,12 +140,23 @@ def simulate_day_scored(dc: DayCache, day_index: int) -> list[ScoredAlert]:
     return alerts
 
 
-def fill_streaks(alerts: list[ScoredAlert]) -> None:
-    """Fill consecutive_wins/losses chronologically across all alerts."""
+def fill_streaks(
+    alerts: list[ScoredAlert],
+    prior_outcomes: list[str] | None = None,
+) -> None:
+    """Fill consecutive_wins/losses chronologically across all alerts.
+
+    Args:
+        alerts: List of alerts to fill streak data for (modified in place).
+        prior_outcomes: Optional list of prior "correct"/"incorrect" outcomes
+            to seed the streak (e.g., from previous days). This ensures
+            out-of-sample tests can carry streak state across days, matching
+            how production persists streaks via streak_outcomes.json.
+    """
     # Sort by time (should already be mostly sorted by day, but alerts
     # within a day may be interleaved across levels)
     alerts.sort(key=lambda a: a.alert_time)
-    recent: list[str] = []
+    recent: list[str] = list(prior_outcomes) if prior_outcomes else []
     for a in alerts:
         # Count streak from recent outcomes
         wins = 0
