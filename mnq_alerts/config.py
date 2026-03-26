@@ -28,6 +28,13 @@ ALERT_THRESHOLD_POINTS = 7  # Notify when MNQ is within this many points of a le
 ALERT_EXIT_POINTS = 20  # Points away from reference to reset the alert zone
 CHECK_INTERVAL_SECONDS = 30  # How often to poll during RTH
 
+# ── Outcome Evaluation ───────────────────────────────────────────────────────
+
+HIT_THRESHOLD = 1.0  # Points — price within this distance counts as "hit the line"
+TARGET_POINTS = 8.0  # Points price must move in recommended direction (target)
+STOP_POINTS = 20.0  # Points against — stopped out before target = incorrect
+EVAL_WINDOW_MINS = 15  # Minutes after hitting line to evaluate outcome
+
 # ── Pushover ───────────────────────────────────────────────────────────────────
 # https://pushover.net — API token from pushover.net/apps, User Key from dashboard
 
