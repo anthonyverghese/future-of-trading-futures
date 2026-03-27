@@ -254,11 +254,11 @@ class TestStreak:
     def test_1_win_zero(self):
         assert composite_score(**_base(consecutive_wins=1)) == 0
 
-    def test_2_losses_minus4(self):
-        assert composite_score(**_base(consecutive_losses=2)) == -4
+    def test_2_losses_minus2(self):
+        assert composite_score(**_base(consecutive_losses=2)) == -2
 
-    def test_5_losses_minus4(self):
-        assert composite_score(**_base(consecutive_losses=5)) == -4
+    def test_5_losses_minus2(self):
+        assert composite_score(**_base(consecutive_losses=5)) == -2
 
     def test_1_loss_zero(self):
         assert composite_score(**_base(consecutive_losses=1)) == 0
@@ -354,9 +354,9 @@ class TestCombined:
             now_et=datetime.time(10, 30),  # 0
             tick_rate=1000.0,  # 0
             session_move_pts=5.0,  # -3 (near-zero green)
-            consecutive_losses=3,  # -4
+            consecutive_losses=3,  # -2
         )
-        assert score == -1 + (-1) + (-1) + 0 + 0 + (-3) + (-4)  # -10
+        assert score == -1 + (-1) + (-1) + 0 + 0 + (-3) + (-2)  # -8
         label, _ = score_tier(score)
         assert label == "Good"
 

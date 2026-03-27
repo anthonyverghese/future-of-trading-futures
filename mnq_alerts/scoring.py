@@ -12,7 +12,7 @@ Components (each contributes an integer score):
   Test count:      #2/#5 +1, #1/#3 -1
   Session move:    sweet spots (10-20 green, -20 to -10 red) +2,
                    strongly red +1, near-zero green -3, rest 0
-  Streak:          2+ wins +3, 2+ losses -4
+  Streak:          2+ wins +3, 2+ losses -2
 """
 
 from __future__ import annotations
@@ -154,11 +154,12 @@ def composite_score(
         else:
             bd.move = 0  # remaining buckets: ~74% — baseline
 
-    # Outcome streak (206-day: 2+W → 81.3%, 2+L → 56.9%, mixed → 68.0%)
+    # Outcome streak (214-day: 2+W → 81.3%, 2+L → 56.9%, mixed → 68.0%)
+    # Loss penalty capped at -2 to prevent death spiral (85.0% WR, same volume)
     if consecutive_wins >= 2:
         bd.streak = 3
     elif consecutive_losses >= 2:
-        bd.streak = -4
+        bd.streak = -2
 
     if breakdown:
         return bd.total, bd
