@@ -135,10 +135,10 @@ class TestAlertManagerRegistration:
             notify_fn=lambda t, b: True,
         )
 
-    def test_ibh_excluded_from_levels(self):
+    def test_ibh_included_in_levels(self):
         am = self._make_manager()
         am.update_levels(ibh=20100.0, ibl=20000.0, vwap=20050.0)
-        assert "IBH" not in am._levels
+        assert "IBH" in am._levels
         assert "IBL" in am._levels
         assert "VWAP" in am._levels
 

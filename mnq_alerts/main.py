@@ -189,7 +189,7 @@ def run() -> None:
             ib_low = float(ib["Price"].min())
             ib_has_trades = True
         # If cache contains trades past 10:30, IB is already locked.
-        last_cached_time = cached_trades.index[-1].to_pydatetime().time()
+        last_cached_time = cached_trades.index[-1].to_pydatetime(warn=False).time()
         if last_cached_time >= IB_END and ib_has_trades:
             ibh, ibl = ib_high, ib_low
             ib_locked = True
@@ -197,6 +197,7 @@ def run() -> None:
             fib_levels = calculate_fib_levels(ibh, ibl)
             alert_manager.update_fib_levels(fib_levels)
             print(f"[cache] IB already locked — IBH: {ibh:.2f}, IBL: {ibl:.2f}")
+            alert_manager.restore_zone_state()
         print(
             f"[cache] Seeded VWAP from {len(rth)} cached trades "
             f"(VWAP: {f'{vwap:.2f}' if vwap else 'N/A'})"

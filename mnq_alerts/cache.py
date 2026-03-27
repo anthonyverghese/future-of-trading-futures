@@ -111,13 +111,13 @@ def get_replay_start(cached_trades: pd.DataFrame) -> datetime.datetime:
     if cached_trades.empty:
         return session_open
 
-    first_ts = cached_trades.index[0].to_pydatetime()
+    first_ts = cached_trades.index[0].to_pydatetime(warn=False)
     # If the cache doesn't start within 10 minutes of session open,
     # it's from a mid-session restart — replay the full session.
     if (first_ts - session_open).total_seconds() > 600:
         return session_open
 
-    last_ts = cached_trades.index[-1].to_pydatetime()
+    last_ts = cached_trades.index[-1].to_pydatetime(warn=False)
     return last_ts + datetime.timedelta(seconds=1)
 
 

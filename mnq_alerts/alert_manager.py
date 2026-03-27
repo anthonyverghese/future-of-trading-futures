@@ -12,11 +12,15 @@ notification dispatch, and message formatting.
 from __future__ import annotations
 
 import datetime
+import json
+import os
 from dataclasses import dataclass
 from typing import Callable
 
 from config import ALERT_EXIT_POINTS, ALERT_THRESHOLD_POINTS
 from scoring import MIN_SCORE, composite_score, score_tier
+
+_ZONE_STATE_FILE = os.path.join(os.path.dirname(__file__), ".zone_state.json")
 
 _TICKER = "MNQ"
 
@@ -167,11 +171,57 @@ class AlertManager:
 
             self._notify_fn = send_notification
 
+    def save_zone_state(self) -> None:
+        """Persist zone entry counts and in_zone state to survive restarts."""
+        today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+        state = {
+            "date": today,
+            "levels": {
+                name: {
+                    "entry_count": ls.entry_count,
+                    "in_zone": ls.in_zone,
+                    "reference_price": ls.reference_price,
+                }
+                for name, ls in self._levels.items()
+            },
+        }
+        try:
+            with open(_ZONE_STATE_FILE, "w") as f:
+                json.dump(state, f)
+        except OSError:
+            pass
+
+    def restore_zone_state(self) -> None:
+        """Restore zone entry counts from disk (same-day only)."""
+        try:
+            with open(_ZONE_STATE_FILE) as f:
+                state = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError, TypeError):
+            return
+        today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+        if state.get("date") != today:
+            return
+        restored = 0
+        for name, saved in state.get("levels", {}).items():
+            if name in self._levels:
+                ls = self._levels[name]
+                ls.entry_count = saved.get("entry_count", 0)
+                ls.in_zone = saved.get("in_zone", False)
+                ls.reference_price = saved.get("reference_price")
+                restored += 1
+        if restored:
+            counts = ", ".join(
+                f"{n}={ls.entry_count}"
+                for n, ls in self._levels.items()
+                if ls.entry_count > 0
+            )
+            print(f"[zone] Restored state for {restored} levels ({counts})")
+
     def update_levels(
         self, ibh: float | None, ibl: float | None, vwap: float | None
     ) -> None:
         """Register or update price levels. Pass None to skip a level."""
-        for name, price in {"IBL": ibl, "VWAP": vwap}.items():
+        for name, price in {"IBH": ibh, "IBL": ibl, "VWAP": vwap}.items():
             if price is None:
                 continue
             if name not in self._levels:
@@ -265,4 +315,6 @@ class AlertManager:
                 )
                 self._notify_fn(title, body)
                 fired.append((alert_id, level.name, level.price, direction))
+        if all_zone_entries:
+            self.save_zone_state()
         return fired, all_zone_entries
