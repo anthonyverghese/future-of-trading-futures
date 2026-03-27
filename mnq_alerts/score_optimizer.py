@@ -1,10 +1,9 @@
 """
-score_optimizer.py — Data-driven composite score optimization.
+score_optimizer.py — Data-driven scoring weight validation and optimization.
 
-Computes ALL 7 scoring factors from cached data (including tick_rate,
-session_move, and streak which were never backtested), validates each
-weight against actual win rates, suggests data-driven weights, and
-sweeps thresholds to find 80%+ WR with 600+ samples.
+Computes ALL 7 scoring factors from cached parquet data, validates current
+weights against actual win rates, suggests data-driven weights, and tests
+on held-out days to prevent overfitting.
 
 Usage:
     python score_optimizer.py
@@ -13,702 +12,831 @@ Usage:
 from __future__ import annotations
 
 import datetime
-import math
 import os
 import sys
+from collections import defaultdict
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-import pytz
 
 sys.path.insert(0, os.path.dirname(__file__))
 
 from targeted_backtest import (
-    ALERT_THRESHOLD,
-    EXIT_THRESHOLD,
-    DayCache,
-    _run_zone_numpy,
-    evaluate_outcome_np,
     load_cached_days,
     load_day,
     preprocess_day,
+    simulate_day,
+    ET,
 )
-
-ET = pytz.timezone("America/New_York")
-
-# Match live system constants
-TARGET_POINTS = 8.0
-STOP_POINTS = 20.0
 
 
 @dataclass
-class ScoredAlert:
-    """Alert with all 7 scoring factors computed."""
+class EnrichedAlert:
+    """Alert with all 7 scoring factors computed from cached data."""
 
     date: datetime.date
-    alert_time: datetime.datetime
     level: str
-    line_price: float
-    entry_price: float
     direction: str
     entry_count: int
     outcome: str  # "correct" or "incorrect"
-    # Scoring factors
-    tick_rate: float  # trades/min in 3-min window before alert
-    session_move_pts: float  # current price - day open
-    consecutive_wins: int
-    consecutive_losses: int
-    time_et: datetime.time
-    day_index: int  # for split-half validation
+    entry_price: float
+    line_price: float
+    alert_time: datetime.datetime
+
+    # Computed factors
+    now_et: datetime.time | None = None
+    tick_rate: float | None = None
+    session_move_pts: float | None = None
+    consecutive_wins: int = 0
+    consecutive_losses: int = 0
 
 
 def compute_tick_rate(
-    full_ts_ns: np.ndarray, alert_idx: int, window_minutes: int = 3
+    df: pd.DataFrame, alert_ts: pd.Timestamp, window_minutes: int = 3
 ) -> float:
-    """Count trades in window before alert, return trades/min."""
-    alert_ns = full_ts_ns[alert_idx]
-    start_ns = alert_ns - np.int64(window_minutes * 60 * 1_000_000_000)
-    start_idx = int(np.searchsorted(full_ts_ns, start_ns, side="left"))
-    count = alert_idx - start_idx
+    """Count trades in N-minute window before alert, return trades/minute.
+
+    Matches production main.py:324-330: tick_rate = len(tick_times) / 3.0
+    where tick_times is trades in last 3 minutes.
+    """
+    window_start = alert_ts - pd.Timedelta(minutes=window_minutes)
+    mask = (df.index >= window_start) & (df.index <= alert_ts)
+    count = mask.sum()
     return count / window_minutes
 
 
-def simulate_day_scored(dc: DayCache, day_index: int) -> list[ScoredAlert]:
-    """Simulate one day, computing all scoring factors per alert."""
-    prices = dc.post_ib_prices
-    n = len(prices)
-    day_open = float(dc.full_prices[0])
+def load_all_alerts(dates: list[datetime.date]) -> list[EnrichedAlert]:
+    """Load all days, simulate, compute all 7 factors, return enriched alerts.
 
-    all_levels = [
-        ("IBH", np.full(n, dc.ibh), EXIT_THRESHOLD, False),
-        ("IBL", np.full(n, dc.ibl), EXIT_THRESHOLD, False),
-        ("VWAP", dc.post_ib_vwaps, EXIT_THRESHOLD, False),
-        ("FIB_EXT_LO_1.272", np.full(n, dc.fib_lo), EXIT_THRESHOLD, False),
-        ("FIB_EXT_HI_1.272", np.full(n, dc.fib_hi), EXIT_THRESHOLD, False),
-    ]
-
-    alerts: list[ScoredAlert] = []
-
-    for level_name, level_arr, et, use_current in all_levels:
-        entries = _run_zone_numpy(prices, level_arr, ALERT_THRESHOLD, et, use_current)
-
-        for idx, entry_count, ref_price in entries:
-            price = float(prices[idx])
-            full_idx = dc.post_ib_start_idx + idx
-            ts = dc.post_ib_timestamps[idx]
-            direction = "up" if price > ref_price else "down"
-
-            outcome = evaluate_outcome_np(
-                full_idx, ref_price, direction, dc.full_ts_ns, dc.full_prices
-            )
-            if outcome not in ("correct", "incorrect"):
-                continue
-
-            # Tick rate
-            tick_rate = compute_tick_rate(dc.full_ts_ns, full_idx)
-
-            # Session move
-            session_move = price - day_open
-
-            # Time
-            t_et = ts.to_pydatetime(warn=False)
-            if t_et.tzinfo is None:
-                t_et = ET.localize(t_et)
-            else:
-                t_et = t_et.astimezone(ET)
-
-            alerts.append(
-                ScoredAlert(
-                    date=dc.date,
-                    alert_time=t_et,
-                    level=level_name,
-                    line_price=ref_price,
-                    entry_price=price,
-                    direction=direction,
-                    entry_count=entry_count,
-                    outcome=outcome,
-                    tick_rate=tick_rate,
-                    session_move_pts=session_move,
-                    consecutive_wins=0,  # filled in later
-                    consecutive_losses=0,
-                    time_et=t_et.time(),
-                    day_index=day_index,
-                )
-            )
-
-    return alerts
-
-
-def fill_streaks(
-    alerts: list[ScoredAlert],
-    prior_outcomes: list[str] | None = None,
-) -> None:
-    """Fill consecutive_wins/losses chronologically across all alerts.
-
-    Args:
-        alerts: List of alerts to fill streak data for (modified in place).
-        prior_outcomes: Optional list of prior "correct"/"incorrect" outcomes
-            to seed the streak (e.g., from previous days). This ensures
-            out-of-sample tests can carry streak state across days, matching
-            how production persists streaks via streak_outcomes.json.
+    Streak is tracked across days chronologically, matching production behavior.
     """
-    # Sort by time (should already be mostly sorted by day, but alerts
-    # within a day may be interleaved across levels)
-    alerts.sort(key=lambda a: a.alert_time)
-    recent: list[str] = list(prior_outcomes) if prior_outcomes else []
-    for a in alerts:
-        # Count streak from recent outcomes
-        wins = 0
-        for o in reversed(recent):
-            if o == "correct":
-                wins += 1
-            else:
-                break
-        losses = 0
-        for o in reversed(recent):
-            if o == "incorrect":
-                losses += 1
-            else:
-                break
-        a.consecutive_wins = wins
-        a.consecutive_losses = losses
-        recent.append(a.outcome)
+    all_alerts: list[EnrichedAlert] = []
+    consecutive_wins = 0
+    consecutive_losses = 0
 
-
-def time_bucket(t: datetime.time) -> str:
-    mins = t.hour * 60 + t.minute
-    if mins < 11 * 60 + 30:
-        return "morning"
-    elif mins < 13 * 60:
-        return "lunch"
-    elif mins < 15 * 60:
-        return "afternoon"
-    return "power_hour"
-
-
-def wr(subset: list[ScoredAlert]) -> tuple[int, int, int, float]:
-    w = sum(1 for a in subset if a.outcome == "correct")
-    t = len(subset)
-    return w, t - w, t, w / t if t > 0 else 0.0
-
-
-def composite_score(a: ScoredAlert, weights: dict) -> int:
-    """Compute composite score using given weight configuration."""
-    s = 0
-
-    # Level
-    s += weights.get(f"level_{a.level}", 0)
-
-    # Direction × Level
-    combo = f"combo_{a.level}_{a.direction}"
-    s += weights.get(combo, 0)
-
-    # Time of day
-    s += weights.get(f"time_{time_bucket(a.time_et)}", 0)
-
-    # Tick rate
-    if a.tick_rate >= weights.get("tick_high", 2000):
-        s += weights.get("tick_high_score", 0)
-    elif a.tick_rate >= weights.get("tick_mid", 1750):
-        s += weights.get("tick_mid_score", 0)
-    elif a.tick_rate < weights.get("tick_low", 1000):
-        s += weights.get("tick_low_score", 0)
-
-    # Test count
-    tc = a.entry_count
-    if tc == 1:
-        s += weights.get("test_1", 0)
-    elif tc == 2:
-        s += weights.get("test_2", 0)
-    elif tc == 3:
-        s += weights.get("test_3", 0)
-    elif tc == 4:
-        s += weights.get("test_4", 0)
-    elif tc == 5:
-        s += weights.get("test_5", 0)
-    else:
-        s += weights.get("test_6plus", 0)
-
-    # Session move
-    sm = a.session_move_pts
-    if -50 < sm <= 0:
-        s += weights.get("session_mildly_red", 0)
-    elif sm <= -50:
-        s += weights.get("session_strongly_red", 0)
-    elif sm > 50:
-        s += weights.get("session_strongly_green", 0)
-    # else: mildly green (0 to 50), no adjustment
-
-    # Streak
-    if a.consecutive_wins >= 2:
-        s += weights.get("streak_wins", 0)
-    elif a.consecutive_losses >= 2:
-        s += weights.get("streak_losses", 0)
-
-    return s
-
-
-# Current production weights
-CURRENT_WEIGHTS = {
-    # Level
-    "level_IBL": 3,
-    "level_FIB_EXT_LO_1.272": 2,
-    "level_FIB_EXT_HI_1.272": 1,
-    "level_VWAP": 0,
-    "level_IBH": -1,
-    # Direction × Level
-    "combo_FIB_EXT_HI_1.272_up": 1,
-    "combo_FIB_EXT_LO_1.272_down": 1,
-    "combo_IBL_down": 1,
-    "combo_IBH_up": -1,
-    # Time
-    "time_afternoon": 2,
-    "time_power_hour": 1,
-    "time_lunch": -1,
-    "time_morning": -3,
-    # Tick rate
-    "tick_high": 2000,
-    "tick_mid": 1750,
-    "tick_low": 1000,
-    "tick_high_score": 2,
-    "tick_mid_score": 1,
-    "tick_low_score": -2,
-    # Test count
-    "test_1": -4,
-    "test_2": 0,
-    "test_3": 2,
-    "test_4": 1,
-    "test_5": -2,
-    "test_6plus": -4,
-    # Session move
-    "session_mildly_red": 2,
-    "session_strongly_red": 0,
-    "session_strongly_green": -1,
-    # Streak
-    "streak_wins": 2,
-    "streak_losses": -3,
-}
-
-
-def suggest_weight(bucket_wr: float, baseline_wr: float) -> int:
-    """Suggest integer weight based on WR deviation from baseline."""
-    delta = bucket_wr - baseline_wr
-    raw = delta / 0.025  # 2.5% per point
-    return max(-4, min(4, round(raw)))
-
-
-def print_section(title: str) -> None:
-    print(f"\n{'═' * 80}")
-    print(f"  {title}")
-    print(f"{'═' * 80}")
-
-
-def main() -> None:
-    days = load_cached_days()
-    print(f"{'═' * 80}")
-    print(f"  SCORE OPTIMIZER — Data-Driven Weight Validation")
-    print(f"  {days[0]} → {days[-1]}  ({len(days)} days)")
-    print(f"{'═' * 80}")
-
-    # Load all days
-    all_alerts: list[ScoredAlert] = []
-    days_loaded = 0
-
-    for i, date in enumerate(days):
+    for i, date in enumerate(dates):
         try:
             df = load_day(date)
             dc = preprocess_day(df, date)
             if dc is None:
                 continue
-            day_alerts = simulate_day_scored(dc, days_loaded)
-            all_alerts.extend(day_alerts)
-            days_loaded += 1
-        except Exception as e:
-            print(f"  Error loading {date}: {e}")
-        if (i + 1) % 50 == 0:
-            print(f"  {i + 1}/{len(days)} days loaded...", flush=True)
+        except Exception:
+            continue
 
-    # Fill streaks chronologically
-    fill_streaks(all_alerts)
+        day_alerts = simulate_day(dc)
+        first_price = float(dc.post_ib_prices[0])
 
-    print(f"  {days_loaded} days loaded, {len(all_alerts)} decided alerts.")
-    w_all, l_all, t_all, wr_all = wr(all_alerts)
-    print(f"  Baseline: {w_all}W / {l_all}L = {wr_all:.1%}")
+        # Sort by time within day (simulate_day returns per-level, not chronological)
+        day_alerts.sort(key=lambda a: a.alert_time)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # STEP 1: Current weights with all factors
-    # ══════════════════════════════════════════════════════════════════════════
-    print_section("STEP 1: Current weights WITH tick_rate + session_move + streak")
-
-    for a in all_alerts:
-        a._current_score = composite_score(a, CURRENT_WEIGHTS)
-
-    print(
-        f"\n  {'Threshold':<15} {'W':>5}  {'L':>5}  {'Total':>6}  {'WR%':>6}  {'/day':>5}"
-    )
-    print(f"  {'-' * 15} {'-' * 5}  {'-' * 5}  {'-' * 6}  {'-' * 6}  {'-' * 5}")
-    for thr in range(-2, 10):
-        filt = [a for a in all_alerts if a._current_score >= thr]
-        w, l, t, rate = wr(filt)
-        per_day = t / days_loaded
-        marker = " ★" if rate >= 0.80 and t >= 600 else ""
-        print(
-            f"  Score ≥ {thr:<6} {w:>5}  {l:>5}  {t:>6}  {rate:>5.1%}  {per_day:>5.1f}{marker}"
-        )
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # STEP 2: Per-factor validation
-    # ══════════════════════════════════════════════════════════════════════════
-    print_section("STEP 2: Per-Factor Win Rate Analysis")
-    baseline = wr_all
-
-    # Factor 1: Level
-    print(f"\n  LEVEL (baseline: {baseline:.1%}):")
-    print(
-        f"  {'Bucket':<30} {'W':>5} {'L':>5} {'Total':>6} {'WR%':>6}  {'Current':>8}  {'Suggested':>10}"
-    )
-    print(
-        f"  {'-' * 30} {'-' * 5} {'-' * 5} {'-' * 6} {'-' * 6}  {'-' * 8}  {'-' * 10}"
-    )
-
-    suggested_weights = dict(CURRENT_WEIGHTS)  # start from current
-
-    for lvl in ["IBL", "FIB_EXT_LO_1.272", "FIB_EXT_HI_1.272", "VWAP", "IBH"]:
-        subset = [a for a in all_alerts if a.level == lvl]
-        w, l, t, rate = wr(subset)
-        cur = CURRENT_WEIGHTS.get(f"level_{lvl}", 0)
-        sug = suggest_weight(rate, baseline)
-        suggested_weights[f"level_{lvl}"] = sug
-        print(f"  {lvl:<30} {w:>5} {l:>5} {t:>6} {rate:>5.1%}  {cur:>+8d}  {sug:>+10d}")
-
-    # Factor 2: Direction × Level
-    print(f"\n  DIRECTION × LEVEL:")
-    print(
-        f"  {'Combo':<30} {'W':>5} {'L':>5} {'Total':>6} {'WR%':>6}  {'Current':>8}  {'Suggested':>10}"
-    )
-    print(
-        f"  {'-' * 30} {'-' * 5} {'-' * 5} {'-' * 6} {'-' * 6}  {'-' * 8}  {'-' * 10}"
-    )
-
-    for lvl in ["IBH", "IBL", "VWAP", "FIB_EXT_LO_1.272", "FIB_EXT_HI_1.272"]:
-        for dir in ["up", "down"]:
-            subset = [a for a in all_alerts if a.level == lvl and a.direction == dir]
-            if not subset:
+        for a in day_alerts:
+            if a.outcome not in ("correct", "incorrect"):
                 continue
-            w, l, t, rate = wr(subset)
-            key = f"combo_{lvl}_{dir}"
-            cur = CURRENT_WEIGHTS.get(key, 0)
-            # Suggest relative to level's own WR (not global baseline)
-            lvl_subset = [a for a in all_alerts if a.level == lvl]
-            _, _, _, lvl_wr = wr(lvl_subset)
-            sug = suggest_weight(rate, lvl_wr)
-            suggested_weights[key] = sug
+
+            # Time of day in ET
+            if hasattr(a.alert_time, "astimezone") and a.alert_time.tzinfo:
+                now_et = a.alert_time.astimezone(
+                    datetime.timezone(datetime.timedelta(hours=-4))
+                ).time()
+            else:
+                now_et = None
+
+            # Tick rate: trades in 3-min window / 3
+            tick_rate = compute_tick_rate(dc.full_df, pd.Timestamp(a.alert_time))
+
+            # Session move: current price - first post-IB price
+            session_move = a.entry_price - first_price
+
+            ea = EnrichedAlert(
+                date=date,
+                level=a.level,
+                direction=a.direction,
+                entry_count=a.level_test_count,
+                outcome=a.outcome,
+                entry_price=a.entry_price,
+                line_price=a.line_price,
+                alert_time=a.alert_time,
+                now_et=now_et,
+                tick_rate=tick_rate,
+                session_move_pts=session_move,
+                consecutive_wins=consecutive_wins,
+                consecutive_losses=consecutive_losses,
+            )
+            all_alerts.append(ea)
+
+            # Update streak AFTER recording (matches production: streak reflects
+            # state BEFORE this alert, updates AFTER)
+            if a.outcome == "correct":
+                consecutive_wins += 1
+                consecutive_losses = 0
+            else:
+                consecutive_losses += 1
+                consecutive_wins = 0
+
+        if (i + 1) % 50 == 0:
+            print(f"  Loaded {i+1}/{len(dates)} days...", flush=True)
+
+    return all_alerts
+
+
+def wr_line(label: str, subset: list[EnrichedAlert], indent: str = "  ") -> None:
+    if not subset:
+        print(f"{indent}{label:<45} (no data)")
+        return
+    w = sum(1 for a in subset if a.outcome == "correct")
+    n = len(subset)
+    warn = " ⚠n<30" if n < 30 else ""
+    print(f"{indent}{label:<45} {w:>5}W {n-w:>5}L {n:>7} {w/n*100:>6.1f}%{warn}")
+
+
+def suggest_weight(bucket_wr: float, baseline_wr: float) -> int:
+    """Map WR delta to integer weight. +/- 2.5% per point, capped at [-4, +4]."""
+    delta = bucket_wr - baseline_wr
+    weight = round(delta / 2.5)
+    return max(-4, min(4, weight))
+
+
+# ── Scoring function with configurable weights ──
+
+
+@dataclass
+class Weights:
+    """All scoring weights in one place for easy tuning."""
+
+    # Level quality
+    level_fib_hi: int = 2
+    level_ibl: int = 1
+    level_fib_lo: int = 1
+    level_vwap: int = -1
+    level_ibh: int = -1
+
+    # Direction x Level combos
+    combo_fib_hi_up: int = 2
+    combo_fib_lo_down: int = 1
+    combo_ibl_down: int = 1
+    combo_vwap_up: int = 1
+    combo_ibh_up: int = -1
+    combo_ibl_up: int = -1
+    combo_fib_lo_up: int = -1
+    combo_fib_hi_down: int = -1
+    combo_vwap_down: int = -1
+
+    # Time of day
+    time_power_hour: int = 2
+
+    # Tick rate
+    tick_sweet_spot: int = 2
+    tick_lo: float = 1750.0
+    tick_hi: float = 2000.0
+
+    # Test count
+    test_1: int = -1
+    test_2: int = 1
+    test_3: int = -1
+    test_5: int = 1
+
+    # Session move
+    move_sweet_green: int = 2  # (10, 20]
+    move_sweet_red: int = 2  # (-20, -10]
+    move_strong_red: int = 1  # <= -50
+    move_near_zero_green: int = -3  # (0, 10]
+    move_strong_green: int = 0  # > 50
+    move_other: int = 0
+
+    # Streak
+    streak_win_bonus: int = 3  # 2+ wins
+    streak_loss_penalty: int = -2  # 2+ losses
+
+
+def score_alert(a: EnrichedAlert, w: Weights) -> int:
+    """Score an alert using configurable weights."""
+    total = 0
+
+    # Level
+    if a.level == "FIB_EXT_HI_1.272":
+        total += w.level_fib_hi
+    elif a.level == "IBL":
+        total += w.level_ibl
+    elif a.level == "FIB_EXT_LO_1.272":
+        total += w.level_fib_lo
+    elif a.level == "VWAP":
+        total += w.level_vwap
+    elif a.level == "IBH":
+        total += w.level_ibh
+
+    # Direction x Level
+    if a.direction is not None:
+        c = (a.level, a.direction)
+        if c == ("FIB_EXT_HI_1.272", "up"):
+            total += w.combo_fib_hi_up
+        elif c == ("FIB_EXT_LO_1.272", "down"):
+            total += w.combo_fib_lo_down
+        elif c == ("IBL", "down"):
+            total += w.combo_ibl_down
+        elif c == ("VWAP", "up"):
+            total += w.combo_vwap_up
+        elif c == ("IBH", "up"):
+            total += w.combo_ibh_up
+        elif c == ("IBL", "up"):
+            total += w.combo_ibl_up
+        elif c == ("FIB_EXT_LO_1.272", "up"):
+            total += w.combo_fib_lo_up
+        elif c == ("FIB_EXT_HI_1.272", "down"):
+            total += w.combo_fib_hi_down
+        elif c == ("VWAP", "down"):
+            total += w.combo_vwap_down
+
+    # Time of day
+    if a.now_et is not None:
+        mins = a.now_et.hour * 60 + a.now_et.minute
+        if mins >= 15 * 60:
+            total += w.time_power_hour
+
+    # Tick rate
+    if a.tick_rate is not None:
+        if w.tick_lo <= a.tick_rate < w.tick_hi:
+            total += w.tick_sweet_spot
+
+    # Test count
+    if a.entry_count == 1:
+        total += w.test_1
+    elif a.entry_count == 2:
+        total += w.test_2
+    elif a.entry_count == 3:
+        total += w.test_3
+    elif a.entry_count == 5:
+        total += w.test_5
+
+    # Session move
+    if a.session_move_pts is not None:
+        m = a.session_move_pts
+        if 10 < m <= 20:
+            total += w.move_sweet_green
+        elif -20 < m <= -10:
+            total += w.move_sweet_red
+        elif m <= -50:
+            total += w.move_strong_red
+        elif m > 50:
+            total += w.move_strong_green
+        elif 0 < m <= 10:
+            total += w.move_near_zero_green
+        else:
+            total += w.move_other
+
+    # Streak
+    if a.consecutive_wins >= 2:
+        total += w.streak_win_bonus
+    elif a.consecutive_losses >= 2:
+        total += w.streak_loss_penalty
+
+    return total
+
+
+def threshold_sweep(
+    alerts: list[EnrichedAlert], w: Weights, num_days: int, label: str = ""
+) -> None:
+    """Score all alerts and show WR/volume at each threshold."""
+    scored = [(a, score_alert(a, w)) for a in alerts]
+
+    if label:
+        print(f"\n  {label}")
+    print(
+        f"  {'Score >=':>8} {'W':>5} {'L':>5} {'Total':>7} {'WR%':>7} {'/day':>6} {'Target?':>8}"
+    )
+    print(f"  {'-'*50}")
+
+    min_s = min(s for _, s in scored)
+    max_s = max(s for _, s in scored)
+    for threshold in range(min_s, max_s + 1):
+        passing = [(a, s) for a, s in scored if s >= threshold]
+        w_count = sum(1 for a, _ in passing if a.outcome == "correct")
+        n = len(passing)
+        if n == 0:
+            continue
+        wr = w_count / n * 100
+        per_day = n / num_days
+        target = "YES" if wr >= 80 and n >= 600 else ""
+        marker = " <-- current" if threshold == 5 else ""
+        print(
+            f"  {threshold:>8} {w_count:>5} {n-w_count:>5} {n:>7} {wr:>6.1f}% {per_day:>5.1f} {target:>8}{marker}"
+        )
+
+
+def main():
+    dates = load_cached_days()
+    print(f"Loaded {len(dates)} cached days ({dates[0]} -> {dates[-1]})")
+
+    # ── Split: first 75% train, last 25% test ──
+    split_idx = int(len(dates) * 0.75)
+    train_dates = dates[:split_idx]
+    test_dates = dates[split_idx:]
+    print(f"Train: {len(train_dates)} days ({train_dates[0]} -> {train_dates[-1]})")
+    print(f"Test:  {len(test_dates)} days ({test_dates[0]} -> {test_dates[-1]})")
+
+    print("\n-- Loading ALL alerts with computed factors --")
+    all_alerts = load_all_alerts(dates)
+    print(f"\nTotal decided alerts: {len(all_alerts)}")
+
+    train_alerts = [a for a in all_alerts if a.date <= train_dates[-1]]
+    test_alerts = [a for a in all_alerts if a.date > train_dates[-1]]
+    print(f"Train alerts: {len(train_alerts)}")
+    print(f"Test alerts:  {len(test_alerts)}")
+
+    baseline_w = sum(1 for a in all_alerts if a.outcome == "correct")
+    baseline_wr = baseline_w / len(all_alerts) * 100
+    print(f"Baseline WR (unfiltered): {baseline_wr:.1f}%")
+
+    train_baseline_w = sum(1 for a in train_alerts if a.outcome == "correct")
+    train_baseline_wr = train_baseline_w / len(train_alerts) * 100
+
+    # ==================================================================
+    # STEP 1: Validate every scoring factor (on TRAIN data)
+    # ==================================================================
+    print("\n" + "=" * 75)
+    print("STEP 1: Factor Validation (TRAIN set only)")
+    print("=" * 75)
+    print(f"Train baseline WR: {train_baseline_wr:.1f}% ({len(train_alerts)} alerts)")
+
+    # 1a. Level quality
+    print("\n-- 1a. Level Quality --")
+    for level in ["FIB_EXT_HI_1.272", "FIB_EXT_LO_1.272", "IBL", "VWAP", "IBH"]:
+        bucket = [a for a in train_alerts if a.level == level]
+        if bucket:
+            w = sum(1 for a in bucket if a.outcome == "correct")
+            wr = w / len(bucket) * 100
+            suggested = suggest_weight(wr, train_baseline_wr)
             print(
-                f"  {lvl} × {dir:<22} {w:>5} {l:>5} {t:>6} {rate:>5.1%}  {cur:>+8d}  {sug:>+10d}"
+                f"  {level:<22} {w:>5}W {len(bucket)-w:>5}L {len(bucket):>7} "
+                f"{wr:>6.1f}%  suggested={suggested:+d}"
             )
 
-    # Factor 3: Time of day
-    print(f"\n  TIME OF DAY:")
-    print(
-        f"  {'Bucket':<30} {'W':>5} {'L':>5} {'Total':>6} {'WR%':>6}  {'Current':>8}  {'Suggested':>10}"
-    )
-    print(
-        f"  {'-' * 30} {'-' * 5} {'-' * 5} {'-' * 6} {'-' * 6}  {'-' * 8}  {'-' * 10}"
-    )
-
-    for bucket, key in [
-        ("morning", "time_morning"),
-        ("lunch", "time_lunch"),
-        ("afternoon", "time_afternoon"),
-        ("power_hour", "time_power_hour"),
-    ]:
-        subset = [a for a in all_alerts if time_bucket(a.time_et) == bucket]
-        w, l, t, rate = wr(subset)
-        cur = CURRENT_WEIGHTS.get(key, 0)
-        sug = suggest_weight(rate, baseline)
-        suggested_weights[key] = sug
-        print(
-            f"  {bucket:<30} {w:>5} {l:>5} {t:>6} {rate:>5.1%}  {cur:>+8d}  {sug:>+10d}"
-        )
-
-    # Factor 4: Tick rate
-    print(f"\n  TICK RATE (trades/min in 3-min window):")
-    tick_rates = sorted(a.tick_rate for a in all_alerts)
-    q25 = tick_rates[len(tick_rates) // 4]
-    q50 = tick_rates[len(tick_rates) // 2]
-    q75 = tick_rates[3 * len(tick_rates) // 4]
-    print(f"  Quartiles: Q25={q25:.0f}, Q50={q50:.0f}, Q75={q75:.0f}")
-
-    print(
-        f"  {'Bucket':<30} {'W':>5} {'L':>5} {'Total':>6} {'WR%':>6}  {'Current':>8}  {'Suggested':>10}"
-    )
-    print(
-        f"  {'-' * 30} {'-' * 5} {'-' * 5} {'-' * 6} {'-' * 6}  {'-' * 8}  {'-' * 10}"
-    )
-
-    # Use current thresholds AND quartile-based thresholds
-    tick_buckets = [
-        (f"≥2000/min", lambda a: a.tick_rate >= 2000, "tick_high_score"),
-        (f"1750-2000/min", lambda a: 1750 <= a.tick_rate < 2000, "tick_mid_score"),
-        (f"1000-1750/min", lambda a: 1000 <= a.tick_rate < 1750, None),
-        (f"<1000/min", lambda a: a.tick_rate < 1000, "tick_low_score"),
-    ]
-    for label, pred, key in tick_buckets:
-        subset = [a for a in all_alerts if pred(a)]
-        w, l, t, rate = wr(subset)
-        cur = CURRENT_WEIGHTS.get(key, 0) if key else 0
-        sug = suggest_weight(rate, baseline)
-        if key:
-            suggested_weights[key] = sug
-        print(
-            f"  {label:<30} {w:>5} {l:>5} {t:>6} {rate:>5.1%}  {cur:>+8d}  {sug:>+10d}"
-        )
-
-    # Also show quartile-based buckets
-    print(f"\n  Tick rate by quartiles:")
-    quartile_buckets = [
-        (f"Q4 (≥{q75:.0f}/min)", lambda a: a.tick_rate >= q75),
-        (f"Q3 ({q50:.0f}-{q75:.0f}/min)", lambda a: q50 <= a.tick_rate < q75),
-        (f"Q2 ({q25:.0f}-{q50:.0f}/min)", lambda a: q25 <= a.tick_rate < q50),
-        (f"Q1 (<{q25:.0f}/min)", lambda a: a.tick_rate < q25),
-    ]
-    for label, pred in quartile_buckets:
-        subset = [a for a in all_alerts if pred(a)]
-        w, l, t, rate = wr(subset)
-        sug = suggest_weight(rate, baseline)
-        print(f"  {label:<30} {w:>5} {l:>5} {t:>6} {rate:>5.1%}            {sug:>+10d}")
-
-    # Factor 5: Test count
-    print(f"\n  TEST COUNT:")
-    print(
-        f"  {'Bucket':<30} {'W':>5} {'L':>5} {'Total':>6} {'WR%':>6}  {'Current':>8}  {'Suggested':>10}"
-    )
-    print(
-        f"  {'-' * 30} {'-' * 5} {'-' * 5} {'-' * 6} {'-' * 6}  {'-' * 8}  {'-' * 10}"
-    )
-
-    for tc, key in [
-        (1, "test_1"),
-        (2, "test_2"),
-        (3, "test_3"),
-        (4, "test_4"),
-        (5, "test_5"),
-    ]:
-        subset = [a for a in all_alerts if a.entry_count == tc]
-        w, l, t, rate = wr(subset)
-        cur = CURRENT_WEIGHTS.get(key, 0)
-        sug = suggest_weight(rate, baseline)
-        suggested_weights[key] = sug
-        print(
-            f"  Test #{tc:<25} {w:>5} {l:>5} {t:>6} {rate:>5.1%}  {cur:>+8d}  {sug:>+10d}"
-        )
-
-    subset = [a for a in all_alerts if a.entry_count >= 6]
-    w, l, t, rate = wr(subset)
-    cur = CURRENT_WEIGHTS.get("test_6plus", 0)
-    sug = suggest_weight(rate, baseline)
-    suggested_weights["test_6plus"] = sug
-    print(
-        f"  {'Test #6+':<30} {w:>5} {l:>5} {t:>6} {rate:>5.1%}  {cur:>+8d}  {sug:>+10d}"
-    )
-
-    # Factor 6: Session move
-    print(f"\n  SESSION MOVE (price - day open):")
-    print(
-        f"  {'Bucket':<30} {'W':>5} {'L':>5} {'Total':>6} {'WR%':>6}  {'Current':>8}  {'Suggested':>10}"
-    )
-    print(
-        f"  {'-' * 30} {'-' * 5} {'-' * 5} {'-' * 6} {'-' * 6}  {'-' * 8}  {'-' * 10}"
-    )
-
-    session_buckets = [
-        (
-            "Strongly red (≤-50)",
-            lambda a: a.session_move_pts <= -50,
-            "session_strongly_red",
-        ),
-        (
-            "Mildly red (-50 to 0)",
-            lambda a: -50 < a.session_move_pts <= 0,
-            "session_mildly_red",
-        ),
-        ("Mildly green (0 to 50)", lambda a: 0 < a.session_move_pts <= 50, None),
-        (
-            "Strongly green (>50)",
-            lambda a: a.session_move_pts > 50,
-            "session_strongly_green",
-        ),
-    ]
-    for label, pred, key in session_buckets:
-        subset = [a for a in all_alerts if pred(a)]
-        w, l, t, rate = wr(subset)
-        cur = CURRENT_WEIGHTS.get(key, 0) if key else 0
-        sug = suggest_weight(rate, baseline)
-        if key:
-            suggested_weights[key] = sug
-        print(
-            f"  {label:<30} {w:>5} {l:>5} {t:>6} {rate:>5.1%}  {cur:>+8d}  {sug:>+10d}"
-        )
-
-    # Factor 7: Streak
-    print(f"\n  STREAK:")
-    print(
-        f"  {'Bucket':<30} {'W':>5} {'L':>5} {'Total':>6} {'WR%':>6}  {'Current':>8}  {'Suggested':>10}"
-    )
-    print(
-        f"  {'-' * 30} {'-' * 5} {'-' * 5} {'-' * 6} {'-' * 6}  {'-' * 8}  {'-' * 10}"
-    )
-
-    streak_buckets = [
-        ("2+ consecutive wins", lambda a: a.consecutive_wins >= 2, "streak_wins"),
-        ("2+ consecutive losses", lambda a: a.consecutive_losses >= 2, "streak_losses"),
-        (
-            "Neither/mixed",
-            lambda a: a.consecutive_wins < 2 and a.consecutive_losses < 2,
-            None,
-        ),
-    ]
-    for label, pred, key in streak_buckets:
-        subset = [a for a in all_alerts if pred(a)]
-        w, l, t, rate = wr(subset)
-        cur = CURRENT_WEIGHTS.get(key, 0) if key else 0
-        sug = suggest_weight(rate, baseline)
-        if key:
-            suggested_weights[key] = sug
-        print(
-            f"  {label:<30} {w:>5} {l:>5} {t:>6} {rate:>5.1%}  {cur:>+8d}  {sug:>+10d}"
-        )
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # STEP 3: Re-score with suggested weights and sweep thresholds
-    # ══════════════════════════════════════════════════════════════════════════
-    print_section("STEP 3: Threshold Sweep with Suggested Weights")
-
-    print(f"\n  Suggested weights (changes from current marked with *):")
-    for k in sorted(suggested_weights.keys()):
-        cur = CURRENT_WEIGHTS.get(k, 0)
-        sug = suggested_weights[k]
-        changed = " *" if cur != sug else ""
-        print(f"    {k:<40} current={cur:>+3d}  suggested={sug:>+3d}{changed}")
-
-    # Score all alerts with suggested weights
-    for a in all_alerts:
-        a._suggested_score = composite_score(a, suggested_weights)
-
-    print(
-        f"\n  {'Weights':<12} {'Threshold':<12} {'W':>5}  {'L':>5}  {'Total':>6}  {'WR%':>6}  {'/day':>5}  {'Target':>7}"
-    )
-    print(
-        f"  {'-' * 12} {'-' * 12} {'-' * 5}  {'-' * 5}  {'-' * 6}  {'-' * 6}  {'-' * 5}  {'-' * 7}"
-    )
-
-    for label, score_attr in [
-        ("Current", "_current_score"),
-        ("Suggested", "_suggested_score"),
-    ]:
-        for thr in range(-2, 10):
-            filt = [a for a in all_alerts if getattr(a, score_attr) >= thr]
-            w, l, t, rate = wr(filt)
-            per_day = t / days_loaded
-            target = (
-                "★ YES"
-                if rate >= 0.80 and t >= 600
-                else ("close" if rate >= 0.78 and t >= 500 else "")
-            )
-            print(
-                f"  {label:<12} ≥ {thr:<10} {w:>5}  {l:>5}  {t:>6}  {rate:>5.1%}  {per_day:>5.1f}  {target:>7}"
-            )
-        print()
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # STEP 4: Stability check (split-half)
-    # ══════════════════════════════════════════════════════════════════════════
-    print_section("STEP 4: Split-Half Stability Check")
-
-    mid = days_loaded // 2
-    first_half = [a for a in all_alerts if a.day_index < mid]
-    second_half = [a for a in all_alerts if a.day_index >= mid]
-
-    print(f"\n  First half: {len(first_half)} alerts ({mid} days)")
-    print(f"  Second half: {len(second_half)} alerts ({days_loaded - mid} days)")
-
-    # Check best configurations from Step 3
-    print(
-        f"\n  {'Weights':<12} {'Thr':>4}  {'1st Half WR':>12} {'(n)':>6}  {'2nd Half WR':>12} {'(n)':>6}  {'Stable':>7}"
-    )
-    print(
-        f"  {'-' * 12} {'-' * 4}  {'-' * 12} {'-' * 6}  {'-' * 12} {'-' * 6}  {'-' * 7}"
-    )
-
-    for label, score_attr in [
-        ("Current", "_current_score"),
-        ("Suggested", "_suggested_score"),
-    ]:
-        for thr in range(0, 8):
-            f1 = [a for a in first_half if getattr(a, score_attr) >= thr]
-            f2 = [a for a in second_half if getattr(a, score_attr) >= thr]
-            _, _, t1, r1 = wr(f1)
-            _, _, t2, r2 = wr(f2)
-            stable = (
-                "YES" if r1 >= 0.78 and r2 >= 0.78 and t1 >= 250 and t2 >= 250 else ""
-            )
-            if t1 > 0 and t2 > 0:
+    # 1b. Direction x Level
+    print("\n-- 1b. Direction x Level --")
+    for level in ["FIB_EXT_HI_1.272", "FIB_EXT_LO_1.272", "IBL", "IBH", "VWAP"]:
+        for direction in ["up", "down"]:
+            bucket = [
+                a for a in train_alerts if a.level == level and a.direction == direction
+            ]
+            if bucket:
+                w = sum(1 for a in bucket if a.outcome == "correct")
+                wr = w / len(bucket) * 100
+                suggested = suggest_weight(wr, train_baseline_wr)
                 print(
-                    f"  {label:<12} ≥{thr:<3} {r1:>11.1%} {t1:>5}   {r2:>11.1%} {t2:>5}   {stable:>7}"
+                    f"  {level:<22} x {direction:<5} {w:>5}W {len(bucket)-w:>5}L "
+                    f"{len(bucket):>7} {wr:>6.1f}%  suggested={suggested:+d}"
                 )
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # STEP 5: Recommended scoring function
-    # ══════════════════════════════════════════════════════════════════════════
-    print_section("STEP 5: Recommended _composite_score Updates")
+    # 1c. Time of day
+    print("\n-- 1c. Time of Day --")
+    time_buckets = [
+        (
+            "10:30-12:00",
+            lambda a: a.now_et
+            and 10 * 60 + 30 <= a.now_et.hour * 60 + a.now_et.minute < 12 * 60,
+        ),
+        (
+            "12:00-14:00",
+            lambda a: a.now_et
+            and 12 * 60 <= a.now_et.hour * 60 + a.now_et.minute < 14 * 60,
+        ),
+        (
+            "14:00-15:00",
+            lambda a: a.now_et
+            and 14 * 60 <= a.now_et.hour * 60 + a.now_et.minute < 15 * 60,
+        ),
+        (
+            "15:00-16:00 (power)",
+            lambda a: a.now_et and a.now_et.hour * 60 + a.now_et.minute >= 15 * 60,
+        ),
+    ]
+    for label, fn in time_buckets:
+        bucket = [a for a in train_alerts if fn(a)]
+        if bucket:
+            w = sum(1 for a in bucket if a.outcome == "correct")
+            wr = w / len(bucket) * 100
+            suggested = suggest_weight(wr, train_baseline_wr)
+            print(
+                f"  {label:<30} {w:>5}W {len(bucket)-w:>5}L {len(bucket):>7} "
+                f"{wr:>6.1f}%  suggested={suggested:+d}"
+            )
 
-    # Find best threshold for suggested weights
-    best_thr = None
-    best_count = 0
-    for thr in range(-2, 10):
-        filt = [a for a in all_alerts if a._suggested_score >= thr]
-        w, l, t, rate = wr(filt)
-        if rate >= 0.80 and t >= 600 and t > best_count:
-            best_thr = thr
-            best_count = t
-
-    if best_thr is not None:
-        filt = [a for a in all_alerts if a._suggested_score >= best_thr]
-        w, l, t, rate = wr(filt)
+    # 1d. Tick rate — use data-driven quartiles
+    print("\n-- 1d. Tick Rate (trades/min in 3-min window) --")
+    tick_rates = [a.tick_rate for a in train_alerts if a.tick_rate is not None]
+    if tick_rates:
+        tq = np.percentile(tick_rates, [0, 25, 50, 75, 100])
         print(
-            f"\n  ★ RECOMMENDED: score ≥ {best_thr} → {rate:.1%} WR, {t} alerts ({t/days_loaded:.1f}/day)"
+            f"  Tick rate distribution: min={tq[0]:.0f}, Q25={tq[1]:.0f}, "
+            f"median={tq[2]:.0f}, Q75={tq[3]:.0f}, max={tq[4]:.0f}"
         )
-    else:
-        # Find closest to target
-        print(f"\n  No configuration hit 80%/600+. Closest options:")
-        results = []
-        for thr in range(-2, 10):
-            filt = [a for a in all_alerts if a._suggested_score >= thr]
-            w, l, t, rate = wr(filt)
-            if t > 0:
-                results.append((thr, w, l, t, rate, t / days_loaded))
-        for thr, w, l, t, rate, per_day in results:
-            if rate >= 0.78 or t >= 500:
-                print(f"    ≥{thr}: {rate:.1%} WR, {t} alerts ({per_day:.1f}/day)")
 
-    # Print the suggested weight changes
-    print(f"\n  Weight changes from current → suggested:")
-    changes = []
-    for k in sorted(suggested_weights.keys()):
-        cur = CURRENT_WEIGHTS.get(k, 0)
-        sug = suggested_weights[k]
-        if cur != sug:
-            changes.append((k, cur, sug))
-    if changes:
-        for k, cur, sug in changes:
-            print(f"    {k:<40} {cur:>+3d} → {sug:>+3d}")
-    else:
-        print("    (no changes)")
+        # Show current scoring bands
+        for label, lo, hi in [
+            ("< 1750", 0, 1750),
+            ("1750-2000 (current +2)", 1750, 2000),
+            (">= 2000", 2000, float("inf")),
+        ]:
+            bucket = [
+                a
+                for a in train_alerts
+                if a.tick_rate is not None and lo <= a.tick_rate < hi
+            ]
+            if bucket:
+                w = sum(1 for a in bucket if a.outcome == "correct")
+                wr = w / len(bucket) * 100
+                suggested = suggest_weight(wr, train_baseline_wr)
+                print(
+                    f"  {label:<30} {w:>5}W {len(bucket)-w:>5}L {len(bucket):>7} "
+                    f"{wr:>6.1f}%  suggested={suggested:+d}"
+                )
 
-    print(f"\n{'═' * 80}")
-    print("  Done.")
-    print(f"{'═' * 80}")
+        # Also try quartile-based buckets
+        print("\n  Quartile-based tick rate buckets:")
+        for label, lo, hi in [
+            (f"Q1 (< {tq[1]:.0f})", 0, tq[1]),
+            (f"Q2 ({tq[1]:.0f}-{tq[2]:.0f})", tq[1], tq[2]),
+            (f"Q3 ({tq[2]:.0f}-{tq[3]:.0f})", tq[2], tq[3]),
+            (f"Q4 (> {tq[3]:.0f})", tq[3], float("inf")),
+        ]:
+            bucket = [
+                a
+                for a in train_alerts
+                if a.tick_rate is not None and lo <= a.tick_rate < hi
+            ]
+            if bucket:
+                w = sum(1 for a in bucket if a.outcome == "correct")
+                wr = w / len(bucket) * 100
+                suggested = suggest_weight(wr, train_baseline_wr)
+                print(
+                    f"  {label:<30} {w:>5}W {len(bucket)-w:>5}L {len(bucket):>7} "
+                    f"{wr:>6.1f}%  suggested={suggested:+d}"
+                )
+
+    # 1e. Test count
+    print("\n-- 1e. Test Count --")
+    for tc in range(1, 11):
+        bucket = [a for a in train_alerts if a.entry_count == tc]
+        if bucket:
+            w = sum(1 for a in bucket if a.outcome == "correct")
+            wr = w / len(bucket) * 100
+            suggested = suggest_weight(wr, train_baseline_wr)
+            print(
+                f"  Test #{tc:<3} {w:>5}W {len(bucket)-w:>5}L {len(bucket):>7} "
+                f"{wr:>6.1f}%  suggested={suggested:+d}"
+            )
+    bucket_high = [a for a in train_alerts if a.entry_count >= 10]
+    if bucket_high:
+        w = sum(1 for a in bucket_high if a.outcome == "correct")
+        wr = w / len(bucket_high) * 100
+        print(
+            f"  Test #10+ {w:>5}W {len(bucket_high)-w:>5}L {len(bucket_high):>7} "
+            f"{wr:>6.1f}%"
+        )
+
+    # 1f. Session move
+    print("\n-- 1f. Session Move (pts from day open) --")
+    move_buckets = [
+        (
+            "<= -50 (strong red)",
+            lambda a: a.session_move_pts is not None and a.session_move_pts <= -50,
+        ),
+        (
+            "(-50, -20]",
+            lambda a: a.session_move_pts is not None
+            and -50 < a.session_move_pts <= -20,
+        ),
+        (
+            "(-20, -10] (sweet red)",
+            lambda a: a.session_move_pts is not None
+            and -20 < a.session_move_pts <= -10,
+        ),
+        (
+            "(-10, 0]",
+            lambda a: a.session_move_pts is not None and -10 < a.session_move_pts <= 0,
+        ),
+        (
+            "(0, 10] (near-zero green)",
+            lambda a: a.session_move_pts is not None and 0 < a.session_move_pts <= 10,
+        ),
+        (
+            "(10, 20] (sweet green)",
+            lambda a: a.session_move_pts is not None and 10 < a.session_move_pts <= 20,
+        ),
+        (
+            "(20, 50]",
+            lambda a: a.session_move_pts is not None and 20 < a.session_move_pts <= 50,
+        ),
+        (
+            "> 50 (strong green)",
+            lambda a: a.session_move_pts is not None and a.session_move_pts > 50,
+        ),
+    ]
+    for label, fn in move_buckets:
+        bucket = [a for a in train_alerts if fn(a)]
+        if bucket:
+            w = sum(1 for a in bucket if a.outcome == "correct")
+            wr = w / len(bucket) * 100
+            suggested = suggest_weight(wr, train_baseline_wr)
+            print(
+                f"  {label:<30} {w:>5}W {len(bucket)-w:>5}L {len(bucket):>7} "
+                f"{wr:>6.1f}%  suggested={suggested:+d}"
+            )
+
+    # 1g. Streak
+    print("\n-- 1g. Streak --")
+    streak_buckets = [
+        ("2+ consecutive wins", lambda a: a.consecutive_wins >= 2),
+        (
+            "1 win or fresh",
+            lambda a: a.consecutive_wins <= 1 and a.consecutive_losses <= 1,
+        ),
+        ("2+ consecutive losses", lambda a: a.consecutive_losses >= 2),
+    ]
+    for label, fn in streak_buckets:
+        bucket = [a for a in train_alerts if fn(a)]
+        if bucket:
+            w = sum(1 for a in bucket if a.outcome == "correct")
+            wr = w / len(bucket) * 100
+            suggested = suggest_weight(wr, train_baseline_wr)
+            print(
+                f"  {label:<30} {w:>5}W {len(bucket)-w:>5}L {len(bucket):>7} "
+                f"{wr:>6.1f}%  suggested={suggested:+d}"
+            )
+
+    # ==================================================================
+    # STEP 2: Threshold sweep with CURRENT weights on train and test
+    # ==================================================================
+    print("\n" + "=" * 75)
+    print("STEP 2: Current Weights -- Threshold Sweep")
+    print("=" * 75)
+
+    current_weights = Weights()  # defaults match current scoring.py
+    threshold_sweep(train_alerts, current_weights, len(train_dates), "TRAIN set:")
+    threshold_sweep(
+        test_alerts, current_weights, len(test_dates), "TEST set (out-of-sample):"
+    )
+
+    # ==================================================================
+    # STEP 3: Try optimized weights
+    # ==================================================================
+    print("\n" + "=" * 75)
+    print("STEP 3: Optimized Weights -- Threshold Sweep")
+    print("=" * 75)
+
+    # Compute data-driven weights from train set
+    def train_wr(filter_fn) -> float:
+        bucket = [a for a in train_alerts if filter_fn(a)]
+        if len(bucket) < 30:
+            return train_baseline_wr  # not enough data, use baseline
+        w = sum(1 for a in bucket if a.outcome == "correct")
+        return w / len(bucket) * 100
+
+    # Build optimized weights from train data
+    opt = Weights()
+
+    # Level weights
+    opt.level_fib_hi = suggest_weight(
+        train_wr(lambda a: a.level == "FIB_EXT_HI_1.272"), train_baseline_wr
+    )
+    opt.level_ibl = suggest_weight(
+        train_wr(lambda a: a.level == "IBL"), train_baseline_wr
+    )
+    opt.level_fib_lo = suggest_weight(
+        train_wr(lambda a: a.level == "FIB_EXT_LO_1.272"), train_baseline_wr
+    )
+    opt.level_vwap = suggest_weight(
+        train_wr(lambda a: a.level == "VWAP"), train_baseline_wr
+    )
+    opt.level_ibh = suggest_weight(
+        train_wr(lambda a: a.level == "IBH"), train_baseline_wr
+    )
+
+    # Direction x Level combo weights
+    opt.combo_fib_hi_up = suggest_weight(
+        train_wr(lambda a: a.level == "FIB_EXT_HI_1.272" and a.direction == "up"),
+        train_baseline_wr,
+    )
+    opt.combo_fib_lo_down = suggest_weight(
+        train_wr(lambda a: a.level == "FIB_EXT_LO_1.272" and a.direction == "down"),
+        train_baseline_wr,
+    )
+    opt.combo_ibl_down = suggest_weight(
+        train_wr(lambda a: a.level == "IBL" and a.direction == "down"),
+        train_baseline_wr,
+    )
+    opt.combo_vwap_up = suggest_weight(
+        train_wr(lambda a: a.level == "VWAP" and a.direction == "up"), train_baseline_wr
+    )
+    opt.combo_ibh_up = suggest_weight(
+        train_wr(lambda a: a.level == "IBH" and a.direction == "up"), train_baseline_wr
+    )
+    opt.combo_ibl_up = suggest_weight(
+        train_wr(lambda a: a.level == "IBL" and a.direction == "up"), train_baseline_wr
+    )
+    opt.combo_fib_lo_up = suggest_weight(
+        train_wr(lambda a: a.level == "FIB_EXT_LO_1.272" and a.direction == "up"),
+        train_baseline_wr,
+    )
+    opt.combo_fib_hi_down = suggest_weight(
+        train_wr(lambda a: a.level == "FIB_EXT_HI_1.272" and a.direction == "down"),
+        train_baseline_wr,
+    )
+    opt.combo_vwap_down = suggest_weight(
+        train_wr(lambda a: a.level == "VWAP" and a.direction == "down"),
+        train_baseline_wr,
+    )
+
+    # Time
+    opt.time_power_hour = suggest_weight(
+        train_wr(
+            lambda a: a.now_et and a.now_et.hour * 60 + a.now_et.minute >= 15 * 60
+        ),
+        train_baseline_wr,
+    )
+
+    # Tick rate — check if current bands have signal
+    tick_wr = train_wr(lambda a: a.tick_rate is not None and 1750 <= a.tick_rate < 2000)
+    opt.tick_sweet_spot = suggest_weight(tick_wr, train_baseline_wr)
+
+    # Test count
+    opt.test_1 = suggest_weight(
+        train_wr(lambda a: a.entry_count == 1), train_baseline_wr
+    )
+    opt.test_2 = suggest_weight(
+        train_wr(lambda a: a.entry_count == 2), train_baseline_wr
+    )
+    opt.test_3 = suggest_weight(
+        train_wr(lambda a: a.entry_count == 3), train_baseline_wr
+    )
+    opt.test_5 = suggest_weight(
+        train_wr(lambda a: a.entry_count == 5), train_baseline_wr
+    )
+
+    # Session move
+    opt.move_sweet_green = suggest_weight(
+        train_wr(
+            lambda a: a.session_move_pts is not None and 10 < a.session_move_pts <= 20
+        ),
+        train_baseline_wr,
+    )
+    opt.move_sweet_red = suggest_weight(
+        train_wr(
+            lambda a: a.session_move_pts is not None and -20 < a.session_move_pts <= -10
+        ),
+        train_baseline_wr,
+    )
+    opt.move_strong_red = suggest_weight(
+        train_wr(
+            lambda a: a.session_move_pts is not None and a.session_move_pts <= -50
+        ),
+        train_baseline_wr,
+    )
+    opt.move_near_zero_green = suggest_weight(
+        train_wr(
+            lambda a: a.session_move_pts is not None and 0 < a.session_move_pts <= 10
+        ),
+        train_baseline_wr,
+    )
+    opt.move_strong_green = suggest_weight(
+        train_wr(lambda a: a.session_move_pts is not None and a.session_move_pts > 50),
+        train_baseline_wr,
+    )
+
+    # Streak
+    opt.streak_win_bonus = suggest_weight(
+        train_wr(lambda a: a.consecutive_wins >= 2), train_baseline_wr
+    )
+    opt.streak_loss_penalty = suggest_weight(
+        train_wr(lambda a: a.consecutive_losses >= 2), train_baseline_wr
+    )
+
+    # Print the optimized weights vs current
+    print("\n  Optimized weights (from train data):")
+    for field_name in Weights.__dataclass_fields__:
+        if field_name.startswith("tick_l") or field_name.startswith("tick_h"):
+            continue
+        cur = getattr(current_weights, field_name)
+        new = getattr(opt, field_name)
+        changed = " <-- CHANGED" if cur != new else ""
+        print(f"    {field_name:<25} current={cur:>3}  optimized={new:>3}{changed}")
+
+    threshold_sweep(train_alerts, opt, len(train_dates), "TRAIN set (optimized):")
+    threshold_sweep(
+        test_alerts, opt, len(test_dates), "TEST set (optimized, out-of-sample):"
+    )
+
+    # ==================================================================
+    # STEP 4: Also try IBL x up = 0 specifically (user's request)
+    # ==================================================================
+    print("\n" + "=" * 75)
+    print("STEP 4: Current weights but IBL x up = 0")
+    print("=" * 75)
+
+    ibl_fix = Weights()
+    ibl_fix.combo_ibl_up = 0
+
+    threshold_sweep(train_alerts, ibl_fix, len(train_dates), "TRAIN set (IBL x up=0):")
+    threshold_sweep(
+        test_alerts, ibl_fix, len(test_dates), "TEST set (IBL x up=0, out-of-sample):"
+    )
+
+    # ==================================================================
+    # STEP 5: Best candidates -- try multiple weight configs
+    # ==================================================================
+    print("\n" + "=" * 75)
+    print("STEP 5: Configuration Comparison at Various Thresholds")
+    print("=" * 75)
+
+    configs: list[tuple[str, Weights]] = [
+        ("current", current_weights),
+        ("IBL-up=0", ibl_fix),
+        ("optimized", opt),
+    ]
+
+    # Also try a "conservative optimized" — only change weights with strong signal
+    conservative = Weights()
+    conservative.combo_ibl_up = 0  # IBL x up fix
+    # Only adopt optimized weights where the delta from current is significant
+    for field_name in Weights.__dataclass_fields__:
+        if field_name.startswith("tick_"):
+            continue
+        cur = getattr(current_weights, field_name)
+        new = getattr(opt, field_name)
+        if abs(new - cur) >= 2:  # only big changes
+            setattr(conservative, field_name, new)
+    configs.append(("conservative", conservative))
+
+    print(
+        f"\n  {'Config':<25} {'Thresh':>6} {'W':>5} {'L':>5} {'Total':>7} "
+        f"{'WR%':>7} {'/day':>6} {'Test WR%':>9} {'Test/day':>9}"
+    )
+    print(f"  {'-'*85}")
+
+    for label, weights in configs:
+        for thresh in [3, 4, 5, 6]:
+            train_scored = [(a, score_alert(a, weights)) for a in train_alerts]
+            test_scored = [(a, score_alert(a, weights)) for a in test_alerts]
+
+            train_pass = [(a, s) for a, s in train_scored if s >= thresh]
+            test_pass = [(a, s) for a, s in test_scored if s >= thresh]
+
+            tw = sum(1 for a, _ in train_pass if a.outcome == "correct")
+            tn = len(train_pass)
+            twr = tw / tn * 100 if tn > 0 else 0
+
+            ow = sum(1 for a, _ in test_pass if a.outcome == "correct")
+            on = len(test_pass)
+            owr = ow / on * 100 if on > 0 else 0
+
+            train_per_day = tn / len(train_dates) if train_dates else 0
+            test_per_day = on / len(test_dates) if test_dates else 0
+
+            marker = " <--" if label == "current" and thresh == 5 else ""
+            print(
+                f"  {label:<25} {thresh:>6} {tw:>5} {tn-tw:>5} {tn:>7} "
+                f"{twr:>6.1f}% {train_per_day:>5.1f} {owr:>8.1f}% {test_per_day:>8.1f}{marker}"
+            )
+
+    # ==================================================================
+    # STEP 6: Stability — split train in half
+    # ==================================================================
+    print("\n" + "=" * 75)
+    print("STEP 6: Stability Check (train first-half vs second-half)")
+    print("=" * 75)
+
+    half = len(train_dates) // 2
+    half1_dates = set(train_dates[:half])
+    half2_dates = set(train_dates[half:])
+    half1 = [a for a in train_alerts if a.date in half1_dates]
+    half2 = [a for a in train_alerts if a.date in half2_dates]
+
+    for label, weights in [
+        ("current", current_weights),
+        ("optimized", opt),
+        ("IBL-up=0", ibl_fix),
+        ("conservative", conservative),
+    ]:
+        for thresh in [4, 5]:
+            h1_pass = [
+                (a, s) for a in half1 if (s := score_alert(a, weights)) >= thresh
+            ]
+            h2_pass = [
+                (a, s) for a in half2 if (s := score_alert(a, weights)) >= thresh
+            ]
+
+            h1w = sum(1 for a, _ in h1_pass if a.outcome == "correct")
+            h2w = sum(1 for a, _ in h2_pass if a.outcome == "correct")
+            h1n = len(h1_pass)
+            h2n = len(h2_pass)
+            h1wr = h1w / h1n * 100 if h1n > 0 else 0
+            h2wr = h2w / h2n * 100 if h2n > 0 else 0
+
+            stable = "OK" if min(h1wr, h2wr) >= 78 else "UNSTABLE"
+            print(
+                f"  {label:<20} >={thresh}: Half1={h1wr:.1f}% ({h1n}) "
+                f"Half2={h2wr:.1f}% ({h2n})  {stable}"
+            )
 
 
 if __name__ == "__main__":

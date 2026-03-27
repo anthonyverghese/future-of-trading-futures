@@ -85,8 +85,9 @@ class TestDirectionLevel:
     def test_ibh_up_minus1(self):
         assert composite_score(**_base(level_name="IBH", direction="up")) == -1 + (-1)
 
-    def test_ibl_up_minus1(self):
-        assert composite_score(**_base(level_name="IBL", direction="up")) == 1 + (-1)
+    def test_ibl_up_zero(self):
+        # IBL×up: near baseline, no combo penalty
+        assert composite_score(**_base(level_name="IBL", direction="up")) == 1 + 0
 
     def test_fib_lo_up_minus1(self):
         assert composite_score(
@@ -292,15 +293,15 @@ class TestScoreTier:
         assert label == "Strong"
         assert wr == "~85%"
 
-    def test_score_5_good(self):
+    def test_score_5_strong(self):
         label, wr = score_tier(5)
-        assert label == "Good"
+        assert label == "Strong"
         assert wr == "~85%"
 
     def test_score_4_good(self):
-        # Below MIN_SCORE still returns a tier (caller decides suppression)
-        label, _ = score_tier(4)
+        label, wr = score_tier(4)
         assert label == "Good"
+        assert wr == "~84%"
 
     def test_score_0_good(self):
         label, _ = score_tier(0)
@@ -318,10 +319,10 @@ class TestScoreTier:
 
 class TestConstants:
     def test_min_score(self):
-        assert MIN_SCORE == 5
+        assert MIN_SCORE == 4
 
     def test_tier_labels_keys(self):
-        assert set(TIER_LABELS.keys()) == {5, 6, 7}
+        assert set(TIER_LABELS.keys()) == {4, 5, 7}
 
 
 # ===================================================================
@@ -401,14 +402,14 @@ class TestCombined:
         assert score == 0
 
     def test_boundary_exactly_min_score(self):
-        """Construct a scenario that scores exactly MIN_SCORE (5)."""
+        """Construct a scenario that scores exactly MIN_SCORE (4)."""
         score = composite_score(
             level_name="FIB_EXT_HI_1.272",  # +2
             direction="up",  # +2
-            entry_count=2,  # +1
+            entry_count=4,  # 0
             now_et=datetime.time(12, 0),  # 0
             tick_rate=None,  # 0
             session_move_pts=None,  # 0
         )
-        assert score == 5
+        assert score == 4
         assert score == MIN_SCORE

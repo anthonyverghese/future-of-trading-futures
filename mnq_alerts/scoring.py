@@ -1,12 +1,12 @@
 """
-scoring.py — Composite alert quality scoring (data-driven weights from 206-day backtest).
+scoring.py — Composite alert quality scoring (214-day backtest, train/test validated).
 
 Separated from alert_manager.py so scoring logic can be tested, tuned, and
 backtested independently of the zone state machine and notification plumbing.
 
 Components (each contributes an integer score):
   Level:           FIB_EXT_HI +2, IBL/FIB_EXT_LO +1, VWAP/IBH -1
-  Direction×Level: strong combos +1/+2, weak combos -1
+  Direction×Level: strong combos +1/+2, weak combos -1, IBL×up 0
   Time of day:     power hour +2, all others 0
   Tick rate:       1750-2000 +2, all others 0
   Test count:      #2/#5 +1, #1/#3 -1
@@ -21,14 +21,14 @@ import datetime
 from dataclasses import dataclass
 
 # Minimum composite score to fire a notification.
-# Score ≥5 → ~85% win rate at ~4.9 alerts/day (206-day backtest, 1,004 samples).
-MIN_SCORE = 5
+# Score ≥4 → ~84% win rate at ~9/day (214-day backtest, train/test validated).
+MIN_SCORE = 4
 
-# Signal strength tiers shown in notifications (206-day backtest, data-driven weights).
+# Signal strength tiers shown in notifications (214-day backtest, train/test validated).
 TIER_LABELS: dict[int, tuple[str, str]] = {
     # score_min: (tier_label, backtest_win_rate for this bucket)
-    5: ("Good", "~85%"),  # score 5
-    6: ("Strong", "~85%"),  # score 6
+    4: ("Good", "~84%"),  # score 4
+    5: ("Strong", "~85%"),  # score 5-6
     7: ("Elite", "~88%"),  # score 7+
 }
 
@@ -77,7 +77,7 @@ def composite_score(
     consecutive_losses: int = 0,
     breakdown: bool = False,
 ) -> int | tuple[int, ScoreBreakdown]:
-    """Compute composite alert quality score (206-day backtest, data-driven weights).
+    """Compute composite alert quality score (214-day backtest, train/test validated).
 
     Returns an integer score; alerts with score < MIN_SCORE should be suppressed.
     If breakdown=True, returns (score, ScoreBreakdown) for logging/debugging.
@@ -107,13 +107,13 @@ def composite_score(
             bd.combo = 1
         # Weak combos
         elif c in (
-            ("IBH", "up"),  # 70.1% (284 trades)
-            ("IBL", "up"),  # 74.4% (433 trades)
-            ("FIB_EXT_LO_1.272", "up"),  # 76.2% (349 trades)
-            ("FIB_EXT_HI_1.272", "down"),  # 76.2% (298 trades)
-            ("VWAP", "down"),  # 70.4% (673 trades)
+            ("IBH", "up"),  # 67.4% (172 trades)
+            ("FIB_EXT_LO_1.272", "up"),  # 79.5% (283 trades)
+            ("FIB_EXT_HI_1.272", "down"),  # 73.7% (213 trades)
+            ("VWAP", "down"),  # 69.0% (435 trades)
         ):
             bd.combo = -1
+        # IBL×up: 73.3% — near baseline, no penalty (validated on test set)
 
     # Time of day (only power hour is meaningfully above baseline)
     if now_et is not None:
@@ -170,6 +170,6 @@ def score_tier(score: int) -> tuple[str, str]:
     """Return (tier_label, backtest_win_rate) for a given composite score."""
     if score >= 7:
         return TIER_LABELS[7]
-    elif score >= 6:
-        return TIER_LABELS[6]
-    return TIER_LABELS[5]
+    elif score >= 5:
+        return TIER_LABELS[5]
+    return TIER_LABELS[4]
