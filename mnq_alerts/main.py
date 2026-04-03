@@ -252,8 +252,12 @@ def run() -> None:
                     f"Win rate: {wr:.0f}%",
                 )
 
-            # Cancel any open orders and flatten positions at market close.
-            if bot is not None:
+            # Bot daily summary notification + close.
+            if bot is not None and bot.is_connected:
+                send_notification(
+                    f"Bot Daily Summary — {today.strftime('%m/%d')}",
+                    bot.daily_summary,
+                )
                 bot.close_session()
 
             save_trades(get_session_trades())

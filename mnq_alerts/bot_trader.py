@@ -127,3 +127,21 @@ class BotTrader:
     @property
     def daily_stats(self) -> str:
         return self._broker.daily_stats
+
+    @property
+    def daily_summary(self) -> str:
+        """Multi-line summary for end-of-day push notification."""
+        b = self._broker
+        total = b._trades_today
+        if total == 0:
+            return "No trades today"
+        wr = b._wins_today / total * 100 if total > 0 else 0
+        lines = [
+            f"{total} trades",
+            f"W {b._wins_today} / L {b._losses_today}",
+            f"Win rate: {wr:.0f}%",
+            f"P&L: ${b._daily_pnl_usd:+.2f}",
+        ]
+        if b._stopped_for_day:
+            lines.append(f"Stopped: {b._stop_reason}")
+        return "\n".join(lines)
