@@ -370,7 +370,10 @@ def run() -> None:
                         alert_id, line_price, direction, ts_et, today.isoformat()
                     )
                     fired_levels.add((line_name, line_price, direction))
-                    if broker is not None and broker.is_connected:
+                # Bot trades on ALL zone entries (not just scored alerts) —
+                # matches the bot_risk_backtest which was optimized on all entries.
+                if broker is not None and broker.is_connected:
+                    for line_name, line_price, direction in all_zone_entries:
                         allowed, reason = broker.can_trade()
                         if allowed:
                             result = broker.submit_bracket(
