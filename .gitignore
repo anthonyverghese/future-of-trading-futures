@@ -2,6 +2,7 @@
 *.pyc
 __pycache__/
 mnq_alerts/.env
+ib-gateway.env
 mnq_alerts/.session_cache.db
 mnq_alerts/alert_model.joblib
 mnq_alerts/data_cache/

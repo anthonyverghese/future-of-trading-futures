@@ -76,6 +76,7 @@ PUSHOVER_USER_KEY=...
 # Optional — paper trading (disabled by default)
 IBKR_TRADING_ENABLED=false
 IBKR_PORT=4002
+IBKR_ACCOUNT=DU1234567
 ```
 
 Pushover notifications use priority 1 (high — bypasses quiet hours).
@@ -136,27 +137,35 @@ sudo journalctl -u mnq-alerts -f
 ### Paper trading with IB Gateway (optional)
 
 Enables automated bracket order submission (market entry + limit TP + stop SL)
-when alerts fire. Disabled by default — requires IB Gateway running on the same host.
+when alerts fire. Disabled by default — requires IB Gateway running in Docker.
+
+Uses [gnzsnz/ib-gateway-docker](https://github.com/gnzsnz/ib-gateway-docker) for
+IB Gateway + IBC + VNC in a single container. 2FA required once per week via VNC.
 
 ```bash
-# 1. Run the setup script (installs Xvfb, IB Gateway, IBC)
+# 1. Configure IB Gateway credentials
+cp ib-gateway.env.example ib-gateway.env
+vi ib-gateway.env   # set TWS_USERID, TWS_PASSWORD, VNC_SERVER_PASSWORD
+
+# 2. Enable trading in the app's .env
+echo "IBKR_TRADING_ENABLED=true" >> mnq_alerts/.env
+echo "IBKR_PORT=4002" >> mnq_alerts/.env
+echo "IBKR_ACCOUNT=DU1234567" >> mnq_alerts/.env  # your paper account ID
+
+# 3. Run setup (installs Docker, starts container)
 chmod +x setup-ib-gateway.sh
 ./setup-ib-gateway.sh
 
-# 2. Configure IBC credentials
-vi ~/ibc/config.ini   # set IbLoginId and IbPassword
-
-# 3. Enable trading in .env
-echo "IBKR_TRADING_ENABLED=true" >> mnq_alerts/.env
-echo "IBKR_PORT=4002" >> mnq_alerts/.env
-
-# 4. Start IB Gateway and verify
-sudo systemctl start ib-gateway
-sudo journalctl -u ib-gateway -f
+# 4. Complete 2FA via VNC (from your local machine):
+#    ssh -NL 5900:localhost:5900 -i FuturesTrader.pem ec2-user@<EC2_IP>
+#    Then open vnc://localhost:5900 and approve the IBKR Mobile prompt
 
 # 5. Restart the trading app
 sudo systemctl restart mnq-alerts
 ```
+
+Weekly maintenance: VNC in on Sunday evening to approve the 2FA prompt.
+IB Gateway auto-restarts daily at 11:59 PM ET without re-prompting.
 
 Risk controls (validated over 214 days in `bot_risk_backtest.py`):
 - 1 position at a time (no stacking)

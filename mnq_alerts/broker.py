@@ -22,6 +22,7 @@ from config import (
     BOT_STOP_POINTS,
     BOT_TARGET_POINTS,
     DAILY_LOSS_LIMIT_USD,
+    IBKR_ACCOUNT,
     IBKR_CLIENT_ID,
     IBKR_HOST,
     IBKR_PORT,
@@ -99,6 +100,23 @@ class IBKRBroker:
             self._ib = IB()
             self._ib.connect(IBKR_HOST, IBKR_PORT, clientId=IBKR_CLIENT_ID)
             self._connected = True
+
+            # Verify we're on the expected account (safety check).
+            managed = self._ib.managedAccounts()
+            if IBKR_ACCOUNT:
+                if IBKR_ACCOUNT not in managed:
+                    print(
+                        f"[broker] FATAL: Expected account {IBKR_ACCOUNT} "
+                        f"but connected to {managed}. Aborting."
+                    )
+                    self._ib.disconnect()
+                    self._connected = False
+                    return False
+                print(f"[broker] Account verified: {IBKR_ACCOUNT}")
+            else:
+                print(
+                    f"[broker] WARNING: IBKR_ACCOUNT not set. Connected accounts: {managed}"
+                )
 
             # Register fill callback for risk tracking.
             self._ib.orderStatusEvent += self._on_order_status

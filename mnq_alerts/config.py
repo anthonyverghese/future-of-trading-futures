@@ -49,6 +49,9 @@ IBKR_TRADING_ENABLED = os.getenv("IBKR_TRADING_ENABLED", "false").lower() == "tr
 IBKR_HOST = os.getenv("IBKR_HOST", "127.0.0.1")
 IBKR_PORT = int(os.getenv("IBKR_PORT", "4002"))  # 4002=Gateway paper, 4001=Gateway live
 IBKR_CLIENT_ID = int(os.getenv("IBKR_CLIENT_ID", "1"))
+IBKR_ACCOUNT = os.getenv(
+    "IBKR_ACCOUNT", ""
+)  # Paper account ID (e.g. "DU1234567") — verified at startup
 
 # Bot trading parameters (validated via bot_risk_backtest.py over 214 days).
 BOT_TARGET_POINTS = 12.0  # Take profit distance from line price

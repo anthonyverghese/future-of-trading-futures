@@ -1,6 +1,6 @@
 [Unit]
 Description=MNQ Alert System
-After=network.target ib-gateway.service
+After=network.target docker.service
 
 [Service]
 Type=simple

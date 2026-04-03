@@ -1,0 +1,13 @@
+services:
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    restart: always
+    env_file:
+      - ib-gateway.env
+    ports:
+      - "127.0.0.1:4002:4004"  # Paper trading API
+      - "127.0.0.1:5900:5900"  # VNC for weekly 2FA
+    ulimits:
+      nofile:
+        soft: 10000
+        hard: 10000
