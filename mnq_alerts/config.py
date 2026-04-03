@@ -41,6 +41,21 @@ EVAL_WINDOW_MINS = 15  # Minutes after hitting line to evaluate outcome
 PUSHOVER_TOKEN = os.getenv("PUSHOVER_TOKEN", "")
 PUSHOVER_USER_KEY = os.getenv("PUSHOVER_USER_KEY", "")
 
+# ── IBKR Trading ──────────────────────────────────────────────────────────────
+# Set IBKR_TRADING_ENABLED=true in .env to enable live order submission.
+# Requires IB Gateway or TWS running with API access on IBKR_HOST:IBKR_PORT.
+
+IBKR_TRADING_ENABLED = os.getenv("IBKR_TRADING_ENABLED", "false").lower() == "true"
+IBKR_HOST = os.getenv("IBKR_HOST", "127.0.0.1")
+IBKR_PORT = int(os.getenv("IBKR_PORT", "4002"))  # 4002=Gateway paper, 4001=Gateway live
+IBKR_CLIENT_ID = int(os.getenv("IBKR_CLIENT_ID", "1"))
+
+# Bot trading parameters (validated via bot_risk_backtest.py over 214 days).
+BOT_TARGET_POINTS = 12.0  # Take profit distance from line price
+BOT_STOP_POINTS = 25.0  # Stop loss distance from line price
+DAILY_LOSS_LIMIT_USD = 150.0  # Stop trading for the day after losing this much
+MAX_CONSECUTIVE_LOSSES = 3  # Stop trading for the day after N straight losses
+
 # ── Display ─────────────────────────────────────────────────────────────────────
 # Override the auto-detected local timezone for log timestamps.
 # Useful on EC2 where the system timezone is UTC.

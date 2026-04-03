@@ -23,6 +23,7 @@ from config import (
     DISPLAY_TZ,
     IB_END_HOUR,
     IB_END_MIN,
+    IBKR_TRADING_ENABLED,
     MARKET_CLOSE_HOUR,
     MARKET_CLOSE_MIN,
     MARKET_OPEN_HOUR,
@@ -153,6 +154,16 @@ def run() -> None:
         f"(wins: {evaluator.consecutive_wins}, "
         f"losses: {evaluator.consecutive_losses})"
     )
+
+    # IBKR broker — connects only when trading is enabled.
+    # Risk controls: 1 position at a time, $150/day loss limit, 3 consec loss limit.
+    broker = None
+    if IBKR_TRADING_ENABLED:
+        from broker import IBKRBroker
+
+        broker = IBKRBroker()
+        broker.connect()
+
     ib_locked = False
     ibh: float | None = None
     ibl: float | None = None
@@ -241,6 +252,12 @@ def run() -> None:
                     f"Win rate: {wr:.0f}%",
                 )
 
+            # Cancel any open orders and flatten positions at market close.
+            if broker is not None and broker.is_connected:
+                broker.cancel_all_mnq_orders()
+                broker.flatten_positions()
+                broker.disconnect()
+
             save_trades(get_session_trades())
             print(
                 f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] "
@@ -264,6 +281,8 @@ def run() -> None:
             last_session_date = today
             last_cache_ts = 0.0
             session_closed = False
+            if broker is not None:
+                broker.reset_daily_state()
             vwap_sum_pv = 0.0
             vwap_sum_vol = 0
             vwap = None
@@ -318,6 +337,11 @@ def run() -> None:
                     f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] IB period done but no trade data yet."
                 )
 
+        # Pump ib_insync event loop so fill callbacks fire.
+        # Without this, the broker won't know when positions close.
+        if broker is not None and broker.is_connected:
+            broker.process_events()
+
         if trade_time >= IB_END:
             # During replay ts_et lags wall time; only notify for live trades.
             trade_lag = (now - ts_et).total_seconds()
@@ -346,6 +370,19 @@ def run() -> None:
                         alert_id, line_price, direction, ts_et, today.isoformat()
                     )
                     fired_levels.add((line_name, line_price, direction))
+                    if broker is not None and broker.is_connected:
+                        allowed, reason = broker.can_trade()
+                        if allowed:
+                            result = broker.submit_bracket(
+                                direction=direction,
+                                current_price=price,
+                                line_price=line_price,
+                                level_name=line_name,
+                            )
+                            if not result.success:
+                                print(f"[broker] Trade failed: {result.error}")
+                        else:
+                            print(f"[broker] Skipped {line_name}: {reason}")
                 # Track suppressed zone entries for streak computation —
                 # matches how the backtest computes streaks across ALL entries.
                 for line_name, line_price, direction in all_zone_entries:
