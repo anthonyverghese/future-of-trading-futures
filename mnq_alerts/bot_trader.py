@@ -77,15 +77,19 @@ class BotTrader:
         ibl: float | None = None,
         vwap: float | None = None,
     ) -> None:
-        """Bulk update levels (mirrors AlertManager.update_levels)."""
+        """Bulk update levels. Updates price on existing zones without resetting state."""
         for name, price in {"IBH": ibh, "IBL": ibl, "VWAP": vwap}.items():
             if price is not None:
-                self._zones[name] = BotZone(name, price)
+                if name in self._zones:
+                    self._zones[name].price = price
+                else:
+                    self._zones[name] = BotZone(name, price)
 
     def update_fib_levels(self, fib_levels: dict[str, float]) -> None:
         """Register fib levels for bot zone tracking."""
         for name, price in fib_levels.items():
-            self._zones[name] = BotZone(name, price)
+            if name not in self._zones:
+                self._zones[name] = BotZone(name, price)
 
     def on_tick(self, price: float) -> None:
         """Check all bot zones and submit orders on fresh entries."""

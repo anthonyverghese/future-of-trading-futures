@@ -162,7 +162,11 @@ def run() -> None:
         from bot_trader import BotTrader
 
         bot = BotTrader()
-        bot.connect()
+        if not bot.connect():
+            send_notification(
+                "Bot Connection Failed",
+                "Could not connect to IB Gateway. Bot will retry on first trade.",
+            )
 
     ib_locked = False
     ibh: float | None = None

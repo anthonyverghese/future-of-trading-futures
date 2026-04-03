@@ -269,10 +269,10 @@ class IBKRBroker:
                 # Fallback: infer from order type.
                 if order.orderType == "LMT":
                     pnl_pts = self._pending_target_pts
-                    pnl_usd = (pnl_pts - 0.27) * MNQ_POINT_VALUE
+                    pnl_usd = pnl_pts * MNQ_POINT_VALUE - 0.54
                 else:
                     pnl_pts = -self._pending_stop_pts
-                    pnl_usd = -(self._pending_stop_pts + 0.27) * MNQ_POINT_VALUE
+                    pnl_usd = pnl_pts * MNQ_POINT_VALUE - 0.54
 
             self._daily_pnl_usd += pnl_usd
 
@@ -314,11 +314,17 @@ class IBKRBroker:
                 return None
             resolved = qualified[0]
             # CONTFUT should resolve to FUT after qualification.
-            if resolved.secType not in ("FUT", "CONTFUT"):
-                print(
-                    f"[broker] WARNING: Unexpected secType after qualifying: "
-                    f"{resolved.secType}"
-                )
+            # If still CONTFUT, re-qualify as FUT using the resolved conId.
+            if resolved.secType == "CONTFUT":
+                print("[broker] CONTFUT not resolved to FUT — re-qualifying via conId")
+                fut = Contract(conId=resolved.conId)
+                fut_qualified = self._ib.qualifyContracts(fut)
+                if fut_qualified and fut_qualified[0].secType == "FUT":
+                    resolved = fut_qualified[0]
+                else:
+                    print(
+                        "[broker] WARNING: Could not resolve to tradeable FUT contract"
+                    )
             return resolved
         except Exception as exc:
             print(f"[broker] Contract qualification failed: {exc}")
