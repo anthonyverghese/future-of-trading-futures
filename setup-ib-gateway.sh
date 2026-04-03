@@ -5,7 +5,7 @@
 #   chmod +x setup-ib-gateway.sh
 #   ./setup-ib-gateway.sh
 #
-# Prerequisites: fill in ib-gateway.env with your IBKR credentials first.
+# Prerequisites: fill in ib-gateway.env and mnq_alerts/.env with credentials first.
 
 set -euo pipefail
 
@@ -17,11 +17,10 @@ if ! command -v docker &> /dev/null; then
     sudo dnf install -y docker
     sudo systemctl enable --now docker
     sudo usermod -aG docker ec2-user
-    echo "=== Docker installed. You may need to log out and back in for group changes. ==="
 fi
 
 # ── Install Docker Compose plugin ────────────────────────────────────────────
-if ! docker compose version &> /dev/null; then
+if ! sudo docker compose version &> /dev/null; then
     echo "=== Installing Docker Compose plugin ==="
     sudo mkdir -p /usr/local/lib/docker/cli-plugins
     sudo curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m)" \
@@ -29,7 +28,7 @@ if ! docker compose version &> /dev/null; then
     sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 fi
 
-# ── Validate config ──────────────────────────────────────────────────────────
+# ── Validate configs ─────────────────────────────────────────────────────────
 ENV_FILE="${REPO_DIR}/ib-gateway.env"
 if [ ! -f "$ENV_FILE" ]; then
     echo "ERROR: ${ENV_FILE} not found."
@@ -42,25 +41,39 @@ if grep -q "TWS_USERID=$" "$ENV_FILE" || grep -q "TWS_PASSWORD=$" "$ENV_FILE"; t
     exit 1
 fi
 
-# ── Sunday 2FA reminder (Pushover notification) ─────────────────────────────
-echo "=== Installing 2FA reminder timer ==="
+APP_ENV="${REPO_DIR}/mnq_alerts/.env"
+if ! grep -q "IBKR_TRADING_ENABLED=true" "$APP_ENV" 2>/dev/null; then
+    echo "WARNING: IBKR_TRADING_ENABLED=true not found in ${APP_ENV}"
+    echo "The bot will run but won't submit orders."
+fi
+
+if ! grep -q "IBKR_ACCOUNT=" "$APP_ENV" 2>/dev/null; then
+    echo "WARNING: IBKR_ACCOUNT not set in ${APP_ENV} — no account safety check"
+fi
+
+# ── Update systemd services ──────────────────────────────────────────────────
+echo "=== Updating systemd services ==="
+sudo cp "${REPO_DIR}/mnq-alerts.service" "${REPO_DIR}/mnq-alerts.timer" /etc/systemd/system/
+sudo cp "${REPO_DIR}/mnq-backup.service" "${REPO_DIR}/mnq-backup.timer" /etc/systemd/system/
 sudo cp "${REPO_DIR}/mnq-2fa-reminder.service" "${REPO_DIR}/mnq-2fa-reminder.timer" /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now mnq-2fa-reminder.timer
+sudo systemctl enable mnq-2fa-reminder.timer
+sudo systemctl start mnq-2fa-reminder.timer
 
 # ── Launch IB Gateway container ──────────────────────────────────────────────
 echo "=== Starting IB Gateway container ==="
 cd "$REPO_DIR"
-docker compose up -d ib-gateway
+sudo docker compose up -d ib-gateway
 
 echo ""
 echo "=== Setup complete ==="
 echo ""
 echo "IB Gateway is starting. Check logs:"
-echo "  docker compose logs -f ib-gateway"
+echo "  sudo docker compose logs -f ib-gateway"
 echo ""
-echo "VNC access for weekly 2FA (from your local machine):"
+echo "Next: VNC in to approve 2FA (from your local machine):"
 echo "  ssh -NL 5900:localhost:5900 -i FuturesTrader.pem ec2-user@<EC2_IP>"
-echo "  Then open vnc://localhost:5900 (password: in ib-gateway.env)"
+echo "  Then open vnc://localhost:5900"
 echo ""
-echo "API available at localhost:4002 (paper trading)"
+echo "After 2FA is approved, restart the trading app:"
+echo "  sudo systemctl restart mnq-alerts"
