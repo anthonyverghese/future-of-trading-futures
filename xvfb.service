@@ -1,0 +1,11 @@
+[Unit]
+Description=Virtual framebuffer X server (for headless IB Gateway)
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/Xvfb :1 -screen 0 1024x768x24
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

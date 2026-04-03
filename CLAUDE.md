@@ -72,6 +72,10 @@ Requires Python 3.9+. The `databento` SDK includes a compiled Rust extension
 DATABENTO_API_KEY=...
 PUSHOVER_TOKEN=...
 PUSHOVER_USER_KEY=...
+
+# Optional — paper trading (disabled by default)
+IBKR_TRADING_ENABLED=false
+IBKR_PORT=4002
 ```
 
 Pushover notifications use priority 1 (high — bypasses quiet hours).
@@ -128,6 +132,37 @@ sudo systemctl start mnq-backup.timer
 # Check logs
 sudo journalctl -u mnq-alerts -f
 ```
+
+### Paper trading with IB Gateway (optional)
+
+Enables automated bracket order submission (market entry + limit TP + stop SL)
+when alerts fire. Disabled by default — requires IB Gateway running on the same host.
+
+```bash
+# 1. Run the setup script (installs Xvfb, IB Gateway, IBC)
+chmod +x setup-ib-gateway.sh
+./setup-ib-gateway.sh
+
+# 2. Configure IBC credentials
+vi ~/ibc/config.ini   # set IbLoginId and IbPassword
+
+# 3. Enable trading in .env
+echo "IBKR_TRADING_ENABLED=true" >> mnq_alerts/.env
+echo "IBKR_PORT=4002" >> mnq_alerts/.env
+
+# 4. Start IB Gateway and verify
+sudo systemctl start ib-gateway
+sudo journalctl -u ib-gateway -f
+
+# 5. Restart the trading app
+sudo systemctl restart mnq-alerts
+```
+
+Risk controls (validated over 214 days in `bot_risk_backtest.py`):
+- 1 position at a time (no stacking)
+- $150/day loss limit — stops trading for the day
+- 3 consecutive losses — stops trading for the day
+- Target: +12 pts ($24), Stop: -25 pts ($50)
 
 ### Updating the app after a code change
 
