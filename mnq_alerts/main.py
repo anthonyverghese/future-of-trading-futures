@@ -20,6 +20,8 @@ import pytz
 from alert_manager import AlertManager
 from config import (
     ALERT_THRESHOLD_POINTS,
+    BOT_ENTRY_THRESHOLD,
+    BOT_EXIT_THRESHOLD,
     DISPLAY_TZ,
     IB_END_HOUR,
     IB_END_MIN,
@@ -66,6 +68,35 @@ IB_END = datetime.time(IB_END_HOUR, IB_END_MIN)
 
 # Throttle console status output to avoid flooding the terminal.
 _STATUS_INTERVAL_SECONDS = 5
+
+
+class BotZone:
+    """Lightweight zone tracker for bot trading (1pt entry, 15pt exit).
+
+    Separate from the human alert LevelState which uses 7pt/20pt thresholds.
+    """
+
+    def __init__(self, name: str, price: float) -> None:
+        self.name = name
+        self.price = price
+        self.in_zone = False
+        self._ref_price: float | None = None
+
+    def update(self, current_price: float) -> bool:
+        """Returns True on fresh zone entry (price within BOT_ENTRY_THRESHOLD)."""
+        if self.in_zone:
+            if (
+                self._ref_price is not None
+                and abs(current_price - self._ref_price) > BOT_EXIT_THRESHOLD
+            ):
+                self.in_zone = False
+                self._ref_price = None
+            return False
+        if abs(current_price - self.price) <= BOT_ENTRY_THRESHOLD:
+            self.in_zone = True
+            self._ref_price = self.price
+            return True
+        return False
 
 
 def is_market_open(now: datetime.datetime) -> bool:
@@ -158,6 +189,7 @@ def run() -> None:
     # IBKR broker — connects only when trading is enabled.
     # Risk controls: 1 position at a time, $150/day loss limit, 3 consec loss limit.
     broker = None
+    bot_zones: dict[str, BotZone] = {}  # separate zone tracking for bot (1pt threshold)
     if IBKR_TRADING_ENABLED:
         from broker import IBKRBroker
 
@@ -283,6 +315,7 @@ def run() -> None:
             session_closed = False
             if broker is not None:
                 broker.reset_daily_state()
+                bot_zones.clear()
             vwap_sum_pv = 0.0
             vwap_sum_vol = 0
             vwap = None
@@ -305,6 +338,8 @@ def run() -> None:
             if vwap_sum_vol > 0:
                 vwap = vwap_sum_pv / vwap_sum_vol
                 alert_manager.update_levels(ibh=None, ibl=None, vwap=vwap)
+                if broker is not None:
+                    bot_zones["VWAP"] = BotZone("VWAP", vwap)
 
         # Update incremental IB high/low (9:30–10:30 AM ET).
         if not ib_locked and MARKET_OPEN <= trade_time < IB_END:
@@ -325,9 +360,15 @@ def run() -> None:
                     f"IB locked — IBH: {ibh:.2f}, IBL: {ibl:.2f}"
                 )
                 ib_locked = True
+                if broker is not None:
+                    bot_zones["IBH"] = BotZone("IBH", ibh)
+                    bot_zones["IBL"] = BotZone("IBL", ibl)
                 upsert_daily_stats(today.isoformat(), ibh=ibh, ibl=ibl)
                 fib_levels = calculate_fib_levels(ibh, ibl)
                 alert_manager.update_fib_levels(fib_levels)
+                if broker is not None:
+                    for name, fib_price in fib_levels.items():
+                        bot_zones[name] = BotZone(name, fib_price)
                 fib_str = ", ".join(f"{k}: {v:.2f}" for k, v in fib_levels.items())
                 print(
                     f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] Fib levels: {fib_str}"
@@ -370,22 +411,24 @@ def run() -> None:
                         alert_id, line_price, direction, ts_et, today.isoformat()
                     )
                     fired_levels.add((line_name, line_price, direction))
-                # Bot trades on ALL zone entries (not just scored alerts) —
-                # matches the bot_risk_backtest which was optimized on all entries.
+                # Bot uses its own zone tracking (1pt entry, 15pt exit) —
+                # separate from human alerts (7pt/20pt). Matches bot_risk_backtest.
                 if broker is not None and broker.is_connected:
-                    for line_name, line_price, direction in all_zone_entries:
-                        allowed, reason = broker.can_trade()
-                        if allowed:
-                            result = broker.submit_bracket(
-                                direction=direction,
-                                current_price=price,
-                                line_price=line_price,
-                                level_name=line_name,
-                            )
-                            if not result.success:
-                                print(f"[broker] Trade failed: {result.error}")
-                        else:
-                            print(f"[broker] Skipped {line_name}: {reason}")
+                    for bz in bot_zones.values():
+                        if bz.update(price):
+                            direction = "up" if price > bz.price else "down"
+                            allowed, reason = broker.can_trade()
+                            if allowed:
+                                result = broker.submit_bracket(
+                                    direction=direction,
+                                    current_price=price,
+                                    line_price=bz.price,
+                                    level_name=bz.name,
+                                )
+                                if not result.success:
+                                    print(f"[broker] Trade failed: {result.error}")
+                            else:
+                                print(f"[broker] Skipped {bz.name}: {reason}")
                 # Track suppressed zone entries for streak computation —
                 # matches how the backtest computes streaks across ALL entries.
                 for line_name, line_price, direction in all_zone_entries:
@@ -394,6 +437,9 @@ def run() -> None:
                 evaluator.update(price, ts_et)
             else:
                 alert_manager.advance_state(price)
+                # Advance bot zones during replay so they don't fire stale entries.
+                for bz in bot_zones.values():
+                    bz.update(price)
                 # Evaluate pending outcomes during replay too — a restart
                 # mid-evaluation needs the replayed trades to determine
                 # whether the target/stop was hit while the app was down.
