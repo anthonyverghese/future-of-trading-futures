@@ -42,6 +42,12 @@ if grep -q "TWS_USERID=$" "$ENV_FILE" || grep -q "TWS_PASSWORD=$" "$ENV_FILE"; t
     exit 1
 fi
 
+# ── Sunday 2FA reminder (Pushover notification) ─────────────────────────────
+echo "=== Installing 2FA reminder timer ==="
+sudo cp "${REPO_DIR}/mnq-2fa-reminder.service" "${REPO_DIR}/mnq-2fa-reminder.timer" /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now mnq-2fa-reminder.timer
+
 # ── Launch IB Gateway container ──────────────────────────────────────────────
 echo "=== Starting IB Gateway container ==="
 cd "$REPO_DIR"

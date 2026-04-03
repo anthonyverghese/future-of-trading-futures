@@ -1,0 +1,8 @@
+[Unit]
+Description=Send Pushover reminder to approve IB Gateway 2FA
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/future-of-trading-futures
+ExecStart=/home/ec2-user/miniconda3/envs/mnq/bin/python mnq-2fa-reminder.py
