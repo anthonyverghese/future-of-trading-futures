@@ -61,7 +61,7 @@ BOT_EXIT_THRESHOLD = 15.0  # Bot zone reset distance (vs 20 for human)
 BOT_TARGET_POINTS = 12.0  # Take profit distance from line price
 BOT_STOP_POINTS = 25.0  # Stop loss distance from line price
 DAILY_LOSS_LIMIT_USD = 150.0  # Stop trading for the day after losing this much
-MAX_CONSECUTIVE_LOSSES = 3  # Stop trading for the day after N straight losses
+MAX_CONSECUTIVE_LOSSES = 4  # Stop trading for the day after N straight losses
 
 # ── Display ─────────────────────────────────────────────────────────────────────
 # Override the auto-detected local timezone for log timestamps.
