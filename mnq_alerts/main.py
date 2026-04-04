@@ -20,6 +20,7 @@ import pytz
 from alert_manager import AlertManager
 from config import (
     ALERT_THRESHOLD_POINTS,
+    BOT_EOD_FLATTEN_BUFFER_MIN,
     DISPLAY_TZ,
     IB_END_HOUR,
     IB_END_MIN,
@@ -63,6 +64,11 @@ else:
 MARKET_OPEN = datetime.time(MARKET_OPEN_HOUR, MARKET_OPEN_MIN)
 MARKET_CLOSE = datetime.time(MARKET_CLOSE_HOUR, MARKET_CLOSE_MIN)
 IB_END = datetime.time(IB_END_HOUR, IB_END_MIN)
+# Flatten any open bot position this many minutes before MARKET_CLOSE.
+_EOD_FLATTEN_TIME = (
+    datetime.datetime.combine(datetime.date.today(), MARKET_CLOSE)
+    - datetime.timedelta(minutes=BOT_EOD_FLATTEN_BUFFER_MIN)
+).time()
 
 # Throttle console status output to avoid flooding the terminal.
 _STATUS_INTERVAL_SECONDS = 5
@@ -176,6 +182,7 @@ def run() -> None:
     last_status_ts = 0.0
     last_cache_ts = 0.0
     session_closed = False
+    bot_eod_flattened = False
 
     # Incremental VWAP: O(1) per tick instead of scanning the full DataFrame.
     vwap_sum_pv = 0.0  # Σ(price × size)
@@ -225,6 +232,20 @@ def run() -> None:
         now = datetime.datetime.now(ET)
         now_pt = now.astimezone(LOCAL_TZ)
         today = now.date()
+
+        # Pre-close EOD flatten: close any open bot position a few minutes
+        # before 4pm so fills complete before the session ends (avoids
+        # overnight margin on stalled positions). Blocks new bot trades too.
+        if (
+            not bot_eod_flattened
+            and bot is not None
+            and bot.is_connected
+            and last_session_date == today
+            and now.time() >= _EOD_FLATTEN_TIME
+            and now.time() < MARKET_CLOSE
+        ):
+            bot.eod_flatten()
+            bot_eod_flattened = True
 
         # Close session once market shuts — must check before the is_market_open
         # guard below, otherwise post-market trades hit `continue` and this
@@ -287,6 +308,7 @@ def run() -> None:
             last_session_date = today
             last_cache_ts = 0.0
             session_closed = False
+            bot_eod_flattened = False
             if bot is not None:
                 bot.reset_daily_state()
             vwap_sum_pv = 0.0

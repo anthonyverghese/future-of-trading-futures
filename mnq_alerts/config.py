@@ -61,7 +61,14 @@ BOT_EXIT_THRESHOLD = 15.0  # Bot zone reset distance (vs 20 for human)
 BOT_TARGET_POINTS = 12.0  # Take profit distance from line price
 BOT_STOP_POINTS = 25.0  # Stop loss distance from line price
 DAILY_LOSS_LIMIT_USD = 150.0  # Stop trading for the day after losing this much
-MAX_CONSECUTIVE_LOSSES = 4  # Stop trading for the day after N straight losses
+MAX_CONSECUTIVE_LOSSES = 5  # Stop trading for the day after N straight losses
+BOT_TIMEOUT_SECS = (
+    15 * 60
+)  # Close position if neither target nor stop hits in this window
+# Matches bot_risk_backtest.py WINDOW_SECS so live = backtest
+BOT_EOD_FLATTEN_BUFFER_MIN = 2  # Flatten any open position this many minutes
+# before MARKET_CLOSE (so 15:58 ET with 4pm close) to avoid overnight margin.
+# New bot entries are also blocked once this cutoff passes.
 
 # ── Display ─────────────────────────────────────────────────────────────────────
 # Override the auto-detected local timezone for log timestamps.

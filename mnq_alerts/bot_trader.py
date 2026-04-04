@@ -5,11 +5,11 @@ Manages its own zone tracking (1pt entry, 15pt exit) and delegates
 order execution to IBKRBroker. Main.py calls into this module without
 needing to know bot internals.
 
-Bot parameters (validated over 214 days in bot_risk_backtest.py):
+Bot parameters (validated via walk-forward in walk_forward.py):
   - Entry: price within 1 pt of level (vs 7 pt for human alerts)
   - Exit zone reset: 15 pts away (vs 20 pt for human alerts)
-  - Target: +12 pts, Stop: -25 pts
-  - Risk: $150/day loss limit, 3 consecutive loss stop, 1 position at a time
+  - Target: +12 pts, Stop: -25 pts, 15-min per-trade timeout
+  - Risk: $150/day loss limit, 4 consecutive loss stop, 1 position at a time
 """
 
 from __future__ import annotations
@@ -63,9 +63,15 @@ class BotTrader:
         return self._broker.is_connected
 
     def process_events(self) -> None:
-        """Pump ib_insync event loop so fill callbacks fire."""
+        """Pump ib_insync event loop so fill callbacks fire.
+
+        Also checks if the open position (if any) has exceeded the per-trade
+        timeout and closes it at market. This matches the 15-min window
+        assumed by bot_risk_backtest.py.
+        """
         if self._broker.is_connected:
             self._broker.process_events()
+            self._broker.check_position_timeout()
 
     def update_level(self, name: str, price: float) -> None:
         """Register or update a price level for bot zone tracking."""
@@ -120,6 +126,14 @@ class BotTrader:
         """Reset risk counters and clear zones for a new session."""
         self._broker.reset_daily_state()
         self._zones.clear()
+
+    def eod_flatten(self) -> None:
+        """Flatten open position a few minutes before market close.
+
+        Does not disconnect — close_session() still runs at 4pm for summary.
+        Blocks any new trades after this is called.
+        """
+        self._broker.eod_flatten()
 
     def close_session(self) -> None:
         """Cancel open orders, flatten positions, disconnect."""

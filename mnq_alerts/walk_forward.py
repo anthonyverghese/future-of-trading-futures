@@ -27,6 +27,9 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
+import pytz
+
+_ET = pytz.timezone("America/New_York")
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -40,6 +43,7 @@ from targeted_backtest import (
 )
 from bot_backtest import BOT_ENTRY_THRESHOLD, BOT_EXIT_THRESHOLD, FEE_PTS
 from bot_risk_backtest import MULTIPLIER, STARTING_BALANCE, evaluate_bot_trade
+from config import BOT_EOD_FLATTEN_BUFFER_MIN
 from score_optimizer import (
     EnrichedAlert,
     Weights,
@@ -51,6 +55,26 @@ from score_optimizer import (
 # Walk-forward params.
 INITIAL_TRAIN_DAYS = 60
 STEP_DAYS = 20
+
+# EOD flatten time (hh:mm ET). Mirrors live bot: no new entries after this,
+# and any open position is closed at this cutoff.
+_eod_hhmm = 16 * 60 - BOT_EOD_FLATTEN_BUFFER_MIN
+_EOD_FLATTEN_TIME = datetime.time(_eod_hhmm // 60, _eod_hhmm % 60)
+
+
+def _eod_cutoff_ns(date: datetime.date) -> int:
+    """Compute the EOD flatten cutoff for a day as ns since epoch.
+
+    full_ts_ns is asi8 from a tz-aware ET index, so the cutoff must also
+    be converted through ET localization → UTC epoch ns to be comparable.
+    """
+    dt = _ET.localize(datetime.datetime.combine(date, _EOD_FLATTEN_TIME))
+    return int(dt.timestamp() * 1_000_000_000)
+
+
+def _eod_cutoff_ns_for_day(dc) -> int:
+    return _eod_cutoff_ns(dc.date)
+
 
 TS_GRID = [
     (4.0, 8.0),
@@ -165,6 +189,9 @@ def precompute_outcomes(
     outcomes: list[str] = []
     exit_ns = np.zeros(n, dtype=np.int64)
     pnl_pts = np.zeros(n, dtype=np.float64)
+    # EOD cutoff: clip the 15-min window so stalled trades close before 4pm ET,
+    # matching the live bot's pre-close flatten.
+    eod_cutoff_ns = _eod_cutoff_ns_for_day(dc)
     for i in range(n):
         out, exit_idx, pnl = evaluate_bot_trade(
             int(de.global_idx[i]),
@@ -175,6 +202,7 @@ def precompute_outcomes(
             target_pts,
             stop_pts,
             window_secs,
+            eod_cutoff_ns,
         )
         outcomes.append(out)
         exit_ns[i] = int(dc.full_ts_ns[exit_idx])
@@ -214,6 +242,9 @@ def replay_with_risk(
         do = outcomes_by_date.get(date)
         if de is None or do is None or len(de.global_idx) == 0:
             continue
+        # No new entries after EOD cutoff — matches live eod_flatten() which
+        # sets _stopped_for_day=True at 15:58 ET.
+        eod_ns = _eod_cutoff_ns(date)
         position_exit_ns = 0
         daily_pnl = 0.0
         consec = 0
@@ -221,6 +252,8 @@ def replay_with_risk(
         for i in range(len(de.global_idx)):
             if stopped:
                 break
+            if int(de.entry_ns[i]) >= eod_ns:
+                break  # entries are chronologically sorted
             if int(de.entry_ns[i]) < position_exit_ns:
                 continue
             outcome = do.outcome[i]
@@ -230,7 +263,9 @@ def replay_with_risk(
                 Trade(date=date, level=de.level[i], outcome=outcome, pnl_usd=pnl)
             )
             daily_pnl += pnl
-            if outcome == "loss":
+            # Match live broker: consecutive-loss counter is by $ sign, not label.
+            # A timeout that closed at a loss should count toward the consec cap.
+            if pnl < 0:
                 consec += 1
             else:
                 consec = 0
@@ -255,6 +290,15 @@ def trade_stats(trades: list[Trade]) -> tuple[float, int, int, float, float]:
         peak = max(peak, eq)
         max_dd = max(max_dd, peak - eq)
     return total, wins, losses, wr, max_dd
+
+
+def timeout_stats(trades: list[Trade]) -> tuple[int, float, float]:
+    """Return (count, total_pnl, avg_pnl) for timeout trades."""
+    tos = [t for t in trades if t.outcome == "timeout"]
+    if not tos:
+        return 0, 0.0, 0.0
+    total = sum(t.pnl_usd for t in tos)
+    return len(tos), total, total / len(tos)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -625,6 +669,14 @@ def main() -> None:
     print(f"    Record:  {wins}W / {losses}L = {wr:.1f}% WR", flush=True)
     print(f"    P&L:     ${total:+,.0f} (${total/total_days:+.2f}/day)", flush=True)
     print(f"    Max DD:  ${dd:,.0f}", flush=True)
+    to_n, to_total, to_avg = timeout_stats(all_test)
+    if to_n:
+        to_pct = to_n / len(all_test) * 100
+        print(
+            f"    Timeouts: {to_n} ({to_pct:.1f}% of trades), "
+            f"avg ${to_avg:+.2f}, total ${to_total:+,.0f}",
+            flush=True,
+        )
 
     print(f"\n  Chosen T/S distribution:", flush=True)
     for ts, cnt in sorted(ts_counts.items(), key=lambda x: -x[1]):
@@ -660,6 +712,13 @@ def main() -> None:
     print(f"    Record:  {wf_w}W / {wf_l}L = {wr_f:.1f}% WR", flush=True)
     print(f"    P&L:     ${total_f:+,.0f} (${total_f/total_days:+.2f}/day)", flush=True)
     print(f"    Max DD:  ${dd_f:,.0f}", flush=True)
+    to_n_f, to_tot_f, to_avg_f = timeout_stats(fixed_all)
+    if to_n_f:
+        print(
+            f"    Timeouts: {to_n_f} ({to_n_f/len(fixed_all)*100:.1f}% of trades), "
+            f"avg ${to_avg_f:+.2f}, total ${to_tot_f:+,.0f}",
+            flush=True,
+        )
 
     # Also test each fixed T/S config on full OOS period (no walk-forward)
     print(

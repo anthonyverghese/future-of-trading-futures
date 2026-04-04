@@ -81,15 +81,22 @@ def evaluate_bot_trade(
     target_pts: float,
     stop_pts: float,
     window_secs: int,
+    eod_cutoff_ns: int | None = None,
 ) -> tuple[str, int, float]:
     """Evaluate a bot trade and return (outcome, exit_idx, pnl_pts).
 
     Like evaluate_bot_outcome but also returns the exit index so we know
     when the position closes (needed for 1-position-at-a-time constraint).
+
+    eod_cutoff_ns: if provided, the evaluation window is clipped to this
+    wall-clock time (ns since epoch). Matches the live bot's pre-close flatten
+    so stalled positions close before market close rather than running past it.
     """
     entry_ns = ts_ns[entry_idx]
     window_ns = np.int64(window_secs * 1_000_000_000)
     eval_end_ns = entry_ns + window_ns
+    if eod_cutoff_ns is not None and eod_cutoff_ns < eval_end_ns:
+        eval_end_ns = np.int64(eod_cutoff_ns)
 
     target_idx = -1
     stop_idx = -1
@@ -132,8 +139,15 @@ def evaluate_bot_trade(
     elif stop_idx >= 0:
         return "loss", stop_idx, -(stop_pts + FEE_PTS)
     else:
-        # Timeout — close at last seen price within window.
-        return "timeout", last_idx, -FEE_PTS  # flat, just pay fee
+        # Timeout — close at actual last price within window (not assumed flat).
+        # Measured from line_price to stay consistent with how win/loss P&L is
+        # computed here (wins = +target_pts from line, losses = -stop_pts from line).
+        exit_price = float(prices[last_idx])
+        if direction == "up":
+            pnl_pts = exit_price - line_price
+        else:
+            pnl_pts = line_price - exit_price
+        return "timeout", last_idx, pnl_pts - FEE_PTS
 
 
 def simulate_risk_day(

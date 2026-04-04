@@ -16,11 +16,13 @@ Default port 4002 (IB Gateway paper), 4001 (IB Gateway live).
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass
 
 from config import (
     BOT_STOP_POINTS,
     BOT_TARGET_POINTS,
+    BOT_TIMEOUT_SECS,
     DAILY_LOSS_LIMIT_USD,
     IBKR_ACCOUNT,
     IBKR_CLIENT_ID,
@@ -90,6 +92,7 @@ class IBKRBroker:
         self._pending_entry_fill: float | None = None  # actual fill price
         self._pending_target_pts: float = BOT_TARGET_POINTS
         self._pending_stop_pts: float = BOT_STOP_POINTS
+        self._position_opened_at: float | None = None  # monotonic() timestamp
 
     def connect(self) -> bool:
         """Connect to IB Gateway / TWS. Returns True on success."""
@@ -187,6 +190,7 @@ class IBKRBroker:
             self._pending_direction = None
             self._pending_line_price = None
             self._pending_entry_fill = None
+            self._position_opened_at = None
             if prev_trades > 0:
                 print(
                     f"[broker] Daily reset (yesterday: {prev_trades} trades, "
@@ -254,6 +258,7 @@ class IBKRBroker:
                 return  # Already processed or spurious
 
             self._position_open = False
+            self._position_opened_at = None
             self._trades_today += 1
 
             # Compute P&L from actual entry fill → exit fill.
@@ -293,6 +298,99 @@ class IBKRBroker:
 
             # Check if we should stop for the day.
             self.can_trade()  # updates _stopped_for_day if limits hit
+
+    def eod_flatten(self) -> None:
+        """Pre-close safety: flatten any open position and block new trades.
+
+        Called a few minutes before MARKET_CLOSE to avoid overnight margin
+        requirements. Uses the same reverse-market-order approach as the
+        timeout path so the fill callback records P&L normally.
+        """
+        if not self.is_connected:
+            return
+        with self._lock:
+            if self._stopped_for_day and not self._position_open:
+                return  # already done
+            if not self._stopped_for_day:
+                self._stopped_for_day = True
+                self._stop_reason = "Pre-close EOD flatten (no new trades)"
+                print(f"[broker] {self._stop_reason}")
+            if not self._position_open or self._position_opened_at is None:
+                return
+            direction = self._pending_direction
+            self._position_opened_at = None  # prevent timeout path racing
+
+        if direction is None or self._contract is None:
+            return
+        try:
+            for trade in self._ib.openTrades():
+                if trade.contract.symbol == MNQ_SYMBOL:
+                    self._ib.cancelOrder(trade.order)
+        except Exception as exc:
+            print(f"[broker] Warning: failed to cancel children on EOD: {exc}")
+        close_action = "SELL" if direction == "up" else "BUY"
+        close_order = MarketOrder(close_action, ORDER_QTY)
+        close_order.parentId = 1  # treat as close in callback
+        try:
+            self._ib.placeOrder(self._contract, close_order)
+            print(f"[broker] EOD flatten: {close_action} {ORDER_QTY} MNQ @ market")
+        except Exception as exc:
+            print(f"[broker] EOD flatten failed: {exc}")
+
+    def check_position_timeout(self) -> bool:
+        """If an open position has exceeded BOT_TIMEOUT_SECS, close it at market.
+
+        Matches the 15-min window in bot_risk_backtest.py: if neither target nor
+        stop hits in time, we exit (at whatever price the market gives us) so
+        the position slot frees up for the next signal. Returns True if a
+        timeout close was issued.
+
+        Cancels TP/stop children (without touching position_open state) and
+        submits a reverse market order. The fill callback will record P&L and
+        clear position_open like a normal close.
+        """
+        if not self.is_connected:
+            return False
+        with self._lock:
+            if not self._position_open or self._position_opened_at is None:
+                return False
+            elapsed = time.monotonic() - self._position_opened_at
+            if elapsed < BOT_TIMEOUT_SECS:
+                return False
+            direction = self._pending_direction
+            # Clear the timeout marker so we only issue one close.
+            self._position_opened_at = None
+            print(
+                f"[broker] Position timeout ({elapsed:.0f}s > {BOT_TIMEOUT_SECS}s) "
+                f"— cancelling bracket and closing at market"
+            )
+
+        contract = self._contract
+        if contract is None or direction is None:
+            return False
+
+        # Cancel the TP + stop children so they don't race with the close.
+        # Don't use cancel_all_mnq_orders — it clears position_open, which
+        # would cause the fill callback to skip P&L recording.
+        try:
+            for trade in self._ib.openTrades():
+                if trade.contract.symbol == MNQ_SYMBOL:
+                    self._ib.cancelOrder(trade.order)
+        except Exception as exc:
+            print(f"[broker] Warning: failed to cancel children on timeout: {exc}")
+
+        # Submit reverse market order. parentId != 0 marks it as a close so
+        # _on_order_status routes it through the P&L path.
+        close_action = "SELL" if direction == "up" else "BUY"
+        close_order = MarketOrder(close_action, ORDER_QTY)
+        close_order.parentId = 1  # non-zero so callback treats as close
+        try:
+            self._ib.placeOrder(contract, close_order)
+            print(f"[broker] Timeout close: {close_action} {ORDER_QTY} MNQ @ market")
+        except Exception as exc:
+            print(f"[broker] Timeout close failed: {exc}")
+            return False
+        return True
 
     def _resolve_contract(self) -> Contract | None:
         """Qualify the MNQ contract so IBKR knows the exact instrument.
@@ -432,6 +530,7 @@ class IBKRBroker:
             self._pending_line_price = line_price
             self._pending_target_pts = BOT_TARGET_POINTS
             self._pending_stop_pts = BOT_STOP_POINTS
+            self._position_opened_at = time.monotonic()
 
             print(
                 f"[broker] {action} {qty} MNQ @ market | "
