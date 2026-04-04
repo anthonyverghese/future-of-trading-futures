@@ -328,6 +328,18 @@ class IBKRBroker:
                     self._ib.cancelOrder(trade.order)
         except Exception as exc:
             print(f"[broker] Warning: failed to cancel children on EOD: {exc}")
+
+        # Re-check under lock: a TP/stop fill may have closed the position
+        # while we were cancelling. Submitting a reverse market order at this
+        # point would open a new position in the opposite direction.
+        with self._lock:
+            if not self._position_open:
+                print(
+                    "[broker] Position closed before EOD market order "
+                    "— skipping flatten (race with TP/stop fill)"
+                )
+                return
+
         close_action = "SELL" if direction == "up" else "BUY"
         close_order = MarketOrder(close_action, ORDER_QTY)
         close_order.parentId = 1  # treat as close in callback
@@ -378,6 +390,19 @@ class IBKRBroker:
                     self._ib.cancelOrder(trade.order)
         except Exception as exc:
             print(f"[broker] Warning: failed to cancel children on timeout: {exc}")
+
+        # Re-check under lock: a TP/stop fill may have arrived between the
+        # first check and now (ib_insync runs callbacks during placeOrder/
+        # cancelOrder). If the position is already closed, submitting a
+        # reverse market order here would OPEN a new position in the
+        # opposite direction, which must not happen.
+        with self._lock:
+            if not self._position_open:
+                print(
+                    "[broker] Position closed before timeout market order "
+                    "— skipping close (race with TP/stop fill)"
+                )
+                return False
 
         # Submit reverse market order. parentId != 0 marks it as a close so
         # _on_order_status routes it through the P&L path.
