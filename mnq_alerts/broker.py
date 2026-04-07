@@ -75,6 +75,9 @@ class IBKRBroker:
         self._lock = threading.Lock()
         self._connected = False
         self._contract: Contract | None = None  # cached qualified contract
+        self._was_connected = False  # tracks if we ever connected successfully
+        self._reconnect_attempts = 0
+        self._max_reconnect_attempts = 5
 
         # Risk management state — resets each trading day.
         self._daily_pnl_usd: float = 0.0
@@ -103,6 +106,8 @@ class IBKRBroker:
             self._ib = IB()
             self._ib.connect(IBKR_HOST, IBKR_PORT, clientId=IBKR_CLIENT_ID)
             self._connected = True
+            self._was_connected = True
+            self._reconnect_attempts = 0
 
             # Verify we're on the expected account (safety check).
             managed = self._ib.managedAccounts()
@@ -161,13 +166,61 @@ class IBKRBroker:
     def is_connected(self) -> bool:
         return self._connected and self._ib is not None and self._ib.isConnected()
 
+    def reconnect(self) -> bool:
+        """Attempt to reconnect after an unexpected disconnection.
+
+        Only tries if we previously had a successful connection and haven't
+        exhausted reconnect attempts.
+        """
+        if not self._was_connected:
+            return False
+        if self._reconnect_attempts >= self._max_reconnect_attempts:
+            if self._reconnect_attempts == self._max_reconnect_attempts:
+                print(
+                    f"[broker] Reconnect failed after "
+                    f"{self._max_reconnect_attempts} attempts — giving up"
+                )
+                self._reconnect_attempts += 1  # only print once
+            return False
+        self._reconnect_attempts += 1
+        print(
+            f"[broker] Connection lost — reconnecting "
+            f"(attempt {self._reconnect_attempts}/{self._max_reconnect_attempts})..."
+        )
+        try:
+            if self._ib:
+                try:
+                    self._ib.disconnect()
+                except Exception:
+                    pass
+            self._ib = IB()
+            self._ib.connect(IBKR_HOST, IBKR_PORT, clientId=IBKR_CLIENT_ID)
+            self._connected = True
+            self._reconnect_attempts = 0
+            self._ib.orderStatusEvent += self._on_order_status
+            self._contract = self._resolve_contract()
+            print(
+                f"[broker] Reconnected to IBKR "
+                f"(contract: {self._contract.localSymbol if self._contract else 'N/A'})"
+            )
+            return True
+        except Exception as exc:
+            print(f"[broker] Reconnect failed: {exc}")
+            self._connected = False
+            return False
+
     def process_events(self) -> None:
         """Pump the ib_insync event loop so callbacks fire.
 
         Must be called periodically from the main loop (e.g. on each
         trade tick). Without this, orderStatusEvent callbacks won't
         dispatch and the broker won't know when positions close.
+
+        Also detects unexpected disconnections and attempts to reconnect.
         """
+        if self._was_connected and not self.is_connected:
+            self.reconnect()
+            return
         if self._ib and self.is_connected:
             try:
                 self._ib.sleep(0)  # non-blocking: process pending events
