@@ -309,14 +309,17 @@ def walk_forward_filtered(
         if all_test_trades:
             total_pnl, wins, losses, wr, max_dd = trade_stats(all_test_trades)
             decided = wins + losses
-            trades_per_day = len(all_test_trades) / max(1, n - INITIAL_TRAIN_DAYS)
-            ev = total_pnl / decided if decided else 0
+            timeouts = sum(1 for t in all_test_trades if t.outcome == "timeout")
+            test_day_count = max(1, n - INITIAL_TRAIN_DAYS)
+            trades_per_day = len(all_test_trades) / test_day_count
+            ev = total_pnl / len(all_test_trades) if all_test_trades else 0
             print(
                 f"  {cfg_label:<40} | "
-                f"{decided:>4} trades ({trades_per_day:.1f}/day) | "
+                f"{len(all_test_trades):>4} trades ({trades_per_day:.1f}/day) "
+                f"[{wins}W/{losses}L/{timeouts}T] | "
                 f"WR {wr:5.1f}% | "
                 f"P&L ${total_pnl:>+8.2f} | "
-                f"EV ${ev:>+6.2f} | "
+                f"EV/trade ${ev:>+6.2f} | "
                 f"MaxDD ${max_dd:>7.2f}"
             )
         else:
@@ -461,17 +464,17 @@ def main():
             k += STEP_DAYS
         if all_test_trades:
             total_pnl, wins, losses, wr, max_dd = trade_stats(all_test_trades)
-            decided = wins + losses
-            trades_per_day = len(all_test_trades) / max(
-                1, len(valid_days) - INITIAL_TRAIN_DAYS
-            )
-            ev = total_pnl / decided if decided else 0
+            timeouts = sum(1 for t in all_test_trades if t.outcome == "timeout")
+            test_day_count = max(1, len(valid_days) - INITIAL_TRAIN_DAYS)
+            trades_per_day = len(all_test_trades) / test_day_count
+            ev = total_pnl / len(all_test_trades) if all_test_trades else 0
             print(
                 f"  T{target:>4.0f}/S{stop:<4.0f}                              | "
-                f"{decided:>4} trades ({trades_per_day:.1f}/day) | "
+                f"{len(all_test_trades):>4} trades ({trades_per_day:.1f}/day) "
+                f"[{wins}W/{losses}L/{timeouts}T] | "
                 f"WR {wr:5.1f}% | "
                 f"P&L ${total_pnl:>+8.2f} | "
-                f"EV ${ev:>+6.2f} | "
+                f"EV/trade ${ev:>+6.2f} | "
                 f"MaxDD ${max_dd:>7.2f}"
             )
 
