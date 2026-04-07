@@ -15,6 +15,7 @@ Default port 4002 (IB Gateway paper), 4001 (IB Gateway live).
 
 from __future__ import annotations
 
+import datetime
 import threading
 import time
 from dataclasses import dataclass
@@ -36,6 +37,7 @@ from config import (
 if IBKR_TRADING_ENABLED:
     from ib_insync import IB, Contract, LimitOrder, MarketOrder, Order, StopOrder
 
+from cache import log_bot_trade_entry, update_bot_trade_exit
 
 MNQ_EXCHANGE = "CME"
 MNQ_SYMBOL = "MNQ"
@@ -95,6 +97,11 @@ class IBKRBroker:
         self._pending_entry_fill: float | None = None  # actual fill price
         self._pending_target_pts: float = BOT_TARGET_POINTS
         self._pending_stop_pts: float = BOT_STOP_POINTS
+        self._pending_level_name: str | None = None
+        self._pending_target_price: float | None = None
+        self._pending_stop_price: float | None = None
+        self._pending_db_trade_id: int | None = None  # row id in bot_trades table
+        self._pending_exit_reason: str | None = None  # set before close orders
         self._position_opened_at: float | None = None  # monotonic() timestamp
 
     def connect(self) -> bool:
@@ -304,6 +311,21 @@ class IBKRBroker:
             with self._lock:
                 self._pending_entry_fill = trade.orderStatus.avgFillPrice
                 print(f"[broker] Entry filled @ {self._pending_entry_fill:.2f}")
+                # Log entry to database.
+                try:
+                    now = datetime.datetime.now(datetime.timezone.utc).astimezone()
+                    self._pending_db_trade_id = log_bot_trade_entry(
+                        date_str=now.strftime("%Y-%m-%d"),
+                        entry_time=now.strftime("%H:%M:%S %Z"),
+                        level_name=self._pending_level_name or "unknown",
+                        direction=self._pending_direction or "unknown",
+                        line_price=self._pending_line_price or 0.0,
+                        entry_price=self._pending_entry_fill,
+                        target_price=self._pending_target_price or 0.0,
+                        stop_price=self._pending_stop_price or 0.0,
+                    )
+                except Exception as e:
+                    print(f"[broker] Error logging trade entry to DB: {e}")
             return
 
         with self._lock:
@@ -343,11 +365,39 @@ class IBKRBroker:
                 self._consecutive_losses += 1
                 outcome = "LOSS"
 
+            # Determine exit reason: use explicit reason if set (timeout/eod),
+            # otherwise infer from order type.
+            if self._pending_exit_reason:
+                exit_reason = self._pending_exit_reason
+                self._pending_exit_reason = None
+            elif order.orderType == "LMT":
+                exit_reason = "target"
+            elif order.orderType == "STP":
+                exit_reason = "stop"
+            else:
+                exit_reason = "market"
+
             print(
                 f"[broker] Trade closed: {outcome} ${pnl_usd:+.2f} | "
                 f"Day: {self.daily_stats} | "
                 f"Consec losses: {self._consecutive_losses}"
             )
+
+            # Persist exit to database.
+            if self._pending_db_trade_id is not None:
+                try:
+                    now = datetime.datetime.now(datetime.timezone.utc).astimezone()
+                    update_bot_trade_exit(
+                        trade_id=self._pending_db_trade_id,
+                        exit_time=now.strftime("%H:%M:%S %Z"),
+                        exit_price=exit_price,
+                        pnl_usd=pnl_usd,
+                        outcome=outcome.lower(),
+                        exit_reason=exit_reason,
+                    )
+                except Exception as e:
+                    print(f"[broker] Error logging trade exit to DB: {e}")
+                self._pending_db_trade_id = None
 
             # Check if we should stop for the day.
             self.can_trade()  # updates _stopped_for_day if limits hit
@@ -396,6 +446,7 @@ class IBKRBroker:
         close_action = "SELL" if direction == "up" else "BUY"
         close_order = MarketOrder(close_action, ORDER_QTY)
         close_order.parentId = 1  # treat as close in callback
+        self._pending_exit_reason = "eod_flatten"
         try:
             self._ib.placeOrder(self._contract, close_order)
             print(f"[broker] EOD flatten: {close_action} {ORDER_QTY} MNQ @ market")
@@ -462,6 +513,7 @@ class IBKRBroker:
         close_action = "SELL" if direction == "up" else "BUY"
         close_order = MarketOrder(close_action, ORDER_QTY)
         close_order.parentId = 1  # non-zero so callback treats as close
+        self._pending_exit_reason = "timeout"
         try:
             self._ib.placeOrder(contract, close_order)
             print(f"[broker] Timeout close: {close_action} {ORDER_QTY} MNQ @ market")
@@ -608,6 +660,10 @@ class IBKRBroker:
             self._pending_line_price = line_price
             self._pending_target_pts = BOT_TARGET_POINTS
             self._pending_stop_pts = BOT_STOP_POINTS
+            self._pending_level_name = level_name
+            self._pending_target_price = target_price
+            self._pending_stop_price = stop_price
+            self._pending_db_trade_id = None
             self._position_opened_at = time.monotonic()
 
             print(

@@ -160,6 +160,25 @@ def _ensure_alerts_schema(conn: sqlite3.Connection) -> None:
         )
     """)
 
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS bot_trades (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            date           TEXT,
+            entry_time     TEXT,
+            exit_time      TEXT,
+            level_name     TEXT,
+            direction      TEXT,
+            line_price     REAL,
+            entry_price    REAL,
+            exit_price     REAL,
+            target_price   REAL,
+            stop_price     REAL,
+            pnl_usd        REAL,
+            outcome        TEXT,
+            exit_reason    TEXT
+        )
+    """)
+
 
 def log_alert(
     ticker: str,
@@ -336,6 +355,84 @@ def load_recent_outcomes(limit: int = 10) -> list[str]:
         return [r[0] for r in reversed(rows)]
     except Exception:
         return []
+
+
+def log_bot_trade_entry(
+    date_str: str,
+    entry_time: str,
+    level_name: str,
+    direction: str,
+    line_price: float,
+    entry_price: float,
+    target_price: float,
+    stop_price: float,
+) -> int:
+    """Log a bot trade entry. Returns the row id for later update on exit."""
+    with sqlite3.connect(ALERTS_LOG_PATH) as conn:
+        _ensure_alerts_schema(conn)
+        cur = conn.execute(
+            """INSERT INTO bot_trades
+               (date, entry_time, level_name, direction, line_price,
+                entry_price, target_price, stop_price, outcome)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open')""",
+            (
+                date_str,
+                entry_time,
+                level_name,
+                direction,
+                line_price,
+                entry_price,
+                target_price,
+                stop_price,
+            ),
+        )
+        return cur.lastrowid
+
+
+def update_bot_trade_exit(
+    trade_id: int,
+    exit_time: str,
+    exit_price: float,
+    pnl_usd: float,
+    outcome: str,
+    exit_reason: str,
+) -> None:
+    """Update a bot trade with exit details."""
+    with sqlite3.connect(ALERTS_LOG_PATH) as conn:
+        conn.execute(
+            """UPDATE bot_trades
+               SET exit_time = ?, exit_price = ?, pnl_usd = ?,
+                   outcome = ?, exit_reason = ?
+               WHERE id = ?""",
+            (exit_time, exit_price, pnl_usd, outcome, exit_reason, trade_id),
+        )
+
+
+def get_bot_daily_summary(date_str: str) -> dict:
+    """Return bot trading stats for a given date."""
+    result = {"trades": 0, "wins": 0, "losses": 0, "pnl_usd": 0.0}
+    if not os.path.exists(ALERTS_LOG_PATH):
+        return result
+    try:
+        with sqlite3.connect(ALERTS_LOG_PATH) as conn:
+            _ensure_alerts_schema(conn)
+            row = conn.execute(
+                """SELECT COUNT(*),
+                          SUM(CASE WHEN outcome = 'win' THEN 1 ELSE 0 END),
+                          SUM(CASE WHEN outcome = 'loss' THEN 1 ELSE 0 END),
+                          COALESCE(SUM(pnl_usd), 0)
+                   FROM bot_trades
+                   WHERE date = ? AND outcome != 'open'""",
+                (date_str,),
+            ).fetchone()
+            if row:
+                result["trades"] = row[0]
+                result["wins"] = row[1] or 0
+                result["losses"] = row[2] or 0
+                result["pnl_usd"] = row[3] or 0.0
+    except Exception:
+        pass
+    return result
 
 
 def upsert_daily_stats(
