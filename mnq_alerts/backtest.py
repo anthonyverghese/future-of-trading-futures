@@ -54,6 +54,9 @@ STOP_POINTS = 20.0  # points against — stopped out before target = incorrect
 WINDOW_SECS = 15 * 60  # 15-minute evaluation window
 FEATURE_SECS = 3 * 60  # 3-minute approach window BEFORE alert fires
 CONFLUENCE_PTS = 10.0  # pts — line within this of a prior day level = confluence
+RECENT_SR_PTS = (
+    5.0  # pts — line within this of a recent rolling high/low = intraday S/R
+)
 
 
 # ── Data structures ───────────────────────────────────────────────────────────
@@ -71,6 +74,10 @@ class Alert:
     prior_confluence: bool = (
         False  # True if line is within CONFLUENCE_PTS of a prior day level
     )
+    recent_sr_60m: bool = False  # line near a 60-min rolling high/low
+    recent_sr_120m: bool = False  # line near a 120-min rolling high/low
+    trend_30m: float = 0.0  # 30-min price trend at alert time (positive = up)
+    tick_count_at_level: int = 0  # trade count in 60-min window at this price bucket
     hit_time: datetime.datetime | None = None
     outcome_time: datetime.datetime | None = None
     outcome: str = "inconclusive"
@@ -224,6 +231,29 @@ def simulate_and_evaluate(
     df["session_low"] = df["price"].cummin()
     day_open = float(df["price"].iloc[0])
 
+    # Rolling 60-min and 120-min high/low for intraday S/R confluence.
+    # These use a time-based rolling window so they reflect real clock time,
+    # not a fixed number of ticks. No look-ahead: each row sees only past data.
+    df["rolling_60m_high"] = df["price"].rolling("60min", min_periods=1).max()
+    df["rolling_60m_low"] = df["price"].rolling("60min", min_periods=1).min()
+    df["rolling_120m_high"] = df["price"].rolling("120min", min_periods=1).max()
+    df["rolling_120m_low"] = df["price"].rolling("120min", min_periods=1).min()
+
+    # Rolling 30-min price change for short-term trend alignment (idea #2).
+    # Positive = price trending up over last 30 min, negative = trending down.
+    # Uses first price in window vs current price (no look-ahead).
+    df["rolling_30m_first"] = (
+        df["price"]
+        .rolling("30min", min_periods=1)
+        .apply(lambda x: x.iloc[0], raw=False)
+    )
+    df["trend_30m"] = df["price"] - df["rolling_30m_first"]
+
+    # Tick-count-at-price for last 60 min (idea #3).
+    # Count how many trades occurred in the alert level's 5-point price bucket
+    # over the past 60 min. High count = price dwelled at this level (S/R).
+    df["price_bucket"] = (df["price"] / 5).round() * 5  # 5-pt buckets
+
     # ── Alert zone simulation (post-IB only) ─────────────────────────────────
     ib_range = ibh - ibl
 
@@ -269,6 +299,12 @@ def simulate_and_evaluate(
         for fib_name, fib_price in fib_levels.items():
             level_prices[fib_name] = fib_price
 
+        # Rolling S/R levels at this tick (no look-ahead).
+        r60h = row.rolling_60m_high
+        r60l = row.rolling_60m_low
+        r120h = row.rolling_120m_high
+        r120l = row.rolling_120m_low
+
         for name, zone in zones.items():
             if zone.update(price, new_level_price=level_prices[name]):
                 direction = "up" if price > zone.ref else "down"
@@ -276,6 +312,26 @@ def simulate_and_evaluate(
                     prior_levels
                     and any(abs(zone.ref - p) <= CONFLUENCE_PTS for p in prior_levels)
                 )
+                # Intraday S/R: is the alert level near a recent rolling high/low?
+                sr_60 = (
+                    abs(zone.ref - r60h) <= RECENT_SR_PTS
+                    or abs(zone.ref - r60l) <= RECENT_SR_PTS
+                )
+                sr_120 = (
+                    abs(zone.ref - r120h) <= RECENT_SR_PTS
+                    or abs(zone.ref - r120l) <= RECENT_SR_PTS
+                )
+
+                # Short-term trend (30-min price change at alert time).
+                trend_30m_val = float(row.trend_30m)
+
+                # Tick-count-at-price: how many trades occurred in the
+                # alert level's 5-pt bucket over the past 60 min.
+                level_bucket = round(zone.ref / 5) * 5
+                window_start_ts = ts - pd.Timedelta(minutes=60)
+                window_df = df[(df.index >= window_start_ts) & (df.index <= ts)]
+                ticks_at_level = int((window_df["price_bucket"] == level_bucket).sum())
+
                 alerts.append(
                     Alert(
                         date=date,
@@ -286,6 +342,10 @@ def simulate_and_evaluate(
                         direction=direction,
                         level_test_count=zone.entry_count,
                         prior_confluence=confluence,
+                        recent_sr_60m=sr_60,
+                        recent_sr_120m=sr_120,
+                        trend_30m=trend_30m_val,
+                        tick_count_at_level=ticks_at_level,
                     )
                 )
 
@@ -478,6 +538,21 @@ def simulate_and_evaluate(
             # Level quality
             "level_test_count": alert.level_test_count,
             "prior_confluence": 1 if alert.prior_confluence else 0,
+            # Intraday S/R confluence (rolling high/low from past 1-2 hours)
+            "recent_sr_60m": 1 if alert.recent_sr_60m else 0,
+            "recent_sr_120m": 1 if alert.recent_sr_120m else 0,
+            # Short-term trend (30-min price change; positive = uptrend)
+            "trend_30m": alert.trend_30m,
+            # Trend alignment: is trade direction aligned with 30-min trend?
+            # +1 = aligned (BUY in uptrend or SELL in downtrend), -1 = counter
+            "trend_aligned_30m": (
+                1.0
+                if (alert.direction == "up" and alert.trend_30m > 0)
+                or (alert.direction == "down" and alert.trend_30m < 0)
+                else -1.0
+            ),
+            # Tick count at price level's bucket in last 60 min (dwell time proxy)
+            "tick_count_at_level": alert.tick_count_at_level,
             # Alert context
             "entry_distance": abs(alert.entry_price - alert.line_price),
         }
@@ -886,6 +961,242 @@ def print_results(all_alerts: list[Alert], days: list[datetime.date]) -> None:
             ),
         ]
     )
+
+    print(f"\n{'─' * 55}")
+    print(
+        f"  WIN RATE BY INTRADAY S/R CONFLUENCE (line within {RECENT_SR_PTS:.0f} pts of recent rolling high/low)"
+    )
+    print(f"{'─' * 55}")
+    win_rate_table(
+        [
+            (
+                "Near 60-min S/R",
+                [a for a in decided if a.recent_sr_60m],
+            ),
+            (
+                "Not near 60-min S/R",
+                [a for a in decided if not a.recent_sr_60m],
+            ),
+            (
+                "Near 120-min S/R",
+                [a for a in decided if a.recent_sr_120m],
+            ),
+            (
+                "Not near 120-min S/R",
+                [a for a in decided if not a.recent_sr_120m],
+            ),
+        ]
+    )
+
+    # Cross-tab: intraday S/R × direction
+    print(f"\n{'─' * 55}")
+    print("  INTRADAY S/R × DIRECTION")
+    print(f"{'─' * 55}")
+    win_rate_table(
+        [
+            (
+                "60m S/R + BUY",
+                [a for a in decided if a.recent_sr_60m and a.direction == "up"],
+            ),
+            (
+                "60m S/R + SELL",
+                [a for a in decided if a.recent_sr_60m and a.direction == "down"],
+            ),
+            (
+                "No 60m S/R + BUY",
+                [a for a in decided if not a.recent_sr_60m and a.direction == "up"],
+            ),
+            (
+                "No 60m S/R + SELL",
+                [a for a in decided if not a.recent_sr_60m and a.direction == "down"],
+            ),
+        ]
+    )
+
+    # Cross-tab: intraday S/R × level
+    print(f"\n{'─' * 55}")
+    print("  INTRADAY S/R × LEVEL")
+    print(f"{'─' * 55}")
+    sr_level_groups = []
+    for lvl in ["IBL", "IBH", "VWAP"]:
+        sr_level_groups.append(
+            (
+                f"{lvl} + 60m S/R",
+                [a for a in decided if a.level == lvl and a.recent_sr_60m],
+            )
+        )
+        sr_level_groups.append(
+            (
+                f"{lvl} no S/R",
+                [a for a in decided if a.level == lvl and not a.recent_sr_60m],
+            )
+        )
+    win_rate_table(sr_level_groups)
+
+    # ── Swing point / trend alignment analysis (idea #2) ──────────────────────
+    print(f"\n{'─' * 55}")
+    print("  WIN RATE BY 30-MIN TREND ALIGNMENT")
+    print(f"  (Is the alert direction aligned with the short-term price trend?)")
+    print(f"{'─' * 55}")
+    win_rate_table(
+        [
+            (
+                "Aligned (BUY in uptrend / SELL in downtrend)",
+                [
+                    a
+                    for a in decided
+                    if (a.direction == "up" and a.trend_30m > 0)
+                    or (a.direction == "down" and a.trend_30m < 0)
+                ],
+            ),
+            (
+                "Counter-trend",
+                [
+                    a
+                    for a in decided
+                    if (a.direction == "up" and a.trend_30m <= 0)
+                    or (a.direction == "down" and a.trend_30m >= 0)
+                ],
+            ),
+        ]
+    )
+
+    # Trend strength buckets
+    print(f"\n{'─' * 55}")
+    print("  WIN RATE BY 30-MIN TREND MAGNITUDE")
+    print(f"{'─' * 55}")
+    win_rate_table(
+        [
+            (
+                "Strong uptrend (>+20 pts)",
+                [a for a in decided if a.trend_30m > 20],
+            ),
+            (
+                "Mild uptrend (0 to +20 pts)",
+                [a for a in decided if 0 < a.trend_30m <= 20],
+            ),
+            (
+                "Mild downtrend (0 to -20 pts)",
+                [a for a in decided if -20 <= a.trend_30m <= 0],
+            ),
+            (
+                "Strong downtrend (<-20 pts)",
+                [a for a in decided if a.trend_30m < -20],
+            ),
+        ]
+    )
+
+    # Cross-tab: trend alignment × level
+    print(f"\n{'─' * 55}")
+    print("  30-MIN TREND ALIGNMENT × LEVEL")
+    print(f"{'─' * 55}")
+    trend_level_groups = []
+    for lvl in ["IBL", "IBH", "VWAP"]:
+        trend_level_groups.append(
+            (
+                f"{lvl} aligned",
+                [
+                    a
+                    for a in decided
+                    if a.level == lvl
+                    and (
+                        (a.direction == "up" and a.trend_30m > 0)
+                        or (a.direction == "down" and a.trend_30m < 0)
+                    )
+                ],
+            )
+        )
+        trend_level_groups.append(
+            (
+                f"{lvl} counter-trend",
+                [
+                    a
+                    for a in decided
+                    if a.level == lvl
+                    and (
+                        (a.direction == "up" and a.trend_30m <= 0)
+                        or (a.direction == "down" and a.trend_30m >= 0)
+                    )
+                ],
+            )
+        )
+    win_rate_table(trend_level_groups)
+
+    # ── Tick-count-at-price analysis (idea #3) ──────────────────────────────────
+    print(f"\n{'─' * 55}")
+    print("  WIN RATE BY TICK COUNT AT PRICE LEVEL (60-min window)")
+    print(f"  (Higher = price dwelled longer at this level recently)")
+    print(f"{'─' * 55}")
+    with_ticks = [a for a in decided if a.tick_count_at_level > 0]
+    if with_ticks:
+        tick_values = sorted(a.tick_count_at_level for a in with_ticks)
+        tick_median = tick_values[len(tick_values) // 2]
+        tick_q75 = tick_values[3 * len(tick_values) // 4]
+        win_rate_table(
+            [
+                (
+                    f"High dwell (top 25%, ≥{tick_q75} ticks)",
+                    [a for a in with_ticks if a.tick_count_at_level >= tick_q75],
+                ),
+                (
+                    f"Above median ({tick_median}–{tick_q75} ticks)",
+                    [
+                        a
+                        for a in with_ticks
+                        if tick_median <= a.tick_count_at_level < tick_q75
+                    ],
+                ),
+                (
+                    f"Below median (<{tick_median} ticks)",
+                    [a for a in with_ticks if a.tick_count_at_level < tick_median],
+                ),
+                (
+                    "No ticks at level",
+                    [a for a in decided if a.tick_count_at_level == 0],
+                ),
+            ]
+        )
+
+        # Cross-tab: dwell time × S/R confluence
+        print(f"\n{'─' * 55}")
+        print("  DWELL TIME × INTRADAY S/R (combined confluence)")
+        print(f"{'─' * 55}")
+        win_rate_table(
+            [
+                (
+                    "High dwell + 60m S/R",
+                    [
+                        a
+                        for a in with_ticks
+                        if a.tick_count_at_level >= tick_median and a.recent_sr_60m
+                    ],
+                ),
+                (
+                    "High dwell + no S/R",
+                    [
+                        a
+                        for a in with_ticks
+                        if a.tick_count_at_level >= tick_median and not a.recent_sr_60m
+                    ],
+                ),
+                (
+                    "Low dwell + 60m S/R",
+                    [
+                        a
+                        for a in with_ticks
+                        if a.tick_count_at_level < tick_median and a.recent_sr_60m
+                    ],
+                ),
+                (
+                    "Low dwell + no S/R",
+                    [
+                        a
+                        for a in with_ticks
+                        if a.tick_count_at_level < tick_median and not a.recent_sr_60m
+                    ],
+                ),
+            ]
+        )
 
     print(f"\n{'─' * 55}")
     print("  WIN RATE BY APPROACH STRENGTH (norm_approach feature, top/bottom half)")
@@ -1603,6 +1914,37 @@ def composite_scoring(all_alerts: list[Alert]) -> None:
 
         return s
 
+    # Also compute an enhanced score that includes all 3 new ideas.
+    # Compute tick count median for relative dwell scoring.
+    tick_vals = sorted(
+        a.tick_count_at_level for a in decided if a.tick_count_at_level > 0
+    )
+    tick_med = tick_vals[len(tick_vals) // 2] if tick_vals else 0
+
+    def score_alert_enhanced(a: Alert) -> float:
+        s = score_alert(a)
+
+        # Idea 1: Intraday S/R confluence
+        if a.recent_sr_60m:
+            s += 2
+        elif a.recent_sr_120m:
+            s += 1
+
+        # Idea 2: Short-term trend alignment (30-min)
+        aligned = (a.direction == "up" and a.trend_30m > 0) or (
+            a.direction == "down" and a.trend_30m < 0
+        )
+        if aligned and abs(a.trend_30m) > 10:
+            s += 1  # strong alignment
+        elif not aligned and abs(a.trend_30m) > 20:
+            s -= 1  # strong counter-trend penalty
+
+        # Idea 3: Dwell time at price level (tick count)
+        if a.tick_count_at_level >= tick_med and tick_med > 0:
+            s += 1  # high dwell = price contested this level
+
+        return s
+
     # Score all alerts and sweep thresholds.
     scored = [(a, score_alert(a)) for a in decided]
     all_scores = sorted(set(s for _, s in scored))
@@ -1635,6 +1977,32 @@ def composite_scoring(all_alerts: list[Alert]) -> None:
         ev = wr * TARGET_POINTS - (1 - wr) * STOP_POINTS
         print(f"  {cutoff:>7.0f}  {w:>5}  {l:>5}  {t:>7}  {wr:>5.1%}  {ev:>+8.1f}")
 
+    # ── Enhanced score with all 3 new ideas ──────────────────────────────────
+    scored_enh = [(a, score_alert_enhanced(a)) for a in decided]
+    all_scores_enh = sorted(set(s for _, s in scored_enh))
+
+    print(f"\n  {'─' * 65}")
+    print("  ENHANCED COMPOSITE (S/R + TREND ALIGNMENT + VOLUME NODE)")
+    print(f"  (Base score + intraday S/R, 30-min trend alignment, vol-at-price)")
+    print(f"  {'─' * 65}")
+
+    print(f"\n  Cutoff sweep (enhanced score):")
+    print(
+        f"  {'Cutoff':>7}  {'W':>5}  {'L':>5}  {'Total':>7}  {'Win%':>6}  {'EV/trade':>9}"
+    )
+    print(f"  {'-'*7}  {'-'*5}  {'-'*5}  {'-'*7}  {'-'*6}  {'-'*9}")
+
+    for cutoff in sorted(all_scores_enh):
+        above = [a for a, s in scored_enh if s >= cutoff]
+        w = sum(1 for a in above if a.outcome == "correct")
+        l = sum(1 for a in above if a.outcome == "incorrect")
+        t = w + l
+        if t < 10:
+            continue
+        wr = w / t
+        ev = wr * TARGET_POINTS - (1 - wr) * STOP_POINTS
+        print(f"  {cutoff:>7.0f}  {w:>5}  {l:>5}  {t:>7}  {wr:>5.1%}  {ev:>+8.1f}")
+
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -1647,7 +2015,7 @@ def main() -> None:
     #   python backtest.py --offset 45          # prior 45 days
     #   python backtest.py --days 90            # full 90-day combined run
     #   python backtest.py --days 90 --offset 45  # 90 days starting 45 days back
-    n_days = 45
+    n_days = 204
     if "--days" in sys.argv:
         n_days = int(sys.argv[sys.argv.index("--days") + 1])
 

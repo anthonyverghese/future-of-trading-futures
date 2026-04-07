@@ -14,6 +14,7 @@ from __future__ import annotations
 import datetime
 import sys
 import time
+import traceback
 
 import pytz
 
@@ -103,6 +104,8 @@ def run() -> None:
     """Main event-driven loop. Runs until interrupted (Ctrl+C)."""
     print("=" * 55)
     print("  MNQ Alert System — Live Feed (GLBX.MDP3 MDP 3.0)")
+    print(f"  Python    : {sys.version.split()[0]}")
+    print(f"  Trading   : {'ENABLED' if IBKR_TRADING_ENABLED else 'disabled'}")
     print(
         f"  Threshold : ±{ALERT_THRESHOLD_POINTS} pts from IBH / IBL / VWAP / Fib levels"
     )
@@ -121,6 +124,17 @@ def run() -> None:
         f"{market_close_local.strftime('%I:%M %p')} {LOCAL_TZ_NAME}, weekdays only"
     )
     print("=" * 55)
+
+    def bot_call(method_name, *args, **kwargs):
+        """Call a bot method, catching any exception so it never crashes alerts."""
+        nonlocal bot
+        if bot is None:
+            return None
+        try:
+            return getattr(bot, method_name)(*args, **kwargs)
+        except Exception as e:
+            print(f"[bot] Error in {method_name}: {e}\n{traceback.format_exc()}")
+            return None
 
     # Wait for RTH before opening the live connection.
     while True:
@@ -163,16 +177,22 @@ def run() -> None:
 
     # Bot trader — separate zone tracking (1pt threshold) and order execution.
     # Disabled by default; set IBKR_TRADING_ENABLED=true in .env to activate.
+    # All bot operations are wrapped so failures never crash the alert system.
     bot = None
     if IBKR_TRADING_ENABLED:
-        from bot_trader import BotTrader
+        try:
+            from bot_trader import BotTrader
 
-        bot = BotTrader()
-        if not bot.connect():
-            send_notification(
-                "Bot Connection Failed",
-                "Could not connect to IB Gateway. Bot will retry on first trade.",
-            )
+            bot = BotTrader()
+            if not bot.connect():
+                send_notification(
+                    "Bot Connection Failed",
+                    "Could not connect to IB Gateway. Bot will retry on first trade.",
+                )
+        except Exception as e:
+            print(f"[bot] Failed to initialize: {e}\n{traceback.format_exc()}")
+            send_notification("Bot Init Failed", f"Bot disabled for today: {e}")
+            bot = None
 
     ib_locked = False
     ibh: float | None = None
@@ -227,11 +247,29 @@ def run() -> None:
 
     # Tick rate: count trades in a rolling window for live ticks only.
     tick_times: list[datetime.datetime] = []
+    first_trade_logged = False
+    live_transition_logged = False
 
     for price, size, ts_et in trade_stream(session_start=session_start):
         now = datetime.datetime.now(ET)
         now_pt = now.astimezone(LOCAL_TZ)
         today = now.date()
+
+        if not first_trade_logged:
+            print(
+                f"[feed] First trade received: price={price:.2f}, "
+                f"ts={ts_et.strftime('%H:%M:%S')} ET, "
+                f"lag={(now - ts_et).total_seconds():.1f}s"
+            )
+            first_trade_logged = True
+
+        trade_lag_secs = (now - ts_et).total_seconds()
+        if not live_transition_logged and first_trade_logged and trade_lag_secs < 60:
+            print(
+                f"[feed] Replay complete — now processing live trades "
+                f"(lag={trade_lag_secs:.1f}s)"
+            )
+            live_transition_logged = True
 
         # Pre-close EOD flatten: close any open bot position a few minutes
         # before 4pm so fills complete before the session ends (avoids
@@ -244,7 +282,10 @@ def run() -> None:
             and now.time() >= _EOD_FLATTEN_TIME
             and now.time() < MARKET_CLOSE
         ):
-            bot.eod_flatten()
+            print(
+                f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] EOD flatten triggered"
+            )
+            bot_call("eod_flatten")
             bot_eod_flattened = True
 
         # Close session once market shuts — must check before the is_market_open
@@ -255,37 +296,63 @@ def run() -> None:
             and last_session_date == today
             and now.time() >= MARKET_CLOSE
         ):
-            evaluator.close_session()
             session_closed = True
+            print(
+                f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] "
+                f"Session close sequence started"
+            )
 
-            summary = get_daily_summary(today.isoformat())
-            total = sum(summary.values())
-            if total > 0:
-                wr = (
-                    summary["correct"]
-                    / (summary["correct"] + summary["incorrect"])
-                    * 100
-                    if (summary["correct"] + summary["incorrect"]) > 0
-                    else 0
+            try:
+                evaluator.close_session()
+            except Exception as e:
+                print(
+                    f"[alerts] Error closing evaluator session: {e}\n{traceback.format_exc()}"
                 )
-                send_notification(
-                    f"MNQ Daily Summary — {today.strftime('%m/%d')}",
-                    f"{total} alerts today\n"
-                    f"✓ {summary['correct']} correct\n"
-                    f"✗ {summary['incorrect']} incorrect\n"
-                    f"? {summary['inconclusive']} inconclusive\n"
-                    f"Win rate: {wr:.0f}%",
+
+            try:
+                summary = get_daily_summary(today.isoformat())
+                total = sum(summary.values())
+                if total > 0:
+                    wr = (
+                        summary["correct"]
+                        / (summary["correct"] + summary["incorrect"])
+                        * 100
+                        if (summary["correct"] + summary["incorrect"]) > 0
+                        else 0
+                    )
+                    send_notification(
+                        f"MNQ Daily Summary — {today.strftime('%m/%d')}",
+                        f"{total} alerts today\n"
+                        f"✓ {summary['correct']} correct\n"
+                        f"✗ {summary['incorrect']} incorrect\n"
+                        f"? {summary['inconclusive']} inconclusive\n"
+                        f"Win rate: {wr:.0f}%",
+                    )
+            except Exception as e:
+                print(
+                    f"[alerts] Error sending daily summary: {e}\n{traceback.format_exc()}"
                 )
 
             # Bot daily summary notification + close.
             if bot is not None and bot.is_connected:
-                send_notification(
-                    f"Bot Daily Summary — {today.strftime('%m/%d')}",
-                    bot.daily_summary,
-                )
-                bot.close_session()
+                try:
+                    send_notification(
+                        f"Bot Daily Summary — {today.strftime('%m/%d')}",
+                        bot.daily_summary,
+                    )
+                    bot.close_session()
+                except Exception as e:
+                    print(
+                        f"[bot] Error in close_session: {e}\n{traceback.format_exc()}"
+                    )
 
-            save_trades(get_session_trades())
+            try:
+                save_trades(get_session_trades())
+            except Exception as e:
+                print(
+                    f"[alerts] Error saving trades at close: {e}\n{traceback.format_exc()}"
+                )
+
             print(
                 f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] "
                 f"Market closed. Shutting down."
@@ -309,8 +376,7 @@ def run() -> None:
             last_cache_ts = 0.0
             session_closed = False
             bot_eod_flattened = False
-            if bot is not None:
-                bot.reset_daily_state()
+            bot_call("reset_daily_state")
             vwap_sum_pv = 0.0
             vwap_sum_vol = 0
             vwap = None
@@ -323,6 +389,10 @@ def run() -> None:
         # Record opening price for session context scoring.
         if day_open is None:
             day_open = price
+            print(
+                f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] "
+                f"Session open price: {day_open:.2f}"
+            )
 
         trade_time = ts_et.time()
 
@@ -333,8 +403,7 @@ def run() -> None:
             if vwap_sum_vol > 0:
                 vwap = vwap_sum_pv / vwap_sum_vol
                 alert_manager.update_levels(ibh=None, ibl=None, vwap=vwap)
-                if bot is not None:
-                    bot.update_levels(vwap=vwap)
+                bot_call("update_levels", vwap=vwap)
 
         # Update incremental IB high/low (9:30–10:30 AM ET).
         if not ib_locked and MARKET_OPEN <= trade_time < IB_END:
@@ -355,13 +424,16 @@ def run() -> None:
                     f"IB locked — IBH: {ibh:.2f}, IBL: {ibl:.2f}"
                 )
                 ib_locked = True
-                if bot is not None:
-                    bot.update_levels(ibh=ibh, ibl=ibl)
-                upsert_daily_stats(today.isoformat(), ibh=ibh, ibl=ibl)
+                bot_call("update_levels", ibh=ibh, ibl=ibl)
+                try:
+                    upsert_daily_stats(today.isoformat(), ibh=ibh, ibl=ibl)
+                except Exception as e:
+                    print(
+                        f"[alerts] Error upserting daily stats: {e}\n{traceback.format_exc()}"
+                    )
                 fib_levels = calculate_fib_levels(ibh, ibl)
                 alert_manager.update_fib_levels(fib_levels)
-                if bot is not None:
-                    bot.update_fib_levels(fib_levels)
+                bot_call("update_fib_levels", fib_levels)
                 fib_str = ", ".join(f"{k}: {v:.2f}" for k, v in fib_levels.items())
                 print(
                     f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] Fib levels: {fib_str}"
@@ -372,8 +444,7 @@ def run() -> None:
                 )
 
         # Pump ib_insync event loop so fill callbacks fire.
-        if bot is not None:
-            bot.process_events()
+        bot_call("process_events")
 
         if trade_time >= IB_END:
             # During replay ts_et lags wall time; only notify for live trades.
@@ -387,44 +458,56 @@ def run() -> None:
                     tick_times.pop(0)
                 tick_rate = len(tick_times) / 3.0
 
-                session_move = price - day_open if day_open is not None else None
-                fired, all_zone_entries = alert_manager.check_and_notify(
-                    price,
-                    now_et=trade_time,
-                    tick_rate=tick_rate,
-                    session_move_pts=session_move,
-                    consecutive_wins=evaluator.consecutive_wins,
-                    consecutive_losses=evaluator.consecutive_losses,
-                    trade_ts=ts_et,
-                )
-                fired_levels = set()
-                for alert_id, line_name, line_price, direction in fired:
-                    evaluator.add(
-                        alert_id, line_price, direction, ts_et, today.isoformat()
+                try:
+                    session_move = price - day_open if day_open is not None else None
+                    fired, all_zone_entries = alert_manager.check_and_notify(
+                        price,
+                        now_et=trade_time,
+                        tick_rate=tick_rate,
+                        session_move_pts=session_move,
+                        consecutive_wins=evaluator.consecutive_wins,
+                        consecutive_losses=evaluator.consecutive_losses,
+                        trade_ts=ts_et,
                     )
-                    fired_levels.add((line_name, line_price, direction))
+                    fired_levels = set()
+                    for alert_id, line_name, line_price, direction in fired:
+                        evaluator.add(
+                            alert_id, line_price, direction, ts_et, today.isoformat()
+                        )
+                        fired_levels.add((line_name, line_price, direction))
+                    # Track suppressed zone entries for streak computation —
+                    # matches how the backtest computes streaks across ALL entries.
+                    for line_name, line_price, direction in all_zone_entries:
+                        if (line_name, line_price, direction) not in fired_levels:
+                            evaluator.add_untracked(line_price, direction, ts_et)
+                    evaluator.update(price, ts_et)
+                except Exception as e:
+                    print(
+                        f"[alerts] Error processing alert at price={price:.2f}: "
+                        f"{e}\n{traceback.format_exc()}"
+                    )
                 # Bot checks its own zones (1pt entry) and submits orders.
-                if bot is not None:
-                    bot.on_tick(price)
-                # Track suppressed zone entries for streak computation —
-                # matches how the backtest computes streaks across ALL entries.
-                for line_name, line_price, direction in all_zone_entries:
-                    if (line_name, line_price, direction) not in fired_levels:
-                        evaluator.add_untracked(line_price, direction, ts_et)
-                evaluator.update(price, ts_et)
+                bot_call("on_tick", price)
             else:
-                alert_manager.advance_state(price)
-                if bot is not None:
-                    bot.advance_zones(price)
-                # Evaluate pending outcomes during replay too — a restart
-                # mid-evaluation needs the replayed trades to determine
-                # whether the target/stop was hit while the app was down.
-                evaluator.update(price, ts_et)
+                try:
+                    alert_manager.advance_state(price)
+                    evaluator.update(price, ts_et)
+                except Exception as e:
+                    print(
+                        f"[alerts] Error advancing state at price={price:.2f}: "
+                        f"{e}\n{traceback.format_exc()}"
+                    )
+                bot_call("advance_zones", price)
 
         # Save trade cache every CACHE_INTERVAL_SECONDS.
         now_ts = time.time()
         if now_ts - last_cache_ts >= CACHE_INTERVAL_SECONDS:
-            save_trades(get_session_trades())
+            try:
+                save_trades(get_session_trades())
+            except Exception as e:
+                print(
+                    f"[alerts] Error saving trade cache: {e}\n{traceback.format_exc()}"
+                )
             last_cache_ts = now_ts
 
         # Throttle console output — one status line per STATUS_INTERVAL_SECONDS.
@@ -457,3 +540,6 @@ if __name__ == "__main__":
         run()
     except KeyboardInterrupt:
         print("\nMNQ Alert System stopped.")
+    except Exception:
+        print(f"[FATAL] Unhandled exception:\n{traceback.format_exc()}")
+        sys.exit(1)
