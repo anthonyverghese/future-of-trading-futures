@@ -321,7 +321,7 @@ def run() -> None:
                         else 0
                     )
                     send_notification(
-                        f"MNQ Daily Summary — {today.strftime('%m/%d')}",
+                        f"Alert Summary — {today.strftime('%m/%d')}",
                         f"{total} alerts today\n"
                         f"✓ {summary['correct']} correct\n"
                         f"✗ {summary['incorrect']} incorrect\n"
@@ -333,18 +333,24 @@ def run() -> None:
                     f"[alerts] Error sending daily summary: {e}\n{traceback.format_exc()}"
                 )
 
-            # Bot daily summary notification + close.
-            if bot is not None and bot.is_connected:
+            # Bot daily summary notification (always send, even if disconnected).
+            if bot is not None:
                 try:
                     send_notification(
-                        f"Bot Daily Summary — {today.strftime('%m/%d')}",
+                        f"Bot Summary — {today.strftime('%m/%d')}",
                         bot.daily_summary,
                     )
-                    bot.close_session()
                 except Exception as e:
                     print(
-                        f"[bot] Error in close_session: {e}\n{traceback.format_exc()}"
+                        f"[bot] Error sending bot summary: {e}\n{traceback.format_exc()}"
                     )
+                if bot.is_connected:
+                    try:
+                        bot.close_session()
+                    except Exception as e:
+                        print(
+                            f"[bot] Error in close_session: {e}\n{traceback.format_exc()}"
+                        )
 
             try:
                 save_trades(get_session_trades())
