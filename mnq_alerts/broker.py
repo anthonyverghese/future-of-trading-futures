@@ -344,15 +344,17 @@ class IBKRBroker:
                     pnl_pts = exit_price - entry_price
                 else:
                     pnl_pts = entry_price - exit_price
-                pnl_usd = pnl_pts * MNQ_POINT_VALUE - 0.54  # subtract round-trip fee
+                pnl_usd = (
+                    pnl_pts * MNQ_POINT_VALUE - 1.24
+                )  # subtract round-trip commission
             else:
                 # Fallback: infer from order type.
                 if order.orderType == "LMT":
                     pnl_pts = self._pending_target_pts
-                    pnl_usd = pnl_pts * MNQ_POINT_VALUE - 0.54
+                    pnl_usd = pnl_pts * MNQ_POINT_VALUE - 1.24
                 else:
                     pnl_pts = -self._pending_stop_pts
-                    pnl_usd = pnl_pts * MNQ_POINT_VALUE - 0.54
+                    pnl_usd = pnl_pts * MNQ_POINT_VALUE - 1.24
 
             self._daily_pnl_usd += pnl_usd
 

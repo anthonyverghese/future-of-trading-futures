@@ -5,7 +5,7 @@ Models a $10k account with realistic constraints:
   - One position at a time (no stacking)
   - Daily loss limits (stop trading after N losses or -$X)
   - Tracks equity curve, drawdown, and worst-case scenarios
-  - MNQ: $2/point multiplier, ~$0.54 round-trip fee
+  - MNQ: $2/point multiplier, ~$1.24 round-trip commission
 
 Usage:
     python bot_risk_backtest.py

@@ -51,9 +51,9 @@ BOT_EXIT_THRESHOLD = 15.0
 # Evaluation window (seconds). Bot can hold longer since it's automated.
 BOT_WINDOW_SECS = 15 * 60
 
-# MNQ fees: IBKR charges ~$0.27/side for MNQ, so ~$0.54 round-trip.
-# MNQ multiplier is $2/point, so fee in points = $0.54 / $2 = 0.27 pts.
-FEE_PTS = 0.27
+# MNQ fees: IBKR charges ~$0.62/side for MNQ, so ~$1.24 round-trip.
+# MNQ multiplier is $2/point, so fee in points = $1.24 / $2 = 0.62 pts.
+FEE_PTS = 0.62
 
 
 def evaluate_bot_outcome(
