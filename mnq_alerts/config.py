@@ -53,13 +53,14 @@ IBKR_ACCOUNT = os.getenv(
     "IBKR_ACCOUNT", ""
 )  # Paper account ID (e.g. "DU1234567") — verified at startup
 
-# Bot trading parameters (validated via bot_risk_backtest.py over 214 days).
+# Bot trading parameters (validated via walk-forward over 317 days).
 BOT_ENTRY_THRESHOLD = (
     1.0  # Bot trades when price is within 1 pt of level (vs 7 for human)
 )
 BOT_EXIT_THRESHOLD = 15.0  # Bot zone reset distance (vs 20 for human)
-BOT_TARGET_POINTS = 12.0  # Take profit distance from line price
-BOT_STOP_POINTS = 25.0  # Stop loss distance from line price
+BOT_TARGET_POINTS = 10.0  # Take profit distance from line price
+BOT_STOP_POINTS = 20.0  # Stop loss distance from line price
+BOT_MIN_SCORE = 1  # Minimum entry score to trade (walk-forward validated)
 DAILY_LOSS_LIMIT_USD = 150.0  # Stop trading for the day after losing this much
 MAX_CONSECUTIVE_LOSSES = 5  # Stop trading for the day after N straight losses
 BOT_TIMEOUT_SECS = (

@@ -14,8 +14,14 @@ Bot parameters (validated via walk-forward in walk_forward.py):
 
 from __future__ import annotations
 
+import datetime
+
+import pytz
+
 from broker import IBKRBroker
-from config import BOT_ENTRY_THRESHOLD, BOT_EXIT_THRESHOLD
+from config import BOT_ENTRY_THRESHOLD, BOT_EXIT_THRESHOLD, BOT_MIN_SCORE
+
+_ET = pytz.timezone("America/New_York")
 
 
 class BotZone:
@@ -25,6 +31,7 @@ class BotZone:
         self.name = name
         self.price = price
         self.in_zone = False
+        self.entry_count = 0
         self._ref_price: float | None = None
 
     def update(self, current_price: float) -> bool:
@@ -40,8 +47,51 @@ class BotZone:
         if abs(current_price - self.price) <= BOT_ENTRY_THRESHOLD:
             self.in_zone = True
             self._ref_price = self.price
+            self.entry_count += 1
             return True
         return False
+
+
+def bot_entry_score(level: str, direction: str, entry_count: int) -> int:
+    """Score a bot zone entry. Higher = better quality.
+
+    Walk-forward validated over 317 days: filtering entries with score < 1
+    cuts max drawdown nearly in half while keeping 89% of P&L.
+    """
+    score = 0
+    # Level quality
+    if level == "IBL":
+        score += 2
+    elif level in ("FIB_EXT_LO_1.272", "FIB_EXT_HI_1.272"):
+        score += 1
+    elif level == "IBH":
+        score -= 1
+
+    # Direction + level combos
+    if level == "IBL" and direction == "up":
+        score += 1
+    if level == "IBH" and direction == "down":
+        score += 1
+    if level == "IBH" and direction == "up":
+        score -= 1
+
+    # Entry count (retest)
+    if entry_count == 1:
+        score -= 2
+    elif entry_count >= 3:
+        score += 1
+
+    # Time of day
+    now_et = datetime.datetime.now(_ET)
+    hour = now_et.hour + now_et.minute / 60.0
+    if hour >= 15.0:  # power hour
+        score += 2
+    elif 13.0 <= hour < 15.0:  # afternoon
+        score += 1
+    elif 10.5 <= hour < 11.5:  # post-IB weakness
+        score -= 1
+
+    return score
 
 
 class BotTrader:
@@ -104,6 +154,13 @@ class BotTrader:
         for bz in self._zones.values():
             if bz.update(price):
                 direction = "up" if price > bz.price else "down"
+                score = bot_entry_score(bz.name, direction, bz.entry_count)
+                if score < BOT_MIN_SCORE:
+                    print(
+                        f"[bot] Skipped {bz.name} (score {score} < {BOT_MIN_SCORE}) | "
+                        f"test #{bz.entry_count}, {direction}"
+                    )
+                    continue
                 allowed, reason = self._broker.can_trade()
                 if allowed:
                     result = self._broker.submit_bracket(
