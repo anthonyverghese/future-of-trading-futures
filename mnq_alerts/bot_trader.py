@@ -15,11 +15,20 @@ Bot parameters (validated via walk-forward in walk_forward.py):
 from __future__ import annotations
 
 import datetime
+from collections import deque
 
 import pytz
 
 from broker import IBKRBroker
-from config import BOT_ENTRY_THRESHOLD, BOT_EXIT_THRESHOLD, BOT_MIN_SCORE
+from config import (
+    BOT_ENTRY_THRESHOLD,
+    BOT_EXIT_THRESHOLD,
+    BOT_MAX_ENTRIES_PER_LEVEL,
+    BOT_MIN_SCORE,
+    BOT_TREND_LOOKBACK_MIN,
+    BOT_TREND_PENALTY,
+    BOT_TREND_THRESHOLD,
+)
 
 _ET = pytz.timezone("America/New_York")
 
@@ -59,11 +68,14 @@ class BotZone:
         return False
 
 
-def bot_entry_score(level: str, direction: str, entry_count: int) -> int:
+def bot_entry_score(
+    level: str, direction: str, entry_count: int, trend_60m: float = 0.0
+) -> int:
     """Score a bot zone entry. Higher = better quality.
 
-    Walk-forward validated over 317 days: filtering entries with score < 1
-    cuts max drawdown nearly in half while keeping 89% of P&L.
+    Walk-forward validated over 318 days (VWAP-corrected):
+    - Score >= 1 filter: 4.0x P&L/DD
+    - Adding 60m trend penalty + max 5/level: 8.1x P&L/DD
     """
     score = 0
     # Level quality
@@ -98,6 +110,12 @@ def bot_entry_score(level: str, direction: str, entry_count: int) -> int:
     elif 10.5 <= hour < 11.5:  # post-IB weakness
         score -= 1
 
+    # Counter-trend penalty: don't buy into a falling market or sell into a rising one.
+    if direction == "up" and trend_60m < -BOT_TREND_THRESHOLD:
+        score += BOT_TREND_PENALTY
+    elif direction == "down" and trend_60m > BOT_TREND_THRESHOLD:
+        score += BOT_TREND_PENALTY
+
     return score
 
 
@@ -110,6 +128,10 @@ class BotTrader:
     def __init__(self) -> None:
         self._broker = IBKRBroker()
         self._zones: dict[str, BotZone] = {}
+        # Rolling 60-min price window for trend calculation.
+        self._price_window: deque[tuple[datetime.datetime, float]] = deque()
+        # Per-level daily trade count (reset each day via reset_daily_state).
+        self._level_trade_counts: dict[str, int] = {}
 
     def connect(self) -> bool:
         """Connect to IBKR. Returns True on success."""
@@ -163,14 +185,37 @@ class BotTrader:
         """Check all bot zones and submit orders on fresh entries."""
         if not self._broker.is_connected:
             return
+
+        # Update 60-min price window for trend calculation.
+        now = datetime.datetime.now(_ET)
+        self._price_window.append((now, price))
+        cutoff = now - datetime.timedelta(minutes=BOT_TREND_LOOKBACK_MIN)
+        while self._price_window and self._price_window[0][0] < cutoff:
+            self._price_window.popleft()
+        # Compute trend: price change over the window.
+        if len(self._price_window) >= 2:
+            trend_60m = self._price_window[-1][1] - self._price_window[0][1]
+        else:
+            trend_60m = 0.0
+
         for bz in self._zones.values():
             if bz.update(price):
                 direction = "up" if price > bz.price else "down"
-                score = bot_entry_score(bz.name, direction, bz.entry_count)
+
+                # Per-level daily trade cap.
+                level_trades = self._level_trade_counts.get(bz.name, 0)
+                if level_trades >= BOT_MAX_ENTRIES_PER_LEVEL:
+                    print(
+                        f"[bot] Skipped {bz.name} (max {BOT_MAX_ENTRIES_PER_LEVEL} "
+                        f"trades/level/day reached)"
+                    )
+                    continue
+
+                score = bot_entry_score(bz.name, direction, bz.entry_count, trend_60m)
                 if score < BOT_MIN_SCORE:
                     print(
                         f"[bot] Skipped {bz.name} (score {score} < {BOT_MIN_SCORE}) | "
-                        f"test #{bz.entry_count}, {direction}"
+                        f"test #{bz.entry_count}, {direction}, trend={trend_60m:+.0f}"
                     )
                     continue
                 allowed, reason = self._broker.can_trade()
@@ -181,7 +226,9 @@ class BotTrader:
                         line_price=bz.price,
                         level_name=bz.name,
                     )
-                    if not result.success:
+                    if result.success:
+                        self._level_trade_counts[bz.name] = level_trades + 1
+                    else:
                         print(f"[broker] Trade failed: {result.error}")
                 else:
                     print(f"[broker] Skipped {bz.name}: {reason}")
@@ -195,6 +242,8 @@ class BotTrader:
         """Reset risk counters and clear zones for a new session."""
         self._broker.reset_daily_state()
         self._zones.clear()
+        self._price_window.clear()
+        self._level_trade_counts.clear()
 
     def eod_flatten(self) -> None:
         """Flatten open position a few minutes before market close.
