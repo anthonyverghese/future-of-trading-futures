@@ -78,8 +78,11 @@ class IBKRBroker:
         self._connected = False
         self._contract: Contract | None = None  # cached qualified contract
         self._was_connected = False  # tracks if we ever connected successfully
+        self._connect_attempted = False  # True after first connect() call
         self._reconnect_attempts = 0
         self._max_reconnect_attempts = 5
+        self._last_reconnect_time: float = 0.0  # monotonic timestamp
+        self._reconnect_interval_secs = 60.0  # retry every 60s, not every tick
 
         # Risk management state — resets each trading day.
         self._daily_pnl_usd: float = 0.0
@@ -106,6 +109,7 @@ class IBKRBroker:
 
     def connect(self) -> bool:
         """Connect to IB Gateway / TWS. Returns True on success."""
+        self._connect_attempted = True
         if not IBKR_TRADING_ENABLED:
             print("[broker] Trading disabled (IBKR_TRADING_ENABLED=false)")
             return False
@@ -174,13 +178,11 @@ class IBKRBroker:
         return self._connected and self._ib is not None and self._ib.isConnected()
 
     def reconnect(self) -> bool:
-        """Attempt to reconnect after an unexpected disconnection.
+        """Attempt to reconnect after disconnection or initial connection failure.
 
-        Only tries if we previously had a successful connection and haven't
-        exhausted reconnect attempts.
+        Retries up to max_reconnect_attempts, then gives up (until reset_daily_state
+        clears the counter for the next trading day).
         """
-        if not self._was_connected:
-            return False
         if self._reconnect_attempts >= self._max_reconnect_attempts:
             if self._reconnect_attempts == self._max_reconnect_attempts:
                 print(
@@ -223,10 +225,14 @@ class IBKRBroker:
         trade tick). Without this, orderStatusEvent callbacks won't
         dispatch and the broker won't know when positions close.
 
-        Also detects unexpected disconnections and attempts to reconnect.
+        Also detects disconnections (or initial connection failures) and
+        attempts to reconnect with rate limiting (every 60s, not every tick).
         """
-        if self._was_connected and not self.is_connected:
-            self.reconnect()
+        if self._connect_attempted and not self.is_connected:
+            now = time.monotonic()
+            if now - self._last_reconnect_time >= self._reconnect_interval_secs:
+                self._last_reconnect_time = now
+                self.reconnect()
             return
         if self._ib and self.is_connected:
             try:
@@ -251,6 +257,7 @@ class IBKRBroker:
             self._pending_line_price = None
             self._pending_entry_fill = None
             self._position_opened_at = None
+            self._reconnect_attempts = 0  # retry connection each new day
             if prev_trades > 0:
                 print(
                     f"[broker] Daily reset (yesterday: {prev_trades} trades, "
