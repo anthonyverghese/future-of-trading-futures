@@ -25,21 +25,28 @@ _ET = pytz.timezone("America/New_York")
 
 
 class BotZone:
-    """Zone tracker for a single level using bot thresholds (1pt/15pt)."""
+    """Zone tracker for a single level using bot thresholds (1pt/15pt).
 
-    def __init__(self, name: str, price: float) -> None:
+    For drifting levels (VWAP), exit check uses the current level price
+    instead of the locked entry reference, preventing rapid re-triggering
+    as VWAP drifts toward price after a zone exit.
+    """
+
+    def __init__(self, name: str, price: float, drifts: bool = False) -> None:
         self.name = name
         self.price = price
         self.in_zone = False
         self.entry_count = 0
+        self.drifts = drifts  # True for VWAP
         self._ref_price: float | None = None
 
     def update(self, current_price: float) -> bool:
         """Returns True on fresh zone entry (price within BOT_ENTRY_THRESHOLD)."""
         if self.in_zone:
+            exit_ref = self.price if self.drifts else self._ref_price
             if (
-                self._ref_price is not None
-                and abs(current_price - self._ref_price) > BOT_EXIT_THRESHOLD
+                exit_ref is not None
+                and abs(current_price - exit_ref) > BOT_EXIT_THRESHOLD
             ):
                 self.in_zone = False
                 self._ref_price = None
@@ -139,7 +146,7 @@ class BotTrader:
                 if name in self._zones:
                     self._zones[name].price = price
                 else:
-                    self._zones[name] = BotZone(name, price)
+                    self._zones[name] = BotZone(name, price, drifts=(name == "VWAP"))
 
     def update_fib_levels(self, fib_levels: dict[str, float]) -> None:
         """Register fib levels for bot zone tracking."""

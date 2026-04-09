@@ -143,7 +143,10 @@ def simulate_bot_day(
     trades: list[dict] = []
 
     for level_name, level_arr, et in levels_config:
-        entries = _run_zone_numpy(prices, level_arr, entry_threshold, et)
+        use_current = level_name == "VWAP"
+        entries = _run_zone_numpy(
+            prices, level_arr, entry_threshold, et, use_current_exit=use_current
+        )
         for local_idx, entry_count, ref_price in entries:
             global_idx = dc.post_ib_start_idx + local_idx
             entry_price = float(dc.full_prices[global_idx])

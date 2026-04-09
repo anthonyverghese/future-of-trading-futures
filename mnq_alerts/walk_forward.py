@@ -126,8 +126,13 @@ def precompute_day_entries(dc: DayCache) -> DayEntries:
         ("FIB_EXT_LO_1.272", np.full(n, dc.fib_lo)),
         ("FIB_EXT_HI_1.272", np.full(n, dc.fib_hi)),
     ]:
+        use_current = level_name == "VWAP"
         entries = _run_zone_numpy(
-            prices, level_arr, BOT_ENTRY_THRESHOLD, BOT_EXIT_THRESHOLD
+            prices,
+            level_arr,
+            BOT_ENTRY_THRESHOLD,
+            BOT_EXIT_THRESHOLD,
+            use_current_exit=use_current,
         )
         for local_idx, ec, rp in entries:
             all_entries.append((dc.post_ib_start_idx + local_idx, level_name, ec, rp))
