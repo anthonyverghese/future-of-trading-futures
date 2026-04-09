@@ -140,13 +140,18 @@ class BotTrader:
         ibl: float | None = None,
         vwap: float | None = None,
     ) -> None:
-        """Bulk update levels. Updates price on existing zones without resetting state."""
-        for name, price in {"IBH": ibh, "IBL": ibl, "VWAP": vwap}.items():
+        """Bulk update levels. Updates price on existing zones without resetting state.
+
+        VWAP is excluded from bot trading — walk-forward over 318 days showed
+        VWAP is net negative (-$68 P&L, $1,710 MaxDD) while IBH/IBL/Fib are
+        all solidly positive.
+        """
+        for name, price in {"IBH": ibh, "IBL": ibl}.items():
             if price is not None:
                 if name in self._zones:
                     self._zones[name].price = price
                 else:
-                    self._zones[name] = BotZone(name, price, drifts=(name == "VWAP"))
+                    self._zones[name] = BotZone(name, price)
 
     def update_fib_levels(self, fib_levels: dict[str, float]) -> None:
         """Register fib levels for bot zone tracking."""
