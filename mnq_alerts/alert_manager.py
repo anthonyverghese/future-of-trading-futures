@@ -31,7 +31,13 @@ SendNotificationFn = Callable[[str, str], bool]
 
 @dataclass
 class LevelState:
-    """Alert state for a single price level (IBH, IBL, or VWAP)."""
+    """Alert state for a single price level (IBH, IBL, Fib, or VWAP).
+
+    For fixed levels (IBH/IBL/Fib): exit check uses the locked reference_price.
+    For drifting levels (VWAP): exit check uses the current level price so the
+    zone tracks VWAP as it moves, preventing rapid re-triggering when VWAP drifts
+    toward price after a zone exit.
+    """
 
     name: str
     price: float
@@ -40,16 +46,18 @@ class LevelState:
         None  # level price locked at zone entry; used for exit check
     )
     entry_count: int = 0  # cumulative zone entries this session
+    drifts: bool = False  # True for VWAP — exit checks current price, not locked ref
 
     def update(self, current_price: float) -> bool:
         """Returns True if an alert should fire (price just entered the zone).
 
         On zone entry, reference_price is locked to the current level price.
         Exit requires price to move ALERT_EXIT_POINTS (20) away from the
-        reference — wider than the entry threshold (10) to reduce re-triggering.
+        reference (fixed levels) or current level price (drifting levels like VWAP).
         """
         if self.in_zone:
-            if abs(current_price - self.reference_price) > ALERT_EXIT_POINTS:
+            exit_ref = self.price if self.drifts else self.reference_price
+            if abs(current_price - exit_ref) > ALERT_EXIT_POINTS:
                 self.in_zone = False
                 self.reference_price = None
             return False
@@ -225,7 +233,9 @@ class AlertManager:
             if price is None:
                 continue
             if name not in self._levels:
-                self._levels[name] = LevelState(name=name, price=price)
+                self._levels[name] = LevelState(
+                    name=name, price=price, drifts=(name == "VWAP")
+                )
                 print(f"[AlertManager] {name} registered at {price:.2f}")
             else:
                 self._levels[name].price = price  # VWAP drifts; always update
