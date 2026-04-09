@@ -262,6 +262,7 @@ class AlertManager:
         consecutive_wins: int = 0,
         consecutive_losses: int = 0,
         trade_ts: datetime.datetime | None = None,
+        range_30m: float | None = None,
     ) -> tuple[list[tuple[int, str, float, str]], list[tuple[str, float, str]]]:
         """
         Fire a notification for any level whose zone is newly entered.
@@ -294,6 +295,7 @@ class AlertManager:
                     direction=direction,
                     consecutive_wins=consecutive_wins,
                     consecutive_losses=consecutive_losses,
+                    range_30m=range_30m,
                     breakdown=True,
                 )
 

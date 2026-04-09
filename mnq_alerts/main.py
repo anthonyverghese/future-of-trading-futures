@@ -247,6 +247,8 @@ def run() -> None:
 
     # Tick rate: count trades in a rolling window for live ticks only.
     tick_times: list[datetime.datetime] = []
+    # Rolling 30-min price window for volatility scoring.
+    price_window_30m: list[tuple[datetime.datetime, float]] = []
     first_trade_logged = False
     live_transition_logged = False
 
@@ -464,6 +466,17 @@ def run() -> None:
                     tick_times.pop(0)
                 tick_rate = len(tick_times) / 3.0
 
+                # Update 30-min price window for volatility scoring.
+                price_window_30m.append((ts_et, price))
+                vol_window_start = ts_et - datetime.timedelta(minutes=30)
+                while price_window_30m and price_window_30m[0][0] < vol_window_start:
+                    price_window_30m.pop(0)
+                if len(price_window_30m) >= 2:
+                    window_prices = [p for _, p in price_window_30m]
+                    range_30m = max(window_prices) - min(window_prices)
+                else:
+                    range_30m = None
+
                 try:
                     session_move = price - day_open if day_open is not None else None
                     fired, all_zone_entries = alert_manager.check_and_notify(
@@ -474,6 +487,7 @@ def run() -> None:
                         consecutive_wins=evaluator.consecutive_wins,
                         consecutive_losses=evaluator.consecutive_losses,
                         trade_ts=ts_et,
+                        range_30m=range_30m,
                     )
                     fired_levels = set()
                     for alert_id, line_name, line_price, direction in fired:

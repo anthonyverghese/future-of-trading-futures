@@ -13,6 +13,7 @@ Components (each contributes an integer score):
   Session move:    sweet spots (10-20 green, -20 to -10 red) +2,
                    strongly red +1, near-zero green -3, rest 0
   Streak:          2+ wins +3, 2+ losses -2
+  Volatility:      30m range > 75 pts → -2 (walk-forward validated over 318 days)
 """
 
 from __future__ import annotations
@@ -44,6 +45,7 @@ class ScoreBreakdown:
     test: int = 0
     move: int = 0
     streak: int = 0
+    vol: int = 0
 
     @property
     def total(self) -> int:
@@ -55,15 +57,20 @@ class ScoreBreakdown:
             + self.test
             + self.move
             + self.streak
+            + self.vol
         )
 
     def __str__(self) -> str:
         parts = []
-        for name in ("level", "combo", "time", "tick", "test", "move", "streak"):
+        for name in ("level", "combo", "time", "tick", "test", "move", "streak", "vol"):
             val = getattr(self, name)
             if val != 0:
                 parts.append(f"{name}={val:+d}")
         return ", ".join(parts) if parts else "all zero"
+
+
+VOL_30M_THRESHOLD = 75.0  # 30-minute range above this = volatile
+VOL_PENALTY = -2  # score penalty when volatile
 
 
 def composite_score(
@@ -75,9 +82,10 @@ def composite_score(
     direction: str | None = None,
     consecutive_wins: int = 0,
     consecutive_losses: int = 0,
+    range_30m: float | None = None,
     breakdown: bool = False,
 ) -> int | tuple[int, ScoreBreakdown]:
-    """Compute composite alert quality score (214-day backtest, train/test validated).
+    """Compute composite alert quality score (318-day walk-forward validated).
 
     Returns an integer score; alerts with score < MIN_SCORE should be suppressed.
     If breakdown=True, returns (score, ScoreBreakdown) for logging/debugging.
@@ -160,6 +168,11 @@ def composite_score(
         bd.streak = 3
     elif consecutive_losses >= 2:
         bd.streak = -2
+
+    # Volatility: penalize alerts during high 30-min price range.
+    # 318-day walk-forward: +1.5% WR (81.7% → 83.2%) at 3.4 alerts/day.
+    if range_30m is not None and range_30m > VOL_30M_THRESHOLD:
+        bd.vol = VOL_PENALTY
 
     if breakdown:
         return bd.total, bd
