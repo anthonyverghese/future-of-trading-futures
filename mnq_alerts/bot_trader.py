@@ -147,9 +147,13 @@ class BotTrader:
         Also checks if the open position (if any) has exceeded the per-trade
         timeout and closes it at market. This matches the 15-min window
         assumed by bot_risk_backtest.py.
+
+        Always calls broker.process_events() (even when disconnected) so the
+        broker's auto-reconnect logic can attempt to recover from initial
+        connection failures or unexpected drops.
         """
+        self._broker.process_events()
         if self._broker.is_connected:
-            self._broker.process_events()
             self._broker.check_position_timeout()
 
     def update_level(self, name: str, price: float) -> None:
