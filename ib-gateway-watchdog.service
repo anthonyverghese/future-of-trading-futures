@@ -1,0 +1,17 @@
+[Unit]
+Description=IB Gateway Login Watchdog — stops container after too many failures
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/future-of-trading-futures
+ExecStart=/home/ec2-user/miniconda3/envs/mnq/bin/python -u ib-gateway-watchdog.py
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
