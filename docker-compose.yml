@@ -1,7 +1,10 @@
 services:
   ib-gateway:
     image: ghcr.io/gnzsnz/ib-gateway:stable
-    restart: always
+    # Limit container restarts to 4 attempts to prevent IBKR account lockout
+    # from too many failed login attempts. After 4 failed restarts, the
+    # container stays stopped until manually restarted.
+    restart: on-failure:4
     env_file:
       - ib-gateway.env
     ports:
