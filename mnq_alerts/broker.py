@@ -105,6 +105,9 @@ class IBKRBroker:
         self._pending_stop_price: float | None = None
         self._pending_db_trade_id: int | None = None  # row id in bot_trades table
         self._pending_exit_reason: str | None = None  # set before close orders
+        self._pending_score: int | None = None  # bot entry score
+        self._pending_trend_60m: float | None = None  # 60m trend at entry
+        self._pending_entry_count: int | None = None  # which retest of this level
         self._position_opened_at: float | None = None  # monotonic() timestamp
 
     def connect(self) -> bool:
@@ -330,6 +333,9 @@ class IBKRBroker:
                         entry_price=self._pending_entry_fill,
                         target_price=self._pending_target_price or 0.0,
                         stop_price=self._pending_stop_price or 0.0,
+                        score=self._pending_score,
+                        trend_60m=self._pending_trend_60m,
+                        entry_count=self._pending_entry_count,
                     )
                 except Exception as e:
                     print(f"[broker] Error logging trade entry to DB: {e}")
@@ -574,6 +580,9 @@ class IBKRBroker:
         line_price: float,
         level_name: str,
         qty: int = ORDER_QTY,
+        score: int | None = None,
+        trend_60m: float | None = None,
+        entry_count: int | None = None,
     ) -> TradeResult:
         """Submit a bracket order: market entry + limit target + stop loss.
 
@@ -581,6 +590,9 @@ class IBKRBroker:
         current_price: price at alert time (for logging)
         line_price: the level price (target/stop measured from here)
         level_name: e.g. 'IBL', 'VWAP' (for logging)
+        score: bot entry score (stored on bot_trades for analysis)
+        trend_60m: 60-minute price trend at entry
+        entry_count: which retest of this level
 
         Checks risk limits before submitting. Returns TradeResult with
         success=False if limits are exceeded.
@@ -599,6 +611,11 @@ class IBKRBroker:
             if not allowed:
                 print(f"[broker] Trade blocked: {reason}")
                 return TradeResult(success=False, error=reason)
+
+            # Stash analytics fields so the entry-fill callback can persist them.
+            self._pending_score = score
+            self._pending_trend_60m = trend_60m
+            self._pending_entry_count = entry_count
 
             return self._submit_bracket_locked(
                 direction, current_price, line_price, level_name, qty

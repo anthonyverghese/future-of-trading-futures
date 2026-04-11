@@ -229,6 +229,9 @@ class BotTrader:
                         current_price=price,
                         line_price=bz.price,
                         level_name=bz.name,
+                        score=score,
+                        trend_60m=trend_60m,
+                        entry_count=bz.entry_count,
                     )
                     if result.success:
                         self._level_trade_counts[bz.name] = level_trades + 1

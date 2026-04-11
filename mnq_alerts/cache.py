@@ -134,7 +134,11 @@ def _ensure_alerts_schema(conn: sqlite3.Connection) -> None:
             current_price REAL,
             direction     TEXT,
             hit_time      TEXT,
-            outcome       TEXT
+            outcome       TEXT,
+            score         INTEGER,
+            tier          TEXT,
+            range_30m     REAL,
+            entry_count   INTEGER
         )
     """)
     # Migrate older schemas that may be missing the new columns.
@@ -143,6 +147,10 @@ def _ensure_alerts_schema(conn: sqlite3.Connection) -> None:
         "direction TEXT",
         "hit_time TEXT",
         "outcome TEXT",
+        "score INTEGER",
+        "tier TEXT",
+        "range_30m REAL",
+        "entry_count INTEGER",
     ]:
         try:
             conn.execute(f"ALTER TABLE alerts ADD COLUMN {col}")
@@ -175,9 +183,22 @@ def _ensure_alerts_schema(conn: sqlite3.Connection) -> None:
             stop_price     REAL,
             pnl_usd        REAL,
             outcome        TEXT,
-            exit_reason    TEXT
+            exit_reason    TEXT,
+            score          INTEGER,
+            trend_60m      REAL,
+            entry_count    INTEGER
         )
     """)
+    # Migrate older bot_trades schemas that may be missing the new columns.
+    for col in [
+        "score INTEGER",
+        "trend_60m REAL",
+        "entry_count INTEGER",
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE bot_trades ADD COLUMN {col}")
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
 
 def log_alert(
@@ -187,6 +208,10 @@ def log_alert(
     current_price: float,
     direction: str,
     trade_ts: datetime.datetime | None = None,
+    score: int | None = None,
+    tier: str | None = None,
+    range_30m: float | None = None,
+    entry_count: int | None = None,
 ) -> int:
     """
     Persist a sent push notification to the permanent alerts log.
@@ -194,6 +219,10 @@ def log_alert(
     direction: 'up' if price was above the line (buy bias), 'down' if below (sell bias).
     trade_ts: the Databento trade timestamp that triggered the alert (preferred
               over wall clock so alert time and hit_time use the same source).
+    score: composite score that gated the alert.
+    tier: signal tier ("Good"/"Strong"/"Elite") shown in the notification.
+    range_30m: 30-minute price range at alert time (volatility metric).
+    entry_count: which retest of this level (1=first, 2=second, etc.).
     """
     if trade_ts is not None:
         date_str = trade_ts.strftime("%Y-%m-%d")
@@ -206,9 +235,21 @@ def log_alert(
     with sqlite3.connect(ALERTS_LOG_PATH) as conn:
         _ensure_alerts_schema(conn)
         cur = conn.execute(
-            """INSERT INTO alerts (date, time, ticker, line, line_price, current_price, direction)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (date_str, time_str, ticker, line, line_price, current_price, direction),
+            """INSERT INTO alerts (date, time, ticker, line, line_price, current_price, direction, score, tier, range_30m, entry_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                date_str,
+                time_str,
+                ticker,
+                line,
+                line_price,
+                current_price,
+                direction,
+                score,
+                tier,
+                range_30m,
+                entry_count,
+            ),
         )
         # Inline the daily_stats upsert — calling upsert_daily_stats() here
         # triggers _ensure_alerts_schema DDL which implicitly commits the
@@ -366,15 +407,24 @@ def log_bot_trade_entry(
     entry_price: float,
     target_price: float,
     stop_price: float,
+    score: int | None = None,
+    trend_60m: float | None = None,
+    entry_count: int | None = None,
 ) -> int:
-    """Log a bot trade entry. Returns the row id for later update on exit."""
+    """Log a bot trade entry. Returns the row id for later update on exit.
+
+    score: bot entry score that passed the BOT_MIN_SCORE filter.
+    trend_60m: 60-minute price trend at entry (positive = up).
+    entry_count: which retest of this level (1=first, 2=second, etc.).
+    """
     with sqlite3.connect(ALERTS_LOG_PATH) as conn:
         _ensure_alerts_schema(conn)
         cur = conn.execute(
             """INSERT INTO bot_trades
                (date, entry_time, level_name, direction, line_price,
-                entry_price, target_price, stop_price, outcome)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open')""",
+                entry_price, target_price, stop_price, outcome,
+                score, trend_60m, entry_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)""",
             (
                 date_str,
                 entry_time,
@@ -384,6 +434,9 @@ def log_bot_trade_entry(
                 entry_price,
                 target_price,
                 stop_price,
+                score,
+                trend_60m,
+                entry_count,
             ),
         )
         return cur.lastrowid

@@ -324,6 +324,10 @@ class AlertManager:
                     current_price=current_price,
                     direction=direction,
                     trade_ts=trade_ts,
+                    score=score,
+                    tier=tier_label,
+                    range_30m=range_30m,
+                    entry_count=level.entry_count,
                 )
                 self._notify_fn(title, body)
                 fired.append((alert_id, level.name, level.price, direction))
