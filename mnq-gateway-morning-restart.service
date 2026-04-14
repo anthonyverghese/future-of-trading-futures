@@ -1,0 +1,12 @@
+[Unit]
+Description=Pre-market IB Gateway docker restart — clears overnight stuck-login state
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/future-of-trading-futures
+ExecStart=/home/ec2-user/miniconda3/envs/mnq/bin/python -u mnq-gateway-morning-restart.py
+StandardOutput=journal
+StandardError=journal
