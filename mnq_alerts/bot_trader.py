@@ -20,6 +20,7 @@ from collections import deque
 import pytz
 
 from broker import IBKRBroker
+from cache import load_bot_daily_level_counts
 from config import (
     BOT_ENTRY_THRESHOLD,
     BOT_EXIT_THRESHOLD,
@@ -135,7 +136,26 @@ class BotTrader:
 
     def connect(self) -> bool:
         """Connect to IBKR. Returns True on success."""
-        return self._broker.connect()
+        if not self._broker.connect():
+            return False
+        # Restore per-level daily caps from today's closed trades so a
+        # restart can't hand each level a fresh BOT_MAX_ENTRIES_PER_LEVEL
+        # allotment. Broker restores its own counters inside connect().
+        try:
+            # Match the system-local tz convention used when bot_trades
+            # rows are written in broker._on_order_status.
+            now = datetime.datetime.now(datetime.timezone.utc).astimezone()
+            self._level_trade_counts = load_bot_daily_level_counts(
+                now.strftime("%Y-%m-%d")
+            )
+            if self._level_trade_counts:
+                summary = ", ".join(
+                    f"{k}={v}" for k, v in sorted(self._level_trade_counts.items())
+                )
+                print(f"[bot] Restored per-level trade counts: {summary}")
+        except Exception as exc:
+            print(f"[bot] Failed to restore per-level trade counts: {exc}")
+        return True
 
     @property
     def is_connected(self) -> bool:

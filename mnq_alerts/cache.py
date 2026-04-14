@@ -186,7 +186,8 @@ def _ensure_alerts_schema(conn: sqlite3.Connection) -> None:
             exit_reason    TEXT,
             score          INTEGER,
             trend_60m      REAL,
-            entry_count    INTEGER
+            entry_count    INTEGER,
+            parent_order_id INTEGER
         )
     """)
     # Migrate older bot_trades schemas that may be missing the new columns.
@@ -194,6 +195,7 @@ def _ensure_alerts_schema(conn: sqlite3.Connection) -> None:
         "score INTEGER",
         "trend_60m REAL",
         "entry_count INTEGER",
+        "parent_order_id INTEGER",
     ]:
         try:
             conn.execute(f"ALTER TABLE bot_trades ADD COLUMN {col}")
@@ -410,12 +412,16 @@ def log_bot_trade_entry(
     score: int | None = None,
     trend_60m: float | None = None,
     entry_count: int | None = None,
+    parent_order_id: int | None = None,
 ) -> int:
     """Log a bot trade entry. Returns the row id for later update on exit.
 
     score: bot entry score that passed the BOT_MIN_SCORE filter.
     trend_60m: 60-minute price trend at entry (positive = up).
     entry_count: which retest of this level (1=first, 2=second, etc.).
+    parent_order_id: IBKR client-side orderId of the parent (market) order.
+        Stored so a subsequent restart can look this row up when adopting
+        an open position via orderRef on the live bracket children.
     """
     with sqlite3.connect(ALERTS_LOG_PATH) as conn:
         _ensure_alerts_schema(conn)
@@ -423,8 +429,8 @@ def log_bot_trade_entry(
             """INSERT INTO bot_trades
                (date, entry_time, level_name, direction, line_price,
                 entry_price, target_price, stop_price, outcome,
-                score, trend_60m, entry_count)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)""",
+                score, trend_60m, entry_count, parent_order_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)""",
             (
                 date_str,
                 entry_time,
@@ -437,9 +443,52 @@ def log_bot_trade_entry(
                 score,
                 trend_60m,
                 entry_count,
+                parent_order_id,
             ),
         )
         return cur.lastrowid
+
+
+def load_bot_open_trade_by_parent_order_id(
+    parent_order_id: int, date_str: str
+) -> dict | None:
+    """Look up an open bot_trades row by parent_order_id (the IBKR parent
+    orderId tagged at submission time).
+
+    Used by IBKRBroker._reconcile_open_position() after a restart: we
+    parse the orderRef off the live bracket children, pull parent_order_id
+    out, and call this to hydrate _pending_* state.
+
+    Returns None if no matching row is found.
+    """
+    if not os.path.exists(ALERTS_LOG_PATH):
+        return None
+    try:
+        with sqlite3.connect(ALERTS_LOG_PATH) as conn:
+            _ensure_alerts_schema(conn)
+            row = conn.execute(
+                """SELECT id, level_name, direction, line_price, entry_price,
+                          target_price, stop_price, score, trend_60m, entry_count
+                   FROM bot_trades
+                   WHERE parent_order_id = ? AND date = ? AND outcome = 'open'""",
+                (parent_order_id, date_str),
+            ).fetchone()
+    except Exception:
+        return None
+    if row is None:
+        return None
+    return {
+        "id": row[0],
+        "level_name": row[1],
+        "direction": row[2],
+        "line_price": row[3],
+        "entry_price": row[4],
+        "target_price": row[5],
+        "stop_price": row[6],
+        "score": row[7],
+        "trend_60m": row[8],
+        "entry_count": row[9],
+    }
 
 
 def update_bot_trade_exit(
@@ -486,6 +535,105 @@ def get_bot_daily_summary(date_str: str) -> dict:
     except Exception:
         pass
     return result
+
+
+def mark_open_bot_trades_orphaned(date_str: str) -> int:
+    """Mark any `outcome='open'` bot_trades rows for the given date as
+    `orphaned`. Returns the number of rows updated.
+
+    Called from IBKRBroker._defensive_flatten after a failed reconcile,
+    so stale open rows don't silently under-count future daily restores
+    (which filter `outcome != 'open'`).
+    """
+    if not os.path.exists(ALERTS_LOG_PATH):
+        return 0
+    try:
+        with sqlite3.connect(ALERTS_LOG_PATH) as conn:
+            _ensure_alerts_schema(conn)
+            cur = conn.execute(
+                """UPDATE bot_trades
+                   SET outcome = 'orphaned', exit_reason = 'defensive_flatten'
+                   WHERE date = ? AND outcome = 'open'""",
+                (date_str,),
+            )
+            return cur.rowcount
+    except Exception:
+        return 0
+
+
+def load_bot_daily_risk_state(date_str: str) -> dict:
+    """Restore broker risk counters from today's closed bot_trades.
+
+    Scans rows where outcome != 'open' in entry order. Returns:
+      pnl_usd, trades, wins, losses, consecutive_losses
+    consecutive_losses walks back from the tail until the first non-loss,
+    matching how broker._on_order_status maintains the streak.
+
+    Called by IBKRBroker.connect() so a mid-day restart doesn't hand the
+    bot a fresh daily-loss budget or clear a consecutive-loss stop.
+    """
+    state = {
+        "pnl_usd": 0.0,
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "consecutive_losses": 0,
+    }
+    if not os.path.exists(ALERTS_LOG_PATH):
+        return state
+    try:
+        with sqlite3.connect(ALERTS_LOG_PATH) as conn:
+            _ensure_alerts_schema(conn)
+            rows = conn.execute(
+                """SELECT outcome, COALESCE(pnl_usd, 0) FROM bot_trades
+                   WHERE date = ? AND outcome != 'open'
+                   ORDER BY id""",
+                (date_str,),
+            ).fetchall()
+    except Exception:
+        return state
+
+    for outcome, pnl in rows:
+        state["trades"] += 1
+        state["pnl_usd"] += pnl
+        if outcome == "win":
+            state["wins"] += 1
+        elif outcome == "loss":
+            state["losses"] += 1
+
+    for outcome, _ in reversed(rows):
+        if outcome == "loss":
+            state["consecutive_losses"] += 1
+        else:
+            break
+    return state
+
+
+def load_bot_daily_level_counts(date_str: str) -> dict[str, int]:
+    """Return {level_name: trade_count} for today's closed bot_trades.
+
+    Used by BotTrader.connect() to restore the per-level daily cap
+    (BOT_MAX_ENTRIES_PER_LEVEL) so a restart can't hand each level a
+    fresh allotment.
+    """
+    counts: dict[str, int] = {}
+    if not os.path.exists(ALERTS_LOG_PATH):
+        return counts
+    try:
+        with sqlite3.connect(ALERTS_LOG_PATH) as conn:
+            _ensure_alerts_schema(conn)
+            rows = conn.execute(
+                """SELECT level_name, COUNT(*) FROM bot_trades
+                   WHERE date = ? AND outcome != 'open'
+                   GROUP BY level_name""",
+                (date_str,),
+            ).fetchall()
+    except Exception:
+        return counts
+    for level_name, count in rows:
+        if level_name:
+            counts[level_name] = count
+    return counts
 
 
 def upsert_daily_stats(

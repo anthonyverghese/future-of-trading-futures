@@ -37,7 +37,13 @@ from config import (
 if IBKR_TRADING_ENABLED:
     from ib_insync import IB, Contract, LimitOrder, MarketOrder, Order, StopOrder
 
-from cache import log_bot_trade_entry, update_bot_trade_exit
+from cache import (
+    load_bot_daily_risk_state,
+    load_bot_open_trade_by_parent_order_id,
+    log_bot_trade_entry,
+    mark_open_bot_trades_orphaned,
+    update_bot_trade_exit,
+)
 
 MNQ_EXCHANGE = "CME"
 MNQ_SYMBOL = "MNQ"
@@ -108,6 +114,7 @@ class IBKRBroker:
         self._pending_score: int | None = None  # bot entry score
         self._pending_trend_60m: float | None = None  # 60m trend at entry
         self._pending_entry_count: int | None = None  # which retest of this level
+        self._pending_parent_order_id: int | None = None  # parent orderId (for recovery)
         self._position_opened_at: float | None = None  # monotonic() timestamp
 
     def connect(self) -> bool:
@@ -143,8 +150,18 @@ class IBKRBroker:
             # Register fill callback for risk tracking.
             self._ib.orderStatusEvent += self._on_order_status
 
+            # Re-hydrate risk counters from today's closed trades so a
+            # mid-day restart doesn't hand the bot a fresh daily budget
+            # or clear an existing consecutive-loss stop.
+            self._restore_daily_state()
+
             # Pre-qualify the MNQ contract so we don't do it on every order.
             self._contract = self._resolve_contract()
+
+            # Adopt any open MNQ position left by a previous session so we
+            # don't silently stack a second entry on top of it. Runs after
+            # contract resolution because _defensive_flatten needs it.
+            self._reconcile_open_position()
             if self._contract:
                 print(
                     f"[broker] MNQ contract qualified: "
@@ -243,6 +260,274 @@ class IBKRBroker:
             except Exception:
                 pass
 
+    def _restore_daily_state(self) -> None:
+        """Repopulate risk counters from today's closed bot_trades.
+
+        Only called from connect(), not reconnect(): a mid-process socket
+        recovery should trust in-memory state (which already reflects fills
+        via orderStatusEvent), while a fresh process has zeroed counters
+        that would silently bypass the daily cap.
+        """
+        now = datetime.datetime.now(datetime.timezone.utc).astimezone()
+        today = now.strftime("%Y-%m-%d")
+        try:
+            state = load_bot_daily_risk_state(today)
+        except Exception as exc:
+            print(f"[broker] Failed to restore daily state: {exc}")
+            return
+        if state["trades"] == 0:
+            return
+        with self._lock:
+            self._daily_pnl_usd = state["pnl_usd"]
+            self._trades_today = state["trades"]
+            self._wins_today = state["wins"]
+            self._losses_today = state["losses"]
+            self._consecutive_losses = state["consecutive_losses"]
+            # Eagerly set stopped_for_day so the startup banner and the
+            # first can_trade() call reflect the restored state.
+            if self._daily_pnl_usd <= -DAILY_LOSS_LIMIT_USD:
+                self._stopped_for_day = True
+                self._stop_reason = (
+                    f"Daily loss limit hit (restored: "
+                    f"${self._daily_pnl_usd:+.2f})"
+                )
+            elif self._consecutive_losses >= MAX_CONSECUTIVE_LOSSES:
+                self._stopped_for_day = True
+                self._stop_reason = (
+                    f"{self._consecutive_losses} consecutive losses "
+                    f"(restored)"
+                )
+        print(
+            f"[broker] Restored daily state: {self._trades_today} trades "
+            f"({self._wins_today}W/{self._losses_today}L), "
+            f"P&L ${self._daily_pnl_usd:+.2f}, "
+            f"consec losses {self._consecutive_losses}"
+            + (f" | STOPPED: {self._stop_reason}" if self._stopped_for_day else "")
+        )
+
+    def _reconcile_open_position(self) -> None:
+        """Detect and adopt any MNQ position left by a previous session.
+
+        Called from connect(). Walks ib.positions() for MNQ; if a non-zero
+        position exists, tries to match its bracket children by orderRef
+        (tagged at submission time) and look up the originating bot_trades
+        row by parent_order_id. On a clean match, hydrates _pending_* so
+        risk tracking and fill callbacks work on the adopted position.
+
+        On any mismatch (no orderRef, multiple positions, no DB row) we
+        flatten defensively — trading blind on an orphaned position could
+        stack a second entry or lose track of the target/stop.
+        """
+        if not self._ib:
+            return
+        # Positions and openTrades are populated asynchronously after
+        # connect. Pump the event loop briefly so both are ready.
+        try:
+            self._ib.sleep(1.0)
+        except Exception:
+            pass
+        try:
+            mnq_positions = [
+                p
+                for p in self._ib.positions()
+                if p.contract.symbol == MNQ_SYMBOL and p.position != 0
+            ]
+        except Exception as exc:
+            print(f"[broker] Failed to query positions during reconcile: {exc}")
+            return
+        if not mnq_positions:
+            # Even with no position, leftover orders from a dead prior
+            # session can still be live (e.g. parent hadn't filled yet).
+            # Cancel any MNQ orders so we don't silently open a new
+            # position at an unexpected moment.
+            try:
+                stray = [
+                    t
+                    for t in self._ib.openTrades()
+                    if t.contract.symbol == MNQ_SYMBOL
+                ]
+            except Exception:
+                stray = []
+            if stray:
+                print(
+                    f"[broker] No open position but {len(stray)} live MNQ "
+                    f"order(s) found — cancelling stray orders"
+                )
+                for trade in stray:
+                    try:
+                        self._ib.cancelOrder(trade.order)
+                    except Exception as exc:
+                        print(f"[broker] Stray cancel error: {exc}")
+            return
+        if len(mnq_positions) > 1:
+            print(
+                f"[broker] WARNING: {len(mnq_positions)} MNQ positions found on "
+                f"reconnect — flattening all (expected 1 at a time)"
+            )
+            self._defensive_flatten("multiple positions")
+            return
+
+        pos = mnq_positions[0]
+        direction = "up" if pos.position > 0 else "down"
+        try:
+            multiplier = float(pos.contract.multiplier or MNQ_MULTIPLIER)
+        except (TypeError, ValueError):
+            multiplier = float(MNQ_MULTIPLIER)
+        entry_price = pos.avgCost / multiplier if multiplier else 0.0
+
+        # Partition open MNQ orders by orderRef role.
+        try:
+            open_trades = [
+                t for t in self._ib.openTrades() if t.contract.symbol == MNQ_SYMBOL
+            ]
+        except Exception as exc:
+            print(f"[broker] Failed to query open trades during reconcile: {exc}")
+            open_trades = []
+
+        parent_order_id: int | None = None
+        target_trade = None
+        stop_trade = None
+        for t in open_trades:
+            ref = (t.order.orderRef or "").strip()
+            if not ref.startswith("bot-"):
+                continue
+            parts = ref.split("-")
+            if len(parts) < 3:
+                continue
+            try:
+                this_pid = int(parts[1])
+            except ValueError:
+                continue
+            role = parts[2]
+            if parent_order_id is None:
+                parent_order_id = this_pid
+            elif parent_order_id != this_pid:
+                print(
+                    f"[broker] WARNING: conflicting orderRefs on open MNQ orders "
+                    f"({parent_order_id} vs {this_pid}) — flattening"
+                )
+                self._defensive_flatten("conflicting orderRefs")
+                return
+            if role == "target":
+                target_trade = t
+            elif role == "stop":
+                stop_trade = t
+
+        if parent_order_id is None:
+            print(
+                f"[broker] WARNING: open MNQ position ({direction} "
+                f"{abs(pos.position)} @ ~{entry_price:.2f}) has no recognizable "
+                f"orderRef — flattening defensively"
+            )
+            self._defensive_flatten("no orderRef linkage")
+            return
+
+        now = datetime.datetime.now(datetime.timezone.utc).astimezone()
+        today = now.strftime("%Y-%m-%d")
+        row = load_bot_open_trade_by_parent_order_id(parent_order_id, today)
+        if row is None:
+            print(
+                f"[broker] WARNING: open MNQ position "
+                f"(parent_order_id={parent_order_id}) has no matching "
+                f"bot_trades row for {today} — flattening defensively"
+            )
+            self._defensive_flatten("no matching DB row")
+            return
+
+        target_price_live = (
+            target_trade.order.lmtPrice
+            if target_trade and target_trade.order.lmtPrice
+            else row["target_price"]
+        )
+        stop_price_live = (
+            stop_trade.order.auxPrice
+            if stop_trade and stop_trade.order.auxPrice
+            else row["stop_price"]
+        )
+
+        with self._lock:
+            self._position_open = True
+            self._pending_direction = direction
+            self._pending_entry_fill = entry_price
+            self._pending_line_price = row["line_price"]
+            self._pending_level_name = row["level_name"]
+            self._pending_target_price = target_price_live
+            self._pending_stop_price = stop_price_live
+            self._pending_target_pts = BOT_TARGET_POINTS
+            self._pending_stop_pts = BOT_STOP_POINTS
+            self._pending_db_trade_id = row["id"]
+            self._pending_parent_order_id = parent_order_id
+            self._pending_score = row["score"]
+            self._pending_trend_60m = row["trend_60m"]
+            self._pending_entry_count = row["entry_count"]
+            # Fresh 15-min timeout from the reconnect moment. We lose the
+            # original entry timestamp (monotonic clocks don't survive the
+            # process boundary) but a new window is safer than infinity.
+            self._position_opened_at = time.monotonic()
+
+        missing_children = []
+        if target_trade is None:
+            missing_children.append("target")
+        if stop_trade is None:
+            missing_children.append("stop")
+        missing_note = (
+            f" | missing children: {','.join(missing_children)}"
+            if missing_children
+            else ""
+        )
+        print(
+            f"[broker] Adopted open position: {direction} "
+            f"{abs(pos.position)} MNQ @ {entry_price:.2f} "
+            f"({row['level_name']}) | target {target_price_live:.2f} "
+            f"stop {stop_price_live:.2f} | db_id={row['id']} "
+            f"parent_order_id={parent_order_id}{missing_note}"
+        )
+
+    def _defensive_flatten(self, reason: str) -> None:
+        """Cancel all open MNQ orders and market-close any MNQ position.
+
+        Used by reconcile when we can't trust the linkage between an open
+        position and the bot's record of it. Does NOT set _pending_*
+        state — the flatten is intentionally blind and its fill is
+        ignored by _on_order_status (because _position_open is False).
+        """
+        if not self._ib:
+            return
+        try:
+            for trade in self._ib.openTrades():
+                if trade.contract.symbol == MNQ_SYMBOL:
+                    self._ib.cancelOrder(trade.order)
+        except Exception as exc:
+            print(f"[broker] Defensive flatten — order cancel error: {exc}")
+        try:
+            for pos in self._ib.positions():
+                if pos.contract.symbol == MNQ_SYMBOL and pos.position != 0:
+                    action = "SELL" if pos.position > 0 else "BUY"
+                    qty = abs(pos.position)
+                    close_order = MarketOrder(action, qty)
+                    self._ib.placeOrder(pos.contract, close_order)
+                    print(
+                        f"[broker] Defensive flatten ({reason}): "
+                        f"{action} {qty} MNQ @ market"
+                    )
+        except Exception as exc:
+            print(f"[broker] Defensive flatten — close error: {exc}")
+
+        # Sweep any 'open' bot_trades rows for today so they don't stay
+        # stuck forever — the fill from the flatten is ignored by
+        # _on_order_status (since _position_open is False).
+        try:
+            now = datetime.datetime.now(datetime.timezone.utc).astimezone()
+            today = now.strftime("%Y-%m-%d")
+            updated = mark_open_bot_trades_orphaned(today)
+            if updated:
+                print(
+                    f"[broker] Marked {updated} open bot_trades row(s) "
+                    f"as 'orphaned'"
+                )
+        except Exception as exc:
+            print(f"[broker] Orphan sweep error: {exc}")
+
     def reset_daily_state(self) -> None:
         """Reset risk counters for a new trading day."""
         with self._lock:
@@ -259,6 +544,8 @@ class IBKRBroker:
             self._pending_direction = None
             self._pending_line_price = None
             self._pending_entry_fill = None
+            self._pending_parent_order_id = None
+            self._pending_db_trade_id = None
             self._position_opened_at = None
             self._reconnect_attempts = 0  # retry connection each new day
             if prev_trades > 0:
@@ -336,6 +623,7 @@ class IBKRBroker:
                         score=self._pending_score,
                         trend_60m=self._pending_trend_60m,
                         entry_count=self._pending_entry_count,
+                        parent_order_id=self._pending_parent_order_id,
                     )
                 except Exception as e:
                     print(f"[broker] Error logging trade entry to DB: {e}")
@@ -663,14 +951,17 @@ class IBKRBroker:
             # it via parentId BEFORE placeOrder is called.
             parent = MarketOrder(action, qty)
             parent.orderId = self._ib.client.getReqId()
+            parent.orderRef = f"bot-{parent.orderId}-parent"
             parent.transmit = False
 
             take_profit = LimitOrder(reverse_action, qty, target_price)
             take_profit.parentId = parent.orderId
+            take_profit.orderRef = f"bot-{parent.orderId}-target"
             take_profit.transmit = False
 
             stop_loss = StopOrder(reverse_action, qty, stop_price)
             stop_loss.parentId = parent.orderId
+            stop_loss.orderRef = f"bot-{parent.orderId}-stop"
             stop_loss.transmit = True  # transmit last to send all at once
 
             # Submit all three legs.
@@ -690,6 +981,7 @@ class IBKRBroker:
             self._pending_target_price = target_price
             self._pending_stop_price = stop_price
             self._pending_db_trade_id = None
+            self._pending_parent_order_id = parent_id
             self._position_opened_at = time.monotonic()
 
             print(
