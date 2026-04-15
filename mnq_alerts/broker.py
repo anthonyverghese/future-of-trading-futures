@@ -942,7 +942,61 @@ class IBKRBroker:
             if not self.connect():
                 return TradeResult(success=False, error="Not connected to IBKR")
 
+        # Pre-entry drift check: our in-memory _position_open flag drives
+        # the "1 position at a time" guarantee, but it can diverge from
+        # IBKR's actual state if a fill event is dropped, a manual flatten
+        # clears the flag without confirmation, or a startup race happens.
+        # Query IBKR directly and reconcile before risking a second entry.
+        try:
+            ibkr_has_mnq_position = any(
+                p.contract.symbol == MNQ_SYMBOL and p.position != 0
+                for p in self._ib.positions()
+            )
+        except Exception as exc:
+            return TradeResult(
+                success=False,
+                error=f"Pre-entry position check failed: {exc}",
+            )
+
         with self._lock:
+            if ibkr_has_mnq_position and not self._position_open:
+                # Dangerous drift: IBKR holds a position we don't know
+                # about. Refuse the entry and fix the flag so subsequent
+                # can_trade() calls block new entries until the stuck
+                # position resolves (or manual intervention).
+                print(
+                    "[broker] DRIFT: IBKR has an MNQ position but "
+                    "_position_open=False. Refusing entry and marking "
+                    "position open — manual reconciliation needed."
+                )
+                self._position_open = True
+                return TradeResult(
+                    success=False,
+                    error="State drift — IBKR has untracked MNQ position",
+                )
+
+            if not ibkr_has_mnq_position and self._position_open:
+                # Safe drift: the bot thinks there's a position but IBKR
+                # has none. The fill event for a close was probably
+                # dropped. Clear the flag and pending state so this
+                # entry can proceed cleanly.
+                print(
+                    "[broker] DRIFT: _position_open=True but IBKR has "
+                    "no MNQ position. Clearing stale pending state and "
+                    "allowing entry."
+                )
+                self._position_open = False
+                self._pending_direction = None
+                self._pending_line_price = None
+                self._pending_entry_fill = None
+                self._pending_parent_order_id = None
+                self._pending_db_trade_id = None
+                self._pending_level_name = None
+                self._pending_target_price = None
+                self._pending_stop_price = None
+                self._pending_exit_reason = None
+                self._position_opened_at = None
+
             # Check risk limits.
             allowed, reason = self.can_trade()
             if not allowed:
