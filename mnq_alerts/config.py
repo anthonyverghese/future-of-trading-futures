@@ -13,8 +13,8 @@ MARKET_OPEN_HOUR = 9
 MARKET_OPEN_MIN = 30
 MARKET_CLOSE_HOUR = 16
 MARKET_CLOSE_MIN = 0
-IB_END_HOUR = 10  # Initial Balance ends at 10:30 AM
-IB_END_MIN = 30
+IB_END_HOUR = 10  # Initial Balance includes the 10:30 bar; window is [9:30, 10:31)
+IB_END_MIN = 31
 
 # ── Databento ──────────────────────────────────────────────────────────────────
 
