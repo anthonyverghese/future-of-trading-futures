@@ -505,6 +505,10 @@ class IBKRBroker:
                     action = "SELL" if pos.position > 0 else "BUY"
                     qty = abs(pos.position)
                     close_order = MarketOrder(action, qty)
+                    # Tag so _on_order_status ignores the fill instead
+                    # of mistaking it for a new entry. The defensive
+                    # flatten is intentionally untracked.
+                    close_order.orderRef = "bot-defensive-flatten"
                     self._ib.placeOrder(pos.contract, close_order)
                     print(
                         f"[broker] Defensive flatten ({reason}): "
@@ -593,8 +597,20 @@ class IBKRBroker:
     def _on_order_status(self, trade) -> None:
         """Callback when an order status changes.
 
-        Tracks fills on take-profit and stop-loss orders to update
-        daily P&L, consecutive losses, and position state.
+        Dispatches filled orders to the entry-recording path or the
+        position-closing / P&L-recording path based on the orderRef tag
+        we set at submission time. Every bot-submitted order carries a
+        tag of the form "bot-<parent_id>-<role>" where role is one of
+        parent / target / stop / close. Defensive flattens use the tag
+        "bot-defensive-flatten" and are intentionally ignored (no DB row
+        to update, no P&L to compute).
+
+        The previous implementation dispatched on ``order.parentId``: a
+        non-zero value meant "child/close." That approach broke for
+        manual-close market orders because IBKR interpreted the sentinel
+        parentId=1 as a reference to a real order and rejected it with
+        "Error 135: Can't find order with id = 1" — leaving positions
+        stuck open past their timeout.
         """
         if trade.contract.symbol != MNQ_SYMBOL:
             return
@@ -602,8 +618,27 @@ class IBKRBroker:
             return
 
         order = trade.order
-        # Child orders close the position; parent opens it.
-        if order.parentId == 0:
+        order_ref = (order.orderRef or "").strip()
+
+        # Defensive flattens are intentionally untracked — the position
+        # they close was orphaned (no matching bot_trades row), so there
+        # is nothing to update and no P&L to attribute.
+        if order_ref == "bot-defensive-flatten":
+            return
+
+        # Parse the role suffix from the orderRef. Expected format:
+        # "bot-<parent_order_id>-<role>".
+        role: str | None = None
+        if order_ref.startswith("bot-"):
+            parts = order_ref.rsplit("-", 1)
+            if len(parts) == 2:
+                role = parts[1]
+
+        # Any non-bot order (e.g. manually placed in TWS) is ignored.
+        if role is None:
+            return
+
+        if role == "parent":
             # Parent (entry) order filled — record the actual fill price.
             with self._lock:
                 self._pending_entry_fill = trade.orderStatus.avgFillPrice
@@ -627,6 +662,11 @@ class IBKRBroker:
                     )
                 except Exception as e:
                     print(f"[broker] Error logging trade entry to DB: {e}")
+            return
+
+        # Only target / stop / close roles run the P&L path. Unknown
+        # roles are ignored defensively.
+        if role not in ("target", "stop", "close"):
             return
 
         with self._lock:
@@ -748,7 +788,12 @@ class IBKRBroker:
 
         close_action = "SELL" if direction == "up" else "BUY"
         close_order = MarketOrder(close_action, ORDER_QTY)
-        close_order.parentId = 1  # treat as close in callback
+        # Tag with orderRef so _on_order_status routes the fill through
+        # the close/P&L path. Using parentId=1 as a sentinel (the prior
+        # approach) made IBKR reject the order with error 135 because
+        # IBKR treats parentId as a real order reference.
+        parent_id_tag = self._pending_parent_order_id or "unknown"
+        close_order.orderRef = f"bot-{parent_id_tag}-close"
         self._pending_exit_reason = "eod_flatten"
         try:
             self._ib.placeOrder(self._contract, close_order)
@@ -811,11 +856,15 @@ class IBKRBroker:
                 )
                 return False
 
-        # Submit reverse market order. parentId != 0 marks it as a close so
-        # _on_order_status routes it through the P&L path.
+        # Submit reverse market order. orderRef "bot-<parent>-close"
+        # routes the fill through the close/P&L path in
+        # _on_order_status. Previously used parentId=1 as a sentinel,
+        # which IBKR rejected with "Error 135: Can't find order with
+        # id = 1" and left the position stuck open.
         close_action = "SELL" if direction == "up" else "BUY"
         close_order = MarketOrder(close_action, ORDER_QTY)
-        close_order.parentId = 1  # non-zero so callback treats as close
+        parent_id_tag = self._pending_parent_order_id or "unknown"
+        close_order.orderRef = f"bot-{parent_id_tag}-close"
         self._pending_exit_reason = "timeout"
         try:
             self._ib.placeOrder(contract, close_order)
