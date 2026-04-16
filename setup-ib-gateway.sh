@@ -51,14 +51,28 @@ if ! grep -q "IBKR_ACCOUNT=" "$APP_ENV" 2>/dev/null; then
     echo "WARNING: IBKR_ACCOUNT not set in ${APP_ENV} — no account safety check"
 fi
 
+# ── Increase journald retention ──────────────────────────────────────────────
+# Amazon Linux defaults to 30 MB which rotates trading logs within ~1–2 hours.
+# 200 MB keeps ~10 days of full-session logs on a 16 GB disk.
+echo "=== Configuring journald retention ==="
+sudo mkdir -p /etc/systemd/journald.conf.d
+sudo tee /etc/systemd/journald.conf.d/size-limit.conf > /dev/null <<EOF
+[Journal]
+SystemMaxUse=200M
+SystemMaxFileSize=50M
+EOF
+sudo systemctl restart systemd-journald
+
 # ── Update systemd services ──────────────────────────────────────────────────
 echo "=== Updating systemd services ==="
 sudo cp "${REPO_DIR}/mnq-alerts.service" "${REPO_DIR}/mnq-alerts.timer" /etc/systemd/system/
 sudo cp "${REPO_DIR}/mnq-backup.service" "${REPO_DIR}/mnq-backup.timer" /etc/systemd/system/
 sudo cp "${REPO_DIR}/mnq-2fa-reminder.service" "${REPO_DIR}/mnq-2fa-reminder.timer" /etc/systemd/system/
+sudo cp "${REPO_DIR}/mnq-gateway-morning-restart.service" "${REPO_DIR}/mnq-gateway-morning-restart.timer" /etc/systemd/system/
+sudo cp "${REPO_DIR}/ib-gateway-watchdog.service" /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable mnq-2fa-reminder.timer
-sudo systemctl start mnq-2fa-reminder.timer
+sudo systemctl enable mnq-2fa-reminder.timer mnq-gateway-morning-restart.timer ib-gateway-watchdog.service
+sudo systemctl start mnq-2fa-reminder.timer mnq-gateway-morning-restart.timer ib-gateway-watchdog.service
 
 # ── Launch IB Gateway container ──────────────────────────────────────────────
 echo "=== Starting IB Gateway container ==="
