@@ -781,6 +781,158 @@ class IBKRBroker:
             # Check if we should stop for the day.
             self.can_trade()  # updates _stopped_for_day if limits hit
 
+    def _verify_and_failsafe_close(self, reason: str) -> None:
+        """After submitting a close order, verify the position actually closed.
+
+        Pumps the ib_insync event loop for up to 10 seconds, checking
+        positions() periodically. If the MNQ position is still open after
+        that window, cancels any remaining MNQ orders and submits a raw
+        market order directly (no orderRef dependency, no callback
+        dependency). If even that fails, sends a Pushover alert.
+
+        Called from eod_flatten() and check_position_timeout() as a
+        last line of defense. Added after 2026-04-15 when a parentId=1
+        sentinel bug left a short position stuck open for 45 minutes
+        past its timeout.
+        """
+        if not self._ib:
+            return
+
+        # Wait up to 10s for the normal close (via _on_order_status) to
+        # clear _position_open and close the IBKR position.
+        for _ in range(5):
+            try:
+                self._ib.sleep(2.0)
+            except Exception:
+                pass
+            try:
+                has_position = any(
+                    p.contract.symbol == MNQ_SYMBOL and p.position != 0
+                    for p in self._ib.positions()
+                )
+            except Exception:
+                continue
+            if not has_position:
+                return  # Position confirmed closed
+
+        # Position still open after 10s — the primary close order failed
+        # or was rejected. Cancel any stray orders and try a direct close.
+        print(
+            f"[broker] {reason} close not confirmed after 10s "
+            f"— attempting failsafe close",
+            flush=True,
+        )
+        try:
+            for trade in self._ib.openTrades():
+                if trade.contract.symbol == MNQ_SYMBOL:
+                    self._ib.cancelOrder(trade.order)
+        except Exception:
+            pass
+
+        try:
+            for pos in self._ib.positions():
+                if pos.contract.symbol == MNQ_SYMBOL and pos.position != 0:
+                    action = "SELL" if pos.position > 0 else "BUY"
+                    qty = abs(int(pos.position))
+                    contract = self._contract or pos.contract
+                    order = MarketOrder(action, qty)
+                    trade = self._ib.placeOrder(contract, order)
+                    # Wait up to 10s for fill
+                    for _ in range(20):
+                        self._ib.sleep(0.5)
+                        if trade.orderStatus.status == "Filled":
+                            fill_price = trade.orderStatus.avgFillPrice
+                            print(
+                                f"[broker] Failsafe close filled @ "
+                                f"{fill_price:.2f}",
+                                flush=True,
+                            )
+                            # Best-effort P&L and state update
+                            with self._lock:
+                                entry = (
+                                    self._pending_entry_fill
+                                    or self._pending_line_price
+                                )
+                                if self._pending_direction and entry:
+                                    if self._pending_direction == "up":
+                                        pnl_pts = fill_price - entry
+                                    else:
+                                        pnl_pts = entry - fill_price
+                                    pnl_usd = (
+                                        pnl_pts * MNQ_POINT_VALUE - 1.24
+                                    )
+                                else:
+                                    pnl_usd = 0.0
+                                self._position_open = False
+                                self._position_opened_at = None
+                                self._daily_pnl_usd += pnl_usd
+                                self._trades_today += 1
+                                if pnl_usd >= 0:
+                                    self._wins_today += 1
+                                    self._consecutive_losses = 0
+                                else:
+                                    self._losses_today += 1
+                                    self._consecutive_losses += 1
+                                print(
+                                    f"[broker] Failsafe P&L: "
+                                    f"${pnl_usd:+.2f} | {self.daily_stats}",
+                                    flush=True,
+                                )
+                            # Update DB
+                            if self._pending_db_trade_id is not None:
+                                try:
+                                    now = datetime.datetime.now(
+                                        datetime.timezone.utc
+                                    ).astimezone()
+                                    update_bot_trade_exit(
+                                        trade_id=self._pending_db_trade_id,
+                                        exit_time=now.strftime(
+                                            "%H:%M:%S %Z"
+                                        ),
+                                        exit_price=fill_price,
+                                        pnl_usd=pnl_usd,
+                                        outcome=(
+                                            "win" if pnl_usd >= 0
+                                            else "loss"
+                                        ),
+                                        exit_reason=f"failsafe_{reason}",
+                                    )
+                                except Exception as e:
+                                    print(
+                                        f"[broker] Failsafe DB update "
+                                        f"error: {e}"
+                                    )
+                                self._pending_db_trade_id = None
+                            return
+                    print(
+                        "[broker] WARNING: Failsafe close order not "
+                        "filled within 10s",
+                        flush=True,
+                    )
+        except Exception as exc:
+            print(f"[broker] Failsafe close error: {exc}", flush=True)
+
+        # Even the failsafe failed — alert the user
+        print(
+            "[broker] CRITICAL: Position could not be closed. "
+            "Manual intervention required.",
+            flush=True,
+        )
+        try:
+            from notifications import send_notification, PRIORITY_HIGH
+
+            send_notification(
+                title="CRITICAL: Position Not Closed",
+                message=(
+                    f"{reason} close failed and failsafe also failed. "
+                    f"MNQ position is still open. "
+                    f"Close manually via IBKR Mobile or VNC immediately."
+                ),
+                priority=PRIORITY_HIGH,
+            )
+        except Exception:
+            pass
+
     def eod_flatten(self) -> None:
         """Pre-close safety: flatten any open position and block new trades.
 
@@ -836,6 +988,8 @@ class IBKRBroker:
             print(f"[broker] EOD flatten: {close_action} {ORDER_QTY} MNQ @ market")
         except Exception as exc:
             print(f"[broker] EOD flatten failed: {exc}")
+
+        self._verify_and_failsafe_close("eod_flatten")
 
     def check_position_timeout(self) -> bool:
         """If an open position has exceeded BOT_TIMEOUT_SECS, close it at market.
@@ -908,6 +1062,8 @@ class IBKRBroker:
         except Exception as exc:
             print(f"[broker] Timeout close failed: {exc}")
             return False
+
+        self._verify_and_failsafe_close("timeout")
         return True
 
     def _resolve_contract(self) -> Contract | None:
