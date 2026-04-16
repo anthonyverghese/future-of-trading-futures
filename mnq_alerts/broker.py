@@ -1305,9 +1305,53 @@ class IBKRBroker:
             self._pending_trend_60m = trend_60m
             self._pending_entry_count = entry_count
 
-            return self._submit_bracket_locked(
+            result, parent, parent_trade = self._submit_bracket_locked(
                 direction, current_price, line_price, level_name, qty
             )
+
+        # Lock is released. If submission failed, return immediately.
+        if not result.success or parent is None:
+            return result
+
+        # Wait up to 1s for the entry limit to fill. sleep() pumps the
+        # event loop, which fires callbacks that acquire self._lock —
+        # must NOT hold the lock here (threading.Lock is not reentrant).
+        parent_id = result.order_id
+        filled = False
+        try:
+            for _ in range(4):
+                self._ib.sleep(0.25)
+                if parent_trade.orderStatus.status == "Filled":
+                    filled = True
+                    break
+        except Exception:
+            pass
+
+        if not filled:
+            print(
+                f"[broker] Entry limit not filled within 1s — "
+                f"cancelling bracket (order {parent_id})",
+                flush=True,
+            )
+            try:
+                self._ib.cancelOrder(parent)
+            except Exception as exc:
+                print(
+                    f"[broker] WARNING: cancel of unfilled entry "
+                    f"{parent_id} failed: {exc}",
+                    flush=True,
+                )
+            with self._lock:
+                # Only clear if the entry didn't sneak in during cancel.
+                if self._pending_entry_fill is None:
+                    self._position_open = False
+                    self._position_opened_at = None
+            return TradeResult(
+                success=False,
+                error="Entry limit not filled within 1s",
+            )
+
+        return result
 
     def _submit_bracket_locked(
         self,
@@ -1316,8 +1360,12 @@ class IBKRBroker:
         line_price: float,
         level_name: str,
         qty: int,
-    ) -> TradeResult:
-        """Internal bracket submission (must hold self._lock)."""
+    ) -> tuple["TradeResult", "Order | None", "object | None"]:
+        """Internal bracket submission (must hold self._lock).
+
+        Returns (result, parent_order, parent_trade) so the caller can
+        check fill status and cancel if needed after releasing the lock.
+        """
         action = "BUY" if direction == "up" else "SELL"
         reverse_action = "SELL" if direction == "up" else "BUY"
 
@@ -1339,7 +1387,11 @@ class IBKRBroker:
             contract = self._resolve_contract()
             self._contract = contract
         if contract is None:
-            return TradeResult(success=False, error="Contract resolution failed")
+            return (
+                TradeResult(success=False, error="Contract resolution failed"),
+                None,
+                None,
+            )
 
         try:
             # Build bracket: limit entry + limit take-profit + stop loss.
@@ -1370,48 +1422,18 @@ class IBKRBroker:
             stop_loss.orderRef = f"bot-{parent.orderId}-stop"
             stop_loss.transmit = True  # transmit last to send all at once
 
-            # Submit all three legs.
+            # Submit all three legs. placeOrder is a synchronous socket
+            # write — it does NOT pump the event loop, so it's safe to
+            # call while holding self._lock.
             parent_trade = self._ib.placeOrder(contract, parent)
             self._ib.placeOrder(contract, take_profit)
             self._ib.placeOrder(contract, stop_loss)
 
             parent_id = parent.orderId
 
-            print(
-                f"[broker] {action} {qty} MNQ @ limit {entry_limit:.2f} | "
-                f"target {target_price:.2f} (+{BOT_TARGET_POINTS}) | "
-                f"stop {stop_price:.2f} (-{BOT_STOP_POINTS}) | "
-                f"level {level_name} @ {line_price:.2f} | "
-                f"order {parent_id} | {self.daily_stats}"
-            )
-
-            # Wait up to 1s for the entry limit to fill. If it doesn't,
-            # cancel the bracket — we don't want stale limit orders
-            # sitting on the book while the market moves away.
-            filled = False
-            for _ in range(4):
-                self._ib.sleep(0.25)
-                if parent_trade.orderStatus.status == "Filled":
-                    filled = True
-                    break
-
-            if not filled:
-                print(
-                    f"[broker] Entry limit not filled within 1s — "
-                    f"cancelling bracket (order {parent_id})"
-                )
-                try:
-                    self._ib.cancelOrder(parent)
-                    # Children are auto-cancelled by IBKR when the
-                    # unfilled parent is cancelled.
-                except Exception:
-                    pass
-                return TradeResult(
-                    success=False,
-                    error="Entry limit not filled within 1s",
-                )
-
-            # Track position state for risk management.
+            # Set position state optimistically so callbacks during the
+            # fill-check loop below can record the entry fill and route
+            # P&L correctly. If the fill doesn't come, we clear this.
             self._position_open = True
             self._pending_direction = direction
             self._pending_line_price = line_price
@@ -1424,18 +1446,34 @@ class IBKRBroker:
             self._pending_parent_order_id = parent_id
             self._position_opened_at = time.monotonic()
 
-            return TradeResult(
-                success=True,
-                order_id=parent_id,
-                entry_price=current_price,
-                target_price=target_price,
-                stop_price=stop_price,
+            print(
+                f"[broker] {action} {qty} MNQ @ limit {entry_limit:.2f} | "
+                f"target {target_price:.2f} (+{BOT_TARGET_POINTS}) | "
+                f"stop {stop_price:.2f} (-{BOT_STOP_POINTS}) | "
+                f"level {level_name} @ {line_price:.2f} | "
+                f"order {parent_id} | {self.daily_stats}"
             )
 
         except Exception as exc:
             error_msg = f"Order submission failed: {exc}"
             print(f"[broker] {error_msg}")
-            return TradeResult(success=False, error=error_msg)
+            return (
+                TradeResult(success=False, error=error_msg),
+                None,
+                None,
+            )
+
+        return (
+            TradeResult(
+                success=True,
+                order_id=parent_id,
+                entry_price=current_price,
+                target_price=target_price,
+                stop_price=stop_price,
+            ),
+            parent,
+            parent_trade,
+        )
 
     def get_positions(self) -> list[dict]:
         """Return current MNQ positions."""
