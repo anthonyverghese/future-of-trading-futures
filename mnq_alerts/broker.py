@@ -526,7 +526,12 @@ class IBKRBroker:
         openTrades() only sees orders placed by this client session.
         reqAllOpenOrders() queries IBKR's server for any open orders on
         the account, catching orphans from crashed sessions or manual
-        TWS entries.
+        TWS entries. Both return List[Trade].
+
+        cancelOrder() takes an Order (not Trade) and is asynchronous —
+        it sends the cancel request but confirmation arrives via
+        orderStatusEvent callback. We verify cancellation by pumping
+        the event loop and re-checking.
         """
         if not self._ib:
             return 0
@@ -537,28 +542,77 @@ class IBKRBroker:
         try:
             for trade in self._ib.openTrades():
                 if trade.contract.symbol == MNQ_SYMBOL:
-                    seen_order_ids.add(trade.order.orderId)
+                    oid = trade.order.orderId
+                    seen_order_ids.add(oid)
+                    ref = getattr(trade.order, "orderRef", "") or ""
+                    status = trade.orderStatus.status
+                    print(
+                        f"[broker] {context}: cancelling order {oid} "
+                        f"({ref}, status={status})",
+                        flush=True,
+                    )
                     self._ib.cancelOrder(trade.order)
                     cancelled += 1
         except Exception as exc:
-            print(f"[broker] _cancel_all_mnq openTrades error: {exc}")
+            print(
+                f"[broker] {context}: openTrades cancel error: {exc}",
+                flush=True,
+            )
 
-        # Pass 2: server-side sweep for orders this session doesn't know about.
+        # Pass 2: server-side sweep for orphaned orders from other
+        # sessions (e.g. after a crash/restart).
         try:
-            all_orders = self._ib.reqAllOpenOrders()
-            for order in all_orders:
+            server_trades = self._ib.reqAllOpenOrders()
+            for trade in server_trades:
+                oid = trade.order.orderId
                 if (
-                    getattr(order, "orderId", None) not in seen_order_ids
-                    and hasattr(order, "contract")
-                    and getattr(order.contract, "symbol", None) == MNQ_SYMBOL
+                    oid not in seen_order_ids
+                    and trade.contract.symbol == MNQ_SYMBOL
                 ):
-                    self._ib.cancelOrder(order)
+                    ref = getattr(trade.order, "orderRef", "") or ""
+                    status = trade.orderStatus.status
+                    print(
+                        f"[broker] {context}: cancelling ORPHANED order "
+                        f"{oid} ({ref}, status={status})",
+                        flush=True,
+                    )
+                    self._ib.cancelOrder(trade.order)
                     cancelled += 1
         except Exception as exc:
-            print(f"[broker] _cancel_all_mnq reqAllOpenOrders error: {exc}")
+            print(
+                f"[broker] {context}: reqAllOpenOrders cancel error: {exc}",
+                flush=True,
+            )
 
-        if cancelled and context:
-            print(f"[broker] {context}: cancelled {cancelled} MNQ order(s)")
+        # Pump the event loop so cancel confirmations arrive, then
+        # verify no MNQ orders remain.
+        if cancelled:
+            try:
+                self._ib.sleep(0.5)
+            except Exception:
+                pass
+            try:
+                remaining = [
+                    t for t in self._ib.openTrades()
+                    if t.contract.symbol == MNQ_SYMBOL
+                ]
+                if remaining:
+                    for t in remaining:
+                        print(
+                            f"[broker] {context}: WARNING — order "
+                            f"{t.order.orderId} still open after cancel "
+                            f"(status={t.orderStatus.status})",
+                            flush=True,
+                        )
+                else:
+                    print(
+                        f"[broker] {context}: all {cancelled} cancel(s) "
+                        f"confirmed",
+                        flush=True,
+                    )
+            except Exception:
+                pass
+
         return cancelled
 
     def _defensive_flatten(self, reason: str) -> None:
