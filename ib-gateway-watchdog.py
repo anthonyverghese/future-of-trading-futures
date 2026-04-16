@@ -35,7 +35,7 @@ POLL_INTERVAL_SECS = 30
 
 # Patterns to track
 LOGIN_FAILED_RE = re.compile(
-    r"IBC:.*(Too many failed login attempts|Login.*failed|password.*incorrect|Invalid login)",
+    r"IBC:.*(Too many failed login attempts|Login.*failed|password.*incorrect|Invalid login|Unrecognized Username or Password)",
     re.IGNORECASE,
 )
 LOGIN_SUCCESS_RE = re.compile(
