@@ -1213,6 +1213,43 @@ class IBKRBroker:
             self._pending_trend_60m = trend_60m
             self._pending_entry_count = entry_count
 
+            # Staleness check: the tick that triggered the zone entry may
+            # be stale by the time we reach placeOrder (the main loop
+            # processes ticks sequentially, so high tick rates cause lag).
+            # Query IBKR for the last known price and reject if it has
+            # drifted past the target — a market order would fill at a
+            # loss immediately.
+            try:
+                ticker = self._ib.reqTickers(self._contract)
+                if ticker and ticker[0].last == ticker[0].last:  # not NaN
+                    live_price = ticker[0].last
+                    if direction == "up":
+                        target = line_price + BOT_TARGET_POINTS
+                        if live_price >= target:
+                            print(
+                                f"[broker] Stale entry rejected: live price "
+                                f"{live_price:.2f} already past target "
+                                f"{target:.2f}"
+                            )
+                            return TradeResult(
+                                success=False,
+                                error="Stale — price past target",
+                            )
+                    else:
+                        target = line_price - BOT_TARGET_POINTS
+                        if live_price <= target:
+                            print(
+                                f"[broker] Stale entry rejected: live price "
+                                f"{live_price:.2f} already past target "
+                                f"{target:.2f}"
+                            )
+                            return TradeResult(
+                                success=False,
+                                error="Stale — price past target",
+                            )
+            except Exception:
+                pass  # can't check — proceed with the entry
+
             return self._submit_bracket_locked(
                 direction, current_price, line_price, level_name, qty
             )
