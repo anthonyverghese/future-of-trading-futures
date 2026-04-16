@@ -60,12 +60,24 @@ def _make_broker(**overrides) -> IBKRBroker:
     return b
 
 
-def _fake_trade(symbol, status, order_type="MKT", parent_id=0, fill_price=20000.0):
-    """Build a fake ib_insync Trade object for _on_order_status."""
+def _fake_trade(
+    symbol, status, order_type="MKT", parent_id=0, fill_price=20000.0,
+    order_ref=None,
+):
+    """Build a fake ib_insync Trade object for _on_order_status.
+
+    order_ref defaults to "bot-0-parent" for entries (parent_id=0) and
+    "bot-0-target" for closes (parent_id!=0), matching the orderRef-based
+    dispatch introduced in commit 9834b19.
+    """
+    if order_ref is None:
+        order_ref = "bot-0-parent" if parent_id == 0 else "bot-0-target"
     return SimpleNamespace(
         contract=SimpleNamespace(symbol=symbol),
         orderStatus=SimpleNamespace(status=status, avgFillPrice=fill_price),
-        order=SimpleNamespace(orderType=order_type, parentId=parent_id),
+        order=SimpleNamespace(
+            orderType=order_type, parentId=parent_id, orderRef=order_ref,
+        ),
     )
 
 
@@ -101,7 +113,9 @@ class TestCanTrade:
         assert b._stopped_for_day is True
 
     def test_blocks_at_consecutive_loss_limit(self):
-        b = _make_broker(consecutive_losses=3)
+        from config import MAX_CONSECUTIVE_LOSSES
+
+        b = _make_broker(consecutive_losses=MAX_CONSECUTIVE_LOSSES)
         allowed, reason = b.can_trade()
         assert allowed is False
         assert "consecutive losses" in reason
@@ -203,7 +217,7 @@ class TestOnOrderStatus:
         assert b._wins_today == 1
         assert b._losses_today == 0
         assert b._consecutive_losses == 0
-        assert b._daily_pnl_usd == pytest.approx(12.0 * MNQ_POINT_VALUE - 0.54)
+        assert b._daily_pnl_usd == pytest.approx(12.0 * MNQ_POINT_VALUE - 1.24)
 
     def test_child_fill_loss_up_direction(self):
         """Stop-loss fill on a long (up) trade → loss."""
@@ -222,7 +236,7 @@ class TestOnOrderStatus:
         assert b._position_open is False
         assert b._losses_today == 1
         assert b._consecutive_losses == 1
-        assert b._daily_pnl_usd == pytest.approx(-25.0 * MNQ_POINT_VALUE - 0.54)
+        assert b._daily_pnl_usd == pytest.approx(-25.0 * MNQ_POINT_VALUE - 1.24)
 
     def test_child_fill_win_down_direction(self):
         """Take-profit fill on a short (down) trade → win."""
@@ -239,7 +253,7 @@ class TestOnOrderStatus:
         b._on_order_status(trade)
 
         assert b._wins_today == 1
-        assert b._daily_pnl_usd == pytest.approx(12.0 * MNQ_POINT_VALUE - 0.54)
+        assert b._daily_pnl_usd == pytest.approx(12.0 * MNQ_POINT_VALUE - 1.24)
 
     def test_child_fill_loss_down_direction(self):
         """Stop-loss fill on a short (down) trade → loss."""
@@ -256,7 +270,7 @@ class TestOnOrderStatus:
         b._on_order_status(trade)
 
         assert b._losses_today == 1
-        assert b._daily_pnl_usd == pytest.approx(-25.0 * MNQ_POINT_VALUE - 0.54)
+        assert b._daily_pnl_usd == pytest.approx(-25.0 * MNQ_POINT_VALUE - 1.24)
 
     def test_consecutive_losses_accumulate(self):
         b = _make_broker(
@@ -407,6 +421,14 @@ class TestBracketPrices:
 
         mock_ib = MagicMock()
         mock_ib.isConnected.return_value = True
+        # Pre-entry drift check queries positions — must return a matching
+        # MNQ position so the flag isn't cleared by "safe drift" logic.
+        mock_ib.positions.return_value = [
+            SimpleNamespace(
+                contract=SimpleNamespace(symbol=MNQ_SYMBOL),
+                position=1,
+            )
+        ]
         b._ib = mock_ib
 
         with patch.object(
@@ -487,7 +509,7 @@ class TestPnlFromActualFill:
         trade = _fake_trade(MNQ_SYMBOL, "Filled", parent_id=100, fill_price=20012.0)
         b._on_order_status(trade)
 
-        expected_pnl = 10.0 * MNQ_POINT_VALUE - 0.54
+        expected_pnl = 10.0 * MNQ_POINT_VALUE - 1.24
         assert b._daily_pnl_usd == pytest.approx(expected_pnl)
 
     def test_pnl_falls_back_to_line_price_without_fill(self):
@@ -501,5 +523,299 @@ class TestPnlFromActualFill:
         trade = _fake_trade(MNQ_SYMBOL, "Filled", parent_id=100, fill_price=20012.0)
         b._on_order_status(trade)
 
-        expected_pnl = 12.0 * MNQ_POINT_VALUE - 0.54
+        expected_pnl = 12.0 * MNQ_POINT_VALUE - 1.24
         assert b._daily_pnl_usd == pytest.approx(expected_pnl)
+
+
+# ---------------------------------------------------------------------------
+# Helpers for orderRef-based tests
+# ---------------------------------------------------------------------------
+
+
+def _fake_trade_with_ref(symbol, status, order_ref, fill_price=20000.0, order_type="MKT"):
+    """Build a fake Trade with an orderRef tag (for dispatch tests)."""
+    return SimpleNamespace(
+        contract=SimpleNamespace(symbol=symbol),
+        orderStatus=SimpleNamespace(status=status, avgFillPrice=fill_price),
+        order=SimpleNamespace(orderType=order_type, parentId=0, orderRef=order_ref),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 8. OrderRef-based dispatch — _on_order_status
+# ---------------------------------------------------------------------------
+
+
+class TestOrderRefDispatch:
+    def test_parent_role_logs_entry(self):
+        """Parent fill (orderRef=bot-30-parent) records entry price."""
+        b = _make_broker(position_open=True)
+        trade = _fake_trade_with_ref(MNQ_SYMBOL, "Filled", "bot-30-parent", fill_price=20005.0)
+        b._on_order_status(trade)
+        assert b._pending_entry_fill == 20005.0
+
+    def test_target_role_closes_position(self):
+        """Target fill (orderRef=bot-30-target) closes position and computes P&L."""
+        b = _make_broker(
+            position_open=True,
+            pending_direction="up",
+            pending_entry_fill=20000.0,
+            pending_line_price=20000.0,
+        )
+        trade = _fake_trade_with_ref(
+            MNQ_SYMBOL, "Filled", "bot-30-target", fill_price=20012.0, order_type="LMT"
+        )
+        b._on_order_status(trade)
+        assert b._position_open is False
+        assert b._trades_today == 1
+        assert b._daily_pnl_usd == pytest.approx(12.0 * MNQ_POINT_VALUE - 1.24)
+
+    def test_stop_role_closes_position(self):
+        """Stop fill (orderRef=bot-30-stop) closes position and computes P&L."""
+        b = _make_broker(
+            position_open=True,
+            pending_direction="up",
+            pending_entry_fill=20000.0,
+            pending_line_price=20000.0,
+        )
+        trade = _fake_trade_with_ref(
+            MNQ_SYMBOL, "Filled", "bot-30-stop", fill_price=19975.0, order_type="STP"
+        )
+        b._on_order_status(trade)
+        assert b._position_open is False
+        assert b._trades_today == 1
+        assert b._daily_pnl_usd == pytest.approx(-25.0 * MNQ_POINT_VALUE - 1.24)
+
+    def test_close_role_closes_position(self):
+        """Manual close (orderRef=bot-30-close) closes position."""
+        b = _make_broker(
+            position_open=True,
+            pending_direction="down",
+            pending_entry_fill=20000.0,
+            pending_line_price=20000.0,
+        )
+        trade = _fake_trade_with_ref(
+            MNQ_SYMBOL, "Filled", "bot-30-close", fill_price=19990.0
+        )
+        b._on_order_status(trade)
+        assert b._position_open is False
+        assert b._trades_today == 1
+
+    def test_defensive_flatten_ignored(self):
+        """Defensive flatten (orderRef=bot-defensive-flatten) is untracked."""
+        b = _make_broker(position_open=True)
+        trade = _fake_trade_with_ref(
+            MNQ_SYMBOL, "Filled", "bot-defensive-flatten", fill_price=20000.0
+        )
+        b._on_order_status(trade)
+        assert b._position_open is True
+        assert b._trades_today == 0
+
+    def test_unknown_role_ignored(self):
+        """Unknown role (orderRef=bot-30-unknown) is ignored."""
+        b = _make_broker(position_open=True)
+        trade = _fake_trade_with_ref(
+            MNQ_SYMBOL, "Filled", "bot-30-unknown", fill_price=20000.0
+        )
+        b._on_order_status(trade)
+        assert b._position_open is True
+        assert b._trades_today == 0
+
+    def test_no_orderref_ignored(self):
+        """Empty or None orderRef (not a bot order) is ignored."""
+        b = _make_broker(position_open=True)
+        # Empty string
+        trade = _fake_trade_with_ref(MNQ_SYMBOL, "Filled", "", fill_price=20000.0)
+        b._on_order_status(trade)
+        assert b._position_open is True
+        assert b._trades_today == 0
+        # None
+        trade = _fake_trade_with_ref(MNQ_SYMBOL, "Filled", None, fill_price=20000.0)
+        b._on_order_status(trade)
+        assert b._position_open is True
+        assert b._trades_today == 0
+
+    def test_non_mnq_ignored(self):
+        """Non-MNQ symbol is ignored regardless of orderRef."""
+        b = _make_broker(position_open=True)
+        trade = _fake_trade_with_ref(
+            "ES", "Filled", "bot-30-target", fill_price=20000.0
+        )
+        b._on_order_status(trade)
+        assert b._position_open is True
+        assert b._trades_today == 0
+
+    def test_non_filled_ignored(self):
+        """Non-Filled status is ignored."""
+        b = _make_broker(position_open=True)
+        trade = _fake_trade_with_ref(
+            MNQ_SYMBOL, "Submitted", "bot-30-target", fill_price=20000.0
+        )
+        b._on_order_status(trade)
+        assert b._position_open is True
+        assert b._trades_today == 0
+
+
+# ---------------------------------------------------------------------------
+# 9. Pre-entry drift check in submit_bracket()
+# ---------------------------------------------------------------------------
+
+
+class TestPreEntryDriftCheck:
+    def _make_connected_broker(self, **overrides):
+        """Create a broker wired up for submit_bracket() calls."""
+        b = _make_broker(**overrides)
+        b._connected = True
+        b._was_connected = True
+        b._connect_attempted = True
+        b._contract = SimpleNamespace(symbol=MNQ_SYMBOL, secType="FUT")
+        mock_ib = MagicMock()
+        mock_ib.isConnected.return_value = True
+        mock_ib.client.getReqId.return_value = 99
+        b._ib = mock_ib
+        return b
+
+    def test_dangerous_drift_refuses_entry(self):
+        """IBKR has MNQ position but broker thinks none — refuse entry."""
+        b = self._make_connected_broker(position_open=False)
+        b._ib.positions.return_value = [
+            SimpleNamespace(
+                contract=SimpleNamespace(symbol=MNQ_SYMBOL),
+                position=1,
+            )
+        ]
+        with patch.object(
+            type(b), "is_connected", new_callable=lambda: property(lambda self: True)
+        ):
+            result = b.submit_bracket("up", 20003.0, 20000.0, "IBL")
+        assert result.success is False
+        assert "drift" in result.error.lower()
+
+    def test_safe_drift_clears_flag(self):
+        """Broker thinks position open but IBKR has none — clear and proceed."""
+        b = self._make_connected_broker(position_open=True)
+        b._ib.positions.return_value = []
+        with patch.object(
+            type(b), "is_connected", new_callable=lambda: property(lambda self: True)
+        ):
+            result = b.submit_bracket("up", 20003.0, 20000.0, "IBL")
+        assert b._position_open is True  # re-set by submit_bracket after clearing
+        assert result.success is True
+
+    def test_no_drift_proceeds(self):
+        """No position on either side — entry proceeds normally."""
+        b = self._make_connected_broker(position_open=False)
+        b._ib.positions.return_value = []
+        with patch.object(
+            type(b), "is_connected", new_callable=lambda: property(lambda self: True)
+        ):
+            result = b.submit_bracket("up", 20003.0, 20000.0, "IBL")
+        assert result.success is True
+
+
+# ---------------------------------------------------------------------------
+# 10. Restore daily state from DB — _restore_daily_state()
+# ---------------------------------------------------------------------------
+
+
+class TestRestoreDailyState:
+    @patch("broker.load_bot_daily_risk_state")
+    def test_restores_counters_from_db(self, mock_load):
+        mock_load.return_value = {
+            "pnl_usd": -50.0,
+            "trades": 3,
+            "wins": 2,
+            "losses": 1,
+            "consecutive_losses": 1,
+        }
+        b = _make_broker()
+        b._restore_daily_state()
+        assert b._daily_pnl_usd == -50.0
+        assert b._trades_today == 3
+        assert b._wins_today == 2
+        assert b._losses_today == 1
+        assert b._consecutive_losses == 1
+        assert b._stopped_for_day is False
+
+    @patch("broker.load_bot_daily_risk_state")
+    def test_sets_stopped_when_loss_limit_hit(self, mock_load):
+        mock_load.return_value = {
+            "pnl_usd": -160.0,
+            "trades": 4,
+            "wins": 1,
+            "losses": 3,
+            "consecutive_losses": 2,
+        }
+        b = _make_broker()
+        b._restore_daily_state()
+        assert b._stopped_for_day is True
+        assert "loss limit" in b._stop_reason.lower()
+
+    @patch("broker.load_bot_daily_risk_state")
+    def test_sets_stopped_when_consec_losses_hit(self, mock_load):
+        mock_load.return_value = {
+            "pnl_usd": -80.0,
+            "trades": 5,
+            "wins": 0,
+            "losses": 5,
+            "consecutive_losses": 5,
+        }
+        b = _make_broker()
+        b._restore_daily_state()
+        assert b._stopped_for_day is True
+        assert "consecutive losses" in b._stop_reason.lower()
+
+    @patch("broker.load_bot_daily_risk_state")
+    def test_noop_when_no_trades(self, mock_load):
+        mock_load.return_value = {
+            "pnl_usd": 0.0,
+            "trades": 0,
+            "wins": 0,
+            "losses": 0,
+            "consecutive_losses": 0,
+        }
+        b = _make_broker()
+        b._restore_daily_state()
+        assert b._daily_pnl_usd == 0.0
+        assert b._trades_today == 0
+        assert b._stopped_for_day is False
+
+
+# ---------------------------------------------------------------------------
+# 11. Heartbeat in process_events()
+# ---------------------------------------------------------------------------
+
+
+class TestHeartbeat:
+    def test_heartbeat_prints_when_interval_elapsed(self, capsys):
+        """Heartbeat fires when enough time has passed since last one."""
+        b = _make_broker()
+        b._connect_attempted = True
+        b._connected = True
+        b._was_connected = True
+        mock_ib = MagicMock()
+        mock_ib.isConnected.return_value = True
+        b._ib = mock_ib
+        # Guarantee heartbeat fires by zeroing the interval.
+        b._heartbeat_interval_secs = 0
+        b._last_heartbeat_time = 0.0
+        b.process_events()
+        captured = capsys.readouterr()
+        assert "[broker] heartbeat:" in captured.out
+
+    def test_heartbeat_skipped_when_recent(self, capsys):
+        """No heartbeat when last one was very recent."""
+        b = _make_broker()
+        b._connect_attempted = True
+        b._connected = True
+        b._was_connected = True
+        mock_ib = MagicMock()
+        mock_ib.isConnected.return_value = True
+        b._ib = mock_ib
+        # Set last heartbeat to now so interval hasn't elapsed.
+        import time as _time
+
+        b._last_heartbeat_time = _time.monotonic()
+        b.process_events()
+        captured = capsys.readouterr()
+        assert "[broker] heartbeat:" not in captured.out

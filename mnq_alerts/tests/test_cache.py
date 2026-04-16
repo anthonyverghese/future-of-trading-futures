@@ -229,3 +229,205 @@ class TestLoadPendingAlerts:
         pending = cache.load_pending_alerts(date_str)
         assert len(pending) == 1
         assert pending[0]["hit_time"] is not None
+
+
+# ── Bot trade helpers ───────────────────────────────────────────────────────
+
+DATE = "2026-04-10"
+
+
+def _insert_closed_trade(level="IBH", direction="long", pnl=24.0, outcome="win"):
+    """Insert a closed bot trade and return its row id."""
+    tid = cache.log_bot_trade_entry(
+        DATE, "10:00:00", level, direction, 20000.0,
+        20001.0, 20013.0, 19976.0,
+    )
+    cache.update_bot_trade_exit(tid, "10:05:00", 20013.0, pnl, outcome, "target")
+    return tid
+
+
+def _insert_open_trade(level="IBH", direction="long", parent_order_id=None):
+    """Insert an open (no exit) bot trade and return its row id."""
+    return cache.log_bot_trade_entry(
+        DATE, "10:10:00", level, direction, 20000.0,
+        20001.0, 20013.0, 19976.0,
+        parent_order_id=parent_order_id,
+    )
+
+
+# ── TestBotDailyRiskState ──────────────────────────────────────────────────
+
+
+class TestBotDailyRiskState:
+    def test_empty_when_no_trades(self):
+        state = cache.load_bot_daily_risk_state(DATE)
+        assert state["pnl_usd"] == 0.0
+        assert state["trades"] == 0
+        assert state["wins"] == 0
+        assert state["losses"] == 0
+        assert state["consecutive_losses"] == 0
+
+    def test_counts_closed_trades_only(self):
+        _insert_closed_trade(outcome="win", pnl=24.0)
+        _insert_closed_trade(outcome="loss", pnl=-50.0)
+        _insert_open_trade()
+
+        state = cache.load_bot_daily_risk_state(DATE)
+        assert state["trades"] == 2
+        assert state["wins"] == 1
+        assert state["losses"] == 1
+
+    def test_consecutive_losses_from_tail(self):
+        _insert_closed_trade(outcome="win", pnl=24.0)
+        _insert_closed_trade(outcome="loss", pnl=-50.0)
+        _insert_closed_trade(outcome="loss", pnl=-50.0)
+
+        state = cache.load_bot_daily_risk_state(DATE)
+        assert state["consecutive_losses"] == 2
+
+    def test_consecutive_losses_reset_by_win(self):
+        _insert_closed_trade(outcome="loss", pnl=-50.0)
+        _insert_closed_trade(outcome="loss", pnl=-50.0)
+        _insert_closed_trade(outcome="win", pnl=24.0)
+
+        state = cache.load_bot_daily_risk_state(DATE)
+        assert state["consecutive_losses"] == 0
+
+    def test_pnl_sum(self):
+        _insert_closed_trade(outcome="win", pnl=24.0)
+        _insert_closed_trade(outcome="loss", pnl=-50.0)
+        _insert_closed_trade(outcome="win", pnl=24.0)
+
+        state = cache.load_bot_daily_risk_state(DATE)
+        assert state["pnl_usd"] == pytest.approx(-2.0)
+
+
+# ── TestBotDailyLevelCounts ────────────────────────────────────────────────
+
+
+class TestBotDailyLevelCounts:
+    def test_empty_when_no_trades(self):
+        counts = cache.load_bot_daily_level_counts(DATE)
+        assert counts == {}
+
+    def test_counts_by_level(self):
+        for _ in range(3):
+            _insert_closed_trade(level="IBH")
+        for _ in range(2):
+            _insert_closed_trade(level="FIB")
+
+        counts = cache.load_bot_daily_level_counts(DATE)
+        assert counts["IBH"] == 3
+        assert counts["FIB"] == 2
+
+    def test_excludes_open_trades(self):
+        _insert_closed_trade(level="IBH")
+        _insert_open_trade(level="IBH")
+
+        counts = cache.load_bot_daily_level_counts(DATE)
+        assert counts.get("IBH") == 1
+
+
+# ── TestMarkOrphaned ───────────────────────────────────────────────────────
+
+
+class TestMarkOrphaned:
+    def test_marks_open_as_orphaned(self):
+        open_id = _insert_open_trade()
+        closed_id = _insert_closed_trade()
+
+        cache.mark_open_bot_trades_orphaned(DATE)
+
+        import sqlite3
+
+        with sqlite3.connect(cache.ALERTS_LOG_PATH) as conn:
+            open_row = conn.execute(
+                "SELECT outcome FROM bot_trades WHERE id = ?", (open_id,)
+            ).fetchone()
+            closed_row = conn.execute(
+                "SELECT outcome FROM bot_trades WHERE id = ?", (closed_id,)
+            ).fetchone()
+
+        assert open_row[0] == "orphaned"
+        assert closed_row[0] == "win"
+
+    def test_returns_count(self):
+        _insert_open_trade()
+        _insert_open_trade()
+
+        count = cache.mark_open_bot_trades_orphaned(DATE)
+        assert count == 2
+
+    def test_noop_when_none_open(self):
+        _insert_closed_trade()
+
+        count = cache.mark_open_bot_trades_orphaned(DATE)
+        assert count == 0
+
+
+# ── TestBotOpenTradeLookup ─────────────────────────────────────────────────
+
+
+class TestBotOpenTradeLookup:
+    def test_finds_matching_row(self):
+        _insert_open_trade(parent_order_id=42)
+
+        row = cache.load_bot_open_trade_by_parent_order_id(42, DATE)
+        assert row is not None
+        assert row["level_name"] == "IBH"
+        assert row["direction"] == "long"
+
+    def test_returns_none_for_wrong_id(self):
+        _insert_open_trade(parent_order_id=42)
+
+        row = cache.load_bot_open_trade_by_parent_order_id(999, DATE)
+        assert row is None
+
+    def test_returns_none_for_closed(self):
+        tid = cache.log_bot_trade_entry(
+            DATE, "10:00:00", "IBH", "long", 20000.0,
+            20001.0, 20013.0, 19976.0,
+            parent_order_id=42,
+        )
+        cache.update_bot_trade_exit(tid, "10:05:00", 20013.0, 24.0, "win", "target")
+
+        row = cache.load_bot_open_trade_by_parent_order_id(42, DATE)
+        assert row is None
+
+    def test_returns_none_for_wrong_date(self):
+        _insert_open_trade(parent_order_id=42)
+
+        row = cache.load_bot_open_trade_by_parent_order_id(42, "2026-01-01")
+        assert row is None
+
+
+# ── TestParentOrderIdColumn ────────────────────────────────────────────────
+
+
+class TestParentOrderIdColumn:
+    def test_stores_parent_order_id(self):
+        tid = cache.log_bot_trade_entry(
+            DATE, "10:00:00", "IBH", "long", 20000.0,
+            20001.0, 20013.0, 19976.0,
+            parent_order_id=99,
+        )
+        import sqlite3
+
+        with sqlite3.connect(cache.ALERTS_LOG_PATH) as conn:
+            row = conn.execute(
+                "SELECT parent_order_id FROM bot_trades WHERE id = ?", (tid,)
+            ).fetchone()
+        assert row[0] == 99
+
+    def test_parent_order_id_default_none(self):
+        tid = cache.log_bot_trade_entry(
+            DATE, "10:00:00", "IBH", "long", 20000.0,
+            20001.0, 20013.0, 19976.0,
+        )
+        import sqlite3
+
+        with sqlite3.connect(cache.ALERTS_LOG_PATH) as conn:
+            row = conn.execute(
+                "SELECT parent_order_id FROM bot_trades WHERE id = ?", (tid,)
+            ).fetchone()
+        assert row[0] is None

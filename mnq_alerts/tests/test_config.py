@@ -25,7 +25,7 @@ class TestMarketTiming:
         assert config.IB_END_HOUR == 10
 
     def test_ib_end_min(self):
-        assert config.IB_END_MIN == 30
+        assert config.IB_END_MIN == 31  # includes the 10:30 bar
 
 
 class TestAlertConstants:

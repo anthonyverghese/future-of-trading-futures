@@ -76,10 +76,11 @@ class TestIbPeriodComplete:
         assert ib_period_complete(_et(2026, 3, 25, 10, 0)) is False
 
     def test_just_before_ib_end(self):
-        assert ib_period_complete(_et(2026, 3, 25, 10, 29, 59)) is False
+        assert ib_period_complete(_et(2026, 3, 25, 10, 30, 59)) is False
 
     def test_at_ib_end(self):
-        assert ib_period_complete(_et(2026, 3, 25, 10, 30)) is True
+        # IB_END is 10:31 (includes the 10:30 bar)
+        assert ib_period_complete(_et(2026, 3, 25, 10, 31)) is True
 
     def test_after_ib_end(self):
         assert ib_period_complete(_et(2026, 3, 25, 11, 0)) is True
