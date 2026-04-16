@@ -520,6 +520,47 @@ class IBKRBroker:
             f"parent_order_id={parent_order_id}{missing_note}"
         )
 
+    def _cancel_all_mnq(self, context: str = "") -> int:
+        """Cancel all open MNQ orders using both local and server-side queries.
+
+        openTrades() only sees orders placed by this client session.
+        reqAllOpenOrders() queries IBKR's server for any open orders on
+        the account, catching orphans from crashed sessions or manual
+        TWS entries.
+        """
+        if not self._ib:
+            return 0
+        cancelled = 0
+        seen_order_ids: set[int] = set()
+
+        # Pass 1: orders tracked by this ib_insync session.
+        try:
+            for trade in self._ib.openTrades():
+                if trade.contract.symbol == MNQ_SYMBOL:
+                    seen_order_ids.add(trade.order.orderId)
+                    self._ib.cancelOrder(trade.order)
+                    cancelled += 1
+        except Exception as exc:
+            print(f"[broker] _cancel_all_mnq openTrades error: {exc}")
+
+        # Pass 2: server-side sweep for orders this session doesn't know about.
+        try:
+            all_orders = self._ib.reqAllOpenOrders()
+            for order in all_orders:
+                if (
+                    getattr(order, "orderId", None) not in seen_order_ids
+                    and hasattr(order, "contract")
+                    and getattr(order.contract, "symbol", None) == MNQ_SYMBOL
+                ):
+                    self._ib.cancelOrder(order)
+                    cancelled += 1
+        except Exception as exc:
+            print(f"[broker] _cancel_all_mnq reqAllOpenOrders error: {exc}")
+
+        if cancelled and context:
+            print(f"[broker] {context}: cancelled {cancelled} MNQ order(s)")
+        return cancelled
+
     def _defensive_flatten(self, reason: str) -> None:
         """Cancel all open MNQ orders and market-close any MNQ position.
 
@@ -530,12 +571,7 @@ class IBKRBroker:
         """
         if not self._ib:
             return
-        try:
-            for trade in self._ib.openTrades():
-                if trade.contract.symbol == MNQ_SYMBOL:
-                    self._ib.cancelOrder(trade.order)
-        except Exception as exc:
-            print(f"[broker] Defensive flatten — order cancel error: {exc}")
+        self._cancel_all_mnq(f"Defensive flatten ({reason})")
         try:
             for pos in self._ib.positions():
                 if pos.contract.symbol == MNQ_SYMBOL and pos.position != 0:
@@ -854,12 +890,7 @@ class IBKRBroker:
             f"— attempting failsafe close",
             flush=True,
         )
-        try:
-            for trade in self._ib.openTrades():
-                if trade.contract.symbol == MNQ_SYMBOL:
-                    self._ib.cancelOrder(trade.order)
-        except Exception:
-            pass
+        self._cancel_all_mnq("Failsafe")
 
         try:
             for pos in self._ib.positions():
@@ -988,12 +1019,7 @@ class IBKRBroker:
 
         if direction is None or self._contract is None:
             return
-        try:
-            for trade in self._ib.openTrades():
-                if trade.contract.symbol == MNQ_SYMBOL:
-                    self._ib.cancelOrder(trade.order)
-        except Exception as exc:
-            print(f"[broker] Warning: failed to cancel children on EOD: {exc}")
+        self._cancel_all_mnq("EOD flatten")
 
         # Re-check under lock: a TP/stop fill may have closed the position
         # while we were cancelling. Submitting a reverse market order at this
@@ -1056,14 +1082,7 @@ class IBKRBroker:
             return False
 
         # Cancel the TP + stop children so they don't race with the close.
-        # Don't use cancel_all_mnq_orders — it clears position_open, which
-        # would cause the fill callback to skip P&L recording.
-        try:
-            for trade in self._ib.openTrades():
-                if trade.contract.symbol == MNQ_SYMBOL:
-                    self._ib.cancelOrder(trade.order)
-        except Exception as exc:
-            print(f"[broker] Warning: failed to cancel children on timeout: {exc}")
+        self._cancel_all_mnq("Timeout")
 
         # Re-check under lock: a TP/stop fill may have arrived between the
         # first check and now (ib_insync runs callbacks during placeOrder/
@@ -1384,13 +1403,7 @@ class IBKRBroker:
         """Cancel all open MNQ orders. Returns count of orders cancelled."""
         if not self.is_connected:
             return 0
-        cancelled = 0
-        for trade in self._ib.openTrades():
-            if trade.contract.symbol == MNQ_SYMBOL:
-                self._ib.cancelOrder(trade.order)
-                cancelled += 1
-        if cancelled:
-            print(f"[broker] Cancelled {cancelled} open MNQ orders")
+        cancelled = self._cancel_all_mnq("cancel_all_mnq_orders")
         self._position_open = False
         return cancelled
 
@@ -1439,12 +1452,7 @@ class IBKRBroker:
             self._verify_and_failsafe_close("session_close")
             return
 
-        try:
-            for trade in self._ib.openTrades():
-                if trade.contract.symbol == MNQ_SYMBOL:
-                    self._ib.cancelOrder(trade.order)
-        except Exception as exc:
-            print(f"[broker] Warning: failed to cancel children on session close: {exc}")
+        self._cancel_all_mnq("Session close")
 
         # Re-check: a TP/stop fill may have closed the position while
         # we were cancelling.
