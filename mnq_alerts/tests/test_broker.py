@@ -60,6 +60,20 @@ def _make_broker(**overrides) -> IBKRBroker:
     return b
 
 
+def _mock_ib_with_fill(order_id=42):
+    """Create a mock IB where placeOrder returns a trade that fills immediately."""
+    mock_ib = MagicMock()
+    mock_ib.isConnected.return_value = True
+    mock_ib.client.getReqId.return_value = order_id
+    # placeOrder returns a trade object; the entry fill check polls
+    # trade.orderStatus.status after sleep(0.25).
+    filled_trade = SimpleNamespace(
+        orderStatus=SimpleNamespace(status="Filled", avgFillPrice=20003.0)
+    )
+    mock_ib.placeOrder.return_value = filled_trade
+    return mock_ib
+
+
 def _fake_trade(
     symbol, status, order_type="MKT", parent_id=0, fill_price=20000.0,
     order_ref=None,
@@ -336,11 +350,7 @@ class TestBracketPrices:
         b = _make_broker()
         b._connected = True
         b._contract = SimpleNamespace(symbol=MNQ_SYMBOL, secType="FUT")
-
-        mock_ib = MagicMock()
-        mock_ib.isConnected.return_value = True
-        mock_ib.client.getReqId.return_value = 42
-        b._ib = mock_ib
+        b._ib = _mock_ib_with_fill(42)
 
         with patch.object(
             type(b), "is_connected", new_callable=lambda: property(lambda self: True)
@@ -357,11 +367,7 @@ class TestBracketPrices:
         b = _make_broker()
         b._connected = True
         b._contract = SimpleNamespace(symbol=MNQ_SYMBOL, secType="FUT")
-
-        mock_ib = MagicMock()
-        mock_ib.isConnected.return_value = True
-        mock_ib.client.getReqId.return_value = 43
-        b._ib = mock_ib
+        b._ib = _mock_ib_with_fill(43)
 
         with patch.object(
             type(b), "is_connected", new_callable=lambda: property(lambda self: True)
@@ -378,11 +384,7 @@ class TestBracketPrices:
         b = _make_broker()
         b._connected = True
         b._contract = SimpleNamespace(symbol=MNQ_SYMBOL, secType="FUT")
-
-        mock_ib = MagicMock()
-        mock_ib.isConnected.return_value = True
-        mock_ib.client.getReqId.return_value = 44
-        b._ib = mock_ib
+        b._ib = _mock_ib_with_fill(44)
 
         # Line at 20001.33 → target 20011.33 → rounds to 20011.25
         #                   → stop 19976.33 → rounds to 19976.25
@@ -399,11 +401,7 @@ class TestBracketPrices:
         b = _make_broker()
         b._connected = True
         b._contract = SimpleNamespace(symbol=MNQ_SYMBOL, secType="FUT")
-
-        mock_ib = MagicMock()
-        mock_ib.isConnected.return_value = True
-        mock_ib.client.getReqId.return_value = 45
-        b._ib = mock_ib
+        b._ib = _mock_ib_with_fill(45)
 
         with patch.object(
             type(b), "is_connected", new_callable=lambda: property(lambda self: True)
@@ -413,6 +411,32 @@ class TestBracketPrices:
         assert b._position_open is True
         assert b._pending_direction == "up"
         assert b._pending_line_price == 20000.0
+
+    def test_unfilled_entry_cancelled_within_1s(self):
+        """Entry limit that doesn't fill within 1s is cancelled."""
+        b = _make_broker()
+        b._connected = True
+        b._contract = SimpleNamespace(symbol=MNQ_SYMBOL, secType="FUT")
+
+        mock_ib = MagicMock()
+        mock_ib.isConnected.return_value = True
+        mock_ib.client.getReqId.return_value = 46
+        # placeOrder returns a trade that stays "Submitted" (never fills)
+        unfilled = SimpleNamespace(
+            orderStatus=SimpleNamespace(status="Submitted")
+        )
+        mock_ib.placeOrder.return_value = unfilled
+        b._ib = mock_ib
+
+        with patch.object(
+            type(b), "is_connected", new_callable=lambda: property(lambda self: True)
+        ):
+            result = b.submit_bracket("up", 20002.0, 20000.0, "IBL")
+
+        assert result.success is False
+        assert "not filled" in result.error
+        assert b._position_open is False
+        mock_ib.cancelOrder.assert_called_once()
 
     def test_blocked_when_position_open(self):
         """Cannot submit when a position is already open."""
@@ -784,10 +808,7 @@ class TestPreEntryDriftCheck:
         b._was_connected = True
         b._connect_attempted = True
         b._contract = SimpleNamespace(symbol=MNQ_SYMBOL, secType="FUT")
-        mock_ib = MagicMock()
-        mock_ib.isConnected.return_value = True
-        mock_ib.client.getReqId.return_value = 99
-        b._ib = mock_ib
+        b._ib = _mock_ib_with_fill(99)
         return b
 
     def test_dangerous_drift_refuses_entry(self):

@@ -1298,11 +1298,45 @@ class IBKRBroker:
             stop_loss.transmit = True  # transmit last to send all at once
 
             # Submit all three legs.
-            self._ib.placeOrder(contract, parent)
+            parent_trade = self._ib.placeOrder(contract, parent)
             self._ib.placeOrder(contract, take_profit)
             self._ib.placeOrder(contract, stop_loss)
 
             parent_id = parent.orderId
+
+            print(
+                f"[broker] {action} {qty} MNQ @ limit {entry_limit:.2f} | "
+                f"target {target_price:.2f} (+{BOT_TARGET_POINTS}) | "
+                f"stop {stop_price:.2f} (-{BOT_STOP_POINTS}) | "
+                f"level {level_name} @ {line_price:.2f} | "
+                f"order {parent_id} | {self.daily_stats}"
+            )
+
+            # Wait up to 1s for the entry limit to fill. If it doesn't,
+            # cancel the bracket — we don't want stale limit orders
+            # sitting on the book while the market moves away.
+            filled = False
+            for _ in range(4):
+                self._ib.sleep(0.25)
+                if parent_trade.orderStatus.status == "Filled":
+                    filled = True
+                    break
+
+            if not filled:
+                print(
+                    f"[broker] Entry limit not filled within 1s — "
+                    f"cancelling bracket (order {parent_id})"
+                )
+                try:
+                    self._ib.cancelOrder(parent)
+                    # Children are auto-cancelled by IBKR when the
+                    # unfilled parent is cancelled.
+                except Exception:
+                    pass
+                return TradeResult(
+                    success=False,
+                    error="Entry limit not filled within 1s",
+                )
 
             # Track position state for risk management.
             self._position_open = True
@@ -1316,14 +1350,6 @@ class IBKRBroker:
             self._pending_db_trade_id = None
             self._pending_parent_order_id = parent_id
             self._position_opened_at = time.monotonic()
-
-            print(
-                f"[broker] {action} {qty} MNQ @ limit {entry_limit:.2f} | "
-                f"target {target_price:.2f} (+{BOT_TARGET_POINTS}) | "
-                f"stop {stop_price:.2f} (-{BOT_STOP_POINTS}) | "
-                f"level {level_name} @ {line_price:.2f} | "
-                f"order {parent_id} | {self.daily_stats}"
-            )
 
             return TradeResult(
                 success=True,
