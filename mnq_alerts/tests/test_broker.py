@@ -441,6 +441,121 @@ class TestBracketPrices:
 
 
 # ---------------------------------------------------------------------------
+# 4b. Entry limit order prices and cancellation handling
+# ---------------------------------------------------------------------------
+
+
+class TestEntryLimitOrder:
+    def test_buy_entry_limit_above_line(self):
+        """BUY entry limit is line + buffer (max price willing to pay)."""
+        b = _make_broker()
+        b._connected = True
+        b._contract = SimpleNamespace(symbol=MNQ_SYMBOL, secType="FUT")
+
+        mock_ib = MagicMock()
+        mock_ib.isConnected.return_value = True
+        mock_ib.client.getReqId.return_value = 50
+        b._ib = mock_ib
+
+        with patch.object(
+            type(b), "is_connected", new_callable=lambda: property(lambda self: True)
+        ):
+            b.submit_bracket("up", 20002.0, 20000.0, "IBL")
+
+        # Entry limit order is the first placeOrder call
+        entry_order = mock_ib.placeOrder.call_args_list[0][0][1]
+        assert entry_order.action == "BUY"
+        assert entry_order.lmtPrice == 20005.0  # 20000 + 5
+
+    def test_sell_entry_limit_below_line(self):
+        """SELL entry limit is line - buffer (min price willing to accept)."""
+        b = _make_broker()
+        b._connected = True
+        b._contract = SimpleNamespace(symbol=MNQ_SYMBOL, secType="FUT")
+
+        mock_ib = MagicMock()
+        mock_ib.isConnected.return_value = True
+        mock_ib.client.getReqId.return_value = 51
+        b._ib = mock_ib
+
+        with patch.object(
+            type(b), "is_connected", new_callable=lambda: property(lambda self: True)
+        ):
+            b.submit_bracket("down", 19998.0, 20000.0, "IBH")
+
+        entry_order = mock_ib.placeOrder.call_args_list[0][0][1]
+        assert entry_order.action == "SELL"
+        assert entry_order.lmtPrice == 19995.0  # 20000 - 5
+
+    def test_entry_limit_tick_rounding(self):
+        """Entry limit price rounds to MNQ tick size (0.25)."""
+        b = _make_broker()
+        b._connected = True
+        b._contract = SimpleNamespace(symbol=MNQ_SYMBOL, secType="FUT")
+
+        mock_ib = MagicMock()
+        mock_ib.isConnected.return_value = True
+        mock_ib.client.getReqId.return_value = 52
+        b._ib = mock_ib
+
+        # Line at 20001.33 + 5.0 = 20006.33 → rounds to 20006.25
+        with patch.object(
+            type(b), "is_connected", new_callable=lambda: property(lambda self: True)
+        ):
+            b.submit_bracket("up", 20002.0, 20001.33, "VWAP")
+
+        entry_order = mock_ib.placeOrder.call_args_list[0][0][1]
+        assert entry_order.lmtPrice == 20006.25
+
+    def test_cancelled_entry_clears_position_state(self):
+        """Cancelled parent limit order clears _position_open."""
+        b = _make_broker()
+        b._position_open = True
+        b._pending_entry_fill = None  # not yet filled
+        b._position_opened_at = 12345.0
+
+        trade = SimpleNamespace(
+            contract=SimpleNamespace(symbol=MNQ_SYMBOL),
+            orderStatus=SimpleNamespace(status="Cancelled"),
+            order=SimpleNamespace(orderRef="bot-50-parent"),
+        )
+        b._on_order_status(trade)
+
+        assert b._position_open is False
+        assert b._position_opened_at is None
+
+    def test_cancelled_entry_ignored_if_already_filled(self):
+        """Cancelled status after fill doesn't clear position (race guard)."""
+        b = _make_broker()
+        b._position_open = True
+        b._pending_entry_fill = 20003.0  # already filled
+
+        trade = SimpleNamespace(
+            contract=SimpleNamespace(symbol=MNQ_SYMBOL),
+            orderStatus=SimpleNamespace(status="Cancelled"),
+            order=SimpleNamespace(orderRef="bot-50-parent"),
+        )
+        b._on_order_status(trade)
+
+        assert b._position_open is True  # not cleared
+
+    def test_cancelled_non_parent_ignored(self):
+        """Cancelled target/stop orders don't clear position state."""
+        b = _make_broker()
+        b._position_open = True
+        b._pending_entry_fill = None
+
+        trade = SimpleNamespace(
+            contract=SimpleNamespace(symbol=MNQ_SYMBOL),
+            orderStatus=SimpleNamespace(status="Cancelled"),
+            order=SimpleNamespace(orderRef="bot-50-target"),
+        )
+        b._on_order_status(trade)
+
+        assert b._position_open is True  # not cleared
+
+
+# ---------------------------------------------------------------------------
 # 5. Daily stats string
 # ---------------------------------------------------------------------------
 

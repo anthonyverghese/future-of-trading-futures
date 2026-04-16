@@ -651,6 +651,24 @@ class IBKRBroker:
         """
         if trade.contract.symbol != MNQ_SYMBOL:
             return
+
+        # Handle cancelled/inactive parent (entry) limit orders: clear
+        # _position_open so the bot isn't blocked from new trades. With
+        # limit entries (not market), the parent can go unfilled if price
+        # moves away before the limit is hit.
+        if trade.orderStatus.status in ("Cancelled", "Inactive"):
+            order_ref = (trade.order.orderRef or "").strip()
+            if order_ref.startswith("bot-") and order_ref.endswith("-parent"):
+                with self._lock:
+                    if self._position_open and self._pending_entry_fill is None:
+                        self._position_open = False
+                        self._position_opened_at = None
+                        print(
+                            f"[broker] Entry limit order {trade.orderStatus.status.lower()} "
+                            f"— clearing position state"
+                        )
+            return
+
         if trade.orderStatus.status != "Filled":
             return
 
