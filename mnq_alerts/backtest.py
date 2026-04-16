@@ -33,7 +33,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 sys.path.insert(0, os.path.dirname(__file__))
-from config import DATABENTO_API_KEY
+from config import DATABENTO_API_KEY, IB_END_HOUR, IB_END_MIN
 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "alert_model.joblib")
 
@@ -43,7 +43,7 @@ PT = pytz.timezone("America/Los_Angeles")
 DATASET = "GLBX.MDP3"
 SYMBOL = "MNQ.c.0"
 MARKET_OPEN = datetime.time(9, 30)
-IB_END = datetime.time(10, 30)
+IB_END = datetime.time(IB_END_HOUR, IB_END_MIN)
 MARKET_CLOSE = datetime.time(16, 0)
 
 ALERT_THRESHOLD = 7.0  # points — zone entry (must match live config)

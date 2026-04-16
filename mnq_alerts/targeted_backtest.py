@@ -27,13 +27,13 @@ import pandas as pd
 import pytz
 
 sys.path.insert(0, os.path.dirname(__file__))
-from config import DATABENTO_API_KEY
+from config import DATABENTO_API_KEY, IB_END_HOUR, IB_END_MIN
 
 ET = pytz.timezone("America/New_York")
 PT = pytz.timezone("America/Los_Angeles")
 
 MARKET_OPEN = datetime.time(9, 30)
-IB_END = datetime.time(10, 30)
+IB_END = datetime.time(IB_END_HOUR, IB_END_MIN)
 MARKET_CLOSE = datetime.time(16, 0)
 
 ALERT_THRESHOLD = 7.0
