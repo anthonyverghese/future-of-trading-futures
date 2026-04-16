@@ -87,6 +87,8 @@ class IBKRBroker:
         self._connect_attempted = False  # True after first connect() call
         self._reconnect_attempts = 0
         self._max_reconnect_attempts = 5
+        self._heartbeat_interval_secs = 300.0  # log connection state every 5 min
+        self._last_heartbeat_time: float = 0.0
         self._last_reconnect_time: float = 0.0  # monotonic timestamp
         self._reconnect_interval_secs = 60.0  # retry every 60s, not every tick
 
@@ -247,9 +249,43 @@ class IBKRBroker:
 
         Also detects disconnections (or initial connection failures) and
         attempts to reconnect with rate limiting (every 60s, not every tick).
+
+        Emits a periodic heartbeat log line (every 5 min) so post-session
+        investigation can confirm connection state at any point. Without
+        this, today's (2026-04-15) afternoon disconnect went undetected
+        because the journal had rotated all skip/block messages.
         """
+        now = time.monotonic()
+
+        # Periodic heartbeat — always emit regardless of connection state.
+        if now - self._last_heartbeat_time >= self._heartbeat_interval_secs:
+            self._last_heartbeat_time = now
+            connected = self.is_connected
+            if connected:
+                print(
+                    f"[broker] heartbeat: CONNECTED | "
+                    f"position_open={self._position_open} | "
+                    f"{self.daily_stats} | "
+                    f"consec_losses={self._consecutive_losses} | "
+                    f"reconnects={self._reconnect_attempts}/"
+                    f"{self._max_reconnect_attempts}"
+                    + (
+                        f" | STOPPED: {self._stop_reason}"
+                        if self._stopped_for_day
+                        else ""
+                    ),
+                    flush=True,
+                )
+            else:
+                print(
+                    f"[broker] heartbeat: DISCONNECTED | "
+                    f"reconnects={self._reconnect_attempts}/"
+                    f"{self._max_reconnect_attempts} | "
+                    f"was_connected={self._was_connected}",
+                    flush=True,
+                )
+
         if self._connect_attempted and not self.is_connected:
-            now = time.monotonic()
             if now - self._last_reconnect_time >= self._reconnect_interval_secs:
                 self._last_reconnect_time = now
                 self.reconnect()
