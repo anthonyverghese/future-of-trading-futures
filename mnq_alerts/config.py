@@ -60,6 +60,7 @@ BOT_ENTRY_THRESHOLD = (
 BOT_EXIT_THRESHOLD = 15.0  # Bot zone reset distance (vs 20 for human)
 BOT_TARGET_POINTS = 10.0  # Take profit distance from line price (walk-forward validated 2026-04-16)
 BOT_STOP_POINTS = 25.0  # Stop loss distance from line price
+BOT_ENTRY_LIMIT_BUFFER = 5.0  # Max pts from line for entry limit order (half of target)
 BOT_MIN_SCORE = 1  # Minimum entry score to trade (walk-forward validated)
 BOT_TREND_LOOKBACK_MIN = 60  # Minutes to look back for trend calculation
 BOT_TREND_THRESHOLD = 50.0  # Points — counter-trend above this penalizes score

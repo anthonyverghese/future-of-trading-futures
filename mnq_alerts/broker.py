@@ -21,6 +21,7 @@ import time
 from dataclasses import dataclass
 
 from config import (
+    BOT_ENTRY_LIMIT_BUFFER,
     BOT_STOP_POINTS,
     BOT_TARGET_POINTS,
     BOT_TIMEOUT_SECS,
@@ -1213,43 +1214,6 @@ class IBKRBroker:
             self._pending_trend_60m = trend_60m
             self._pending_entry_count = entry_count
 
-            # Staleness check: the tick that triggered the zone entry may
-            # be stale by the time we reach placeOrder (the main loop
-            # processes ticks sequentially, so high tick rates cause lag).
-            # Query IBKR for the last known price and reject if it has
-            # drifted past the target — a market order would fill at a
-            # loss immediately.
-            try:
-                ticker = self._ib.reqTickers(self._contract)
-                if ticker and ticker[0].last == ticker[0].last:  # not NaN
-                    live_price = ticker[0].last
-                    if direction == "up":
-                        target = line_price + BOT_TARGET_POINTS
-                        if live_price >= target:
-                            print(
-                                f"[broker] Stale entry rejected: live price "
-                                f"{live_price:.2f} already past target "
-                                f"{target:.2f}"
-                            )
-                            return TradeResult(
-                                success=False,
-                                error="Stale — price past target",
-                            )
-                    else:
-                        target = line_price - BOT_TARGET_POINTS
-                        if live_price <= target:
-                            print(
-                                f"[broker] Stale entry rejected: live price "
-                                f"{live_price:.2f} already past target "
-                                f"{target:.2f}"
-                            )
-                            return TradeResult(
-                                success=False,
-                                error="Stale — price past target",
-                            )
-            except Exception:
-                pass  # can't check — proceed with the entry
-
             return self._submit_bracket_locked(
                 direction, current_price, line_price, level_name, qty
             )
@@ -1287,14 +1251,20 @@ class IBKRBroker:
             return TradeResult(success=False, error="Contract resolution failed")
 
         try:
-            # Build bracket manually: market entry + limit take-profit + stop loss.
-            # Using market order (not limit) for the entry so the bot gets
-            # filled immediately — a limit at current_price can miss if the
-            # market moves even slightly.
+            # Build bracket: limit entry + limit take-profit + stop loss.
+            # Entry uses a limit order at line_price ± BOT_ENTRY_LIMIT_BUFFER
+            # to cap slippage. A market order during a volatile spike can
+            # fill far from the line (observed 2026-04-16: 13 pts slippage,
+            # filled past the target for a guaranteed loss).
             #
             # Must pre-assign orderId to the parent so children can reference
             # it via parentId BEFORE placeOrder is called.
-            parent = MarketOrder(action, qty)
+            if direction == "up":
+                entry_limit = line_price + BOT_ENTRY_LIMIT_BUFFER
+            else:
+                entry_limit = line_price - BOT_ENTRY_LIMIT_BUFFER
+            entry_limit = round(entry_limit * 4) / 4  # MNQ tick size
+            parent = LimitOrder(action, qty, entry_limit)
             parent.orderId = self._ib.client.getReqId()
             parent.orderRef = f"bot-{parent.orderId}-parent"
             parent.transmit = False
@@ -1330,7 +1300,7 @@ class IBKRBroker:
             self._position_opened_at = time.monotonic()
 
             print(
-                f"[broker] {action} {qty} MNQ @ market | "
+                f"[broker] {action} {qty} MNQ @ limit {entry_limit:.2f} | "
                 f"target {target_price:.2f} (+{BOT_TARGET_POINTS}) | "
                 f"stop {stop_price:.2f} (-{BOT_STOP_POINTS}) | "
                 f"level {level_name} @ {line_price:.2f} | "
