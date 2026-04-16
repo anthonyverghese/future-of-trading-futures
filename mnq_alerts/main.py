@@ -184,10 +184,21 @@ def run() -> None:
             from bot_trader import BotTrader
 
             bot = BotTrader()
-            if not bot.connect():
+            connected = False
+            for attempt in range(1, 4):
+                if bot.connect():
+                    connected = True
+                    break
+                print(
+                    f"[bot] Connection attempt {attempt}/3 failed "
+                    f"— retrying in 10s"
+                )
+                time.sleep(10)
+            if not connected:
                 send_notification(
                     "Bot Connection Failed",
-                    "Could not connect to IB Gateway. Bot will retry on first trade.",
+                    "Could not connect to IB Gateway after 3 attempts. "
+                    "Bot will retry on first trade.",
                 )
         except Exception as e:
             print(f"[bot] Failed to initialize: {e}\n{traceback.format_exc()}")
