@@ -348,7 +348,7 @@ class TestBracketPrices:
             result = b.submit_bracket("up", 20003.0, 20000.0, "IBL")
 
         assert result.success is True
-        assert result.target_price == 20012.0  # 20000 + 12
+        assert result.target_price == 20010.0  # 20000 + 10
         assert result.stop_price == 19975.0  # 20000 - 25
         assert result.order_id == 42
 
@@ -369,7 +369,7 @@ class TestBracketPrices:
             result = b.submit_bracket("down", 19997.0, 20000.0, "IBH")
 
         assert result.success is True
-        assert result.target_price == 19988.0  # 20000 - 12
+        assert result.target_price == 19990.0  # 20000 - 10
         assert result.stop_price == 20025.0  # 20000 + 25
         assert result.order_id == 43
 
@@ -384,14 +384,14 @@ class TestBracketPrices:
         mock_ib.client.getReqId.return_value = 44
         b._ib = mock_ib
 
-        # Line at 20001.33 → target 20013.33 → rounds to 20013.25
+        # Line at 20001.33 → target 20011.33 → rounds to 20011.25
         #                   → stop 19976.33 → rounds to 19976.25
         with patch.object(
             type(b), "is_connected", new_callable=lambda: property(lambda self: True)
         ):
             result = b.submit_bracket("up", 20002.0, 20001.33, "VWAP")
 
-        assert result.target_price == 20013.25
+        assert result.target_price == 20011.25
         assert result.stop_price == 19976.25
 
     def test_sets_position_tracking_state(self):
