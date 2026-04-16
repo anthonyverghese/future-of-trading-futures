@@ -798,6 +798,19 @@ class IBKRBroker:
         if not self._ib:
             return
 
+        # Quick check: if IBKR already has no MNQ position, we're done.
+        # This avoids a 10s wait when called preventively (e.g. when
+        # _position_open was False but we're checking anyway).
+        try:
+            self._ib.sleep(0.5)  # brief pump to process pending events
+            if not any(
+                p.contract.symbol == MNQ_SYMBOL and p.position != 0
+                for p in self._ib.positions()
+            ):
+                return  # Confirmed: no position on IBKR side
+        except Exception:
+            pass  # can't confirm — proceed with the full wait
+
         # Wait up to 10s for the normal close (via _on_order_status) to
         # clear _position_open and close the IBKR position.
         for _ in range(5):
@@ -1343,3 +1356,66 @@ class IBKRBroker:
                 print(f"[broker] Flattening: {action} {qty} MNQ @ market")
         self._position_open = False
         return True
+
+    def session_close(self) -> None:
+        """Final safety close at market end — mirrors eod_flatten with failsafe.
+
+        Called from bot_trader.close_session() at 4:00 PM ET as the last
+        line of defense. If eod_flatten already closed the position at
+        3:58 PM, this is a no-op. If the position is still open (eod
+        flatten failed, was skipped, or a new position snuck in), this
+        path cancels remaining orders, submits a tracked reverse market
+        order with proper orderRef/P&L routing, and verifies the close
+        via _verify_and_failsafe_close before disconnecting.
+        """
+        if not self.is_connected:
+            return
+
+        with self._lock:
+            if not self._position_open:
+                return  # eod_flatten already closed it
+            direction = self._pending_direction
+            self._position_opened_at = None  # prevent timeout path racing
+
+        if direction is None or self._contract is None:
+            # Can't determine direction from bot state — fall back to
+            # reading the raw IBKR position and closing it directly via
+            # the failsafe path.
+            print(
+                "[broker] Session close: no direction/contract — "
+                "falling back to failsafe"
+            )
+            self._verify_and_failsafe_close("session_close")
+            return
+
+        try:
+            for trade in self._ib.openTrades():
+                if trade.contract.symbol == MNQ_SYMBOL:
+                    self._ib.cancelOrder(trade.order)
+        except Exception as exc:
+            print(f"[broker] Warning: failed to cancel children on session close: {exc}")
+
+        # Re-check: a TP/stop fill may have closed the position while
+        # we were cancelling.
+        with self._lock:
+            if not self._position_open:
+                print(
+                    "[broker] Position closed before session-close market "
+                    "order — skipping (race with TP/stop fill)"
+                )
+                return
+
+        close_action = "SELL" if direction == "up" else "BUY"
+        close_order = MarketOrder(close_action, ORDER_QTY)
+        parent_id_tag = self._pending_parent_order_id or "unknown"
+        close_order.orderRef = f"bot-{parent_id_tag}-close"
+        self._pending_exit_reason = "session_close"
+        try:
+            self._ib.placeOrder(self._contract, close_order)
+            print(
+                f"[broker] Session close: {close_action} {ORDER_QTY} MNQ @ market"
+            )
+        except Exception as exc:
+            print(f"[broker] Session close order failed: {exc}")
+
+        self._verify_and_failsafe_close("session_close")

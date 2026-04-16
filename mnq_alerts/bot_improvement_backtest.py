@@ -24,8 +24,6 @@ import pytz
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-import databento as db
-from backtest import get_trading_days, fetch_trades
 from targeted_backtest import (
     DayCache,
     load_cached_days,
@@ -34,7 +32,7 @@ from targeted_backtest import (
     _run_zone_numpy,
 )
 from bot_risk_backtest import MULTIPLIER, STARTING_BALANCE, evaluate_bot_trade
-from config import BOT_EOD_FLATTEN_BUFFER_MIN, DATABENTO_API_KEY
+from config import BOT_EOD_FLATTEN_BUFFER_MIN
 from walk_forward import (
     DayEntries,
     DayOutcomes,
@@ -55,26 +53,10 @@ _ET = pytz.timezone("America/New_York")
 # DATA LOADING
 # ══════════════════════════════════════════════════════════════════════════════
 
-NUM_DAYS = 100
 
-
-def ensure_data(n: int = NUM_DAYS) -> list[datetime.date]:
-    """Fetch n trading days of data, caching to disk."""
-    days = get_trading_days(n=n, offset=0)
-    cached = set(load_cached_days())
-    to_fetch = [d for d in days if d not in cached]
-    if to_fetch:
-        print(f"Fetching {len(to_fetch)} days from Databento...")
-        client = db.Historical(key=DATABENTO_API_KEY)
-        for i, date in enumerate(to_fetch):
-            print(f"  [{i+1}/{len(to_fetch)}] {date}", flush=True)
-            try:
-                fetch_trades(client, date)
-            except Exception as e:
-                print(f"    ERROR: {e}")
-    # Return only days that are actually cached
-    cached = set(load_cached_days())
-    return sorted(d for d in days if d in cached)
+def ensure_data() -> list[datetime.date]:
+    """Return all cached trading days."""
+    return sorted(load_cached_days())
 
 
 def load_all_days(days: list[datetime.date]) -> dict[datetime.date, DayCache]:
@@ -336,7 +318,7 @@ def main():
 
     # Step 1: Ensure data
     print("Step 1: Loading data...")
-    days = ensure_data(NUM_DAYS)
+    days = ensure_data()
     print(f"  {len(days)} trading days available")
 
     # Step 2: Preprocess

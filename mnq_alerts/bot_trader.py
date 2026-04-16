@@ -281,10 +281,9 @@ class BotTrader:
         self._broker.eod_flatten()
 
     def close_session(self) -> None:
-        """Cancel open orders, flatten positions, disconnect."""
+        """Tracked close with failsafe verification, then disconnect."""
         if self._broker.is_connected:
-            self._broker.cancel_all_mnq_orders()
-            self._broker.flatten_positions()
+            self._broker.session_close()
             self._broker.disconnect()
 
     @property

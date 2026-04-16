@@ -140,7 +140,10 @@ Enables automated bracket order submission (market entry + limit TP + stop SL)
 when alerts fire. Disabled by default — requires IB Gateway running in Docker.
 
 Uses [gnzsnz/ib-gateway-docker](https://github.com/gnzsnz/ib-gateway-docker) for
-IB Gateway + IBC + VNC in a single container. 2FA required once per week via VNC.
+IB Gateway + IBC + VNC in a single container. IBKR's server-side 2FA trust
+window is short (~24h), so 2FA must be re-approved via VNC each night before
+a trading day. A Pushover reminder (`mnq-2fa-reminder.timer`) fires Sun–Thu at
+8:30 PM PT as a prompt.
 
 ```bash
 # 1. Configure IB Gateway credentials
@@ -164,8 +167,12 @@ chmod +x setup-ib-gateway.sh
 sudo systemctl restart mnq-alerts
 ```
 
-Weekly maintenance: VNC in on Sunday evening to approve the 2FA prompt.
-IB Gateway auto-restarts daily at 11:59 PM ET without re-prompting.
+Nightly maintenance (Sun–Thu): VNC in after the 8:30 PM PT Pushover reminder
+and approve the IBKR Mobile 2FA prompt. This refreshes IBKR's server-side
+trust so the next morning's gateway login sails through without a challenge.
+IB Gateway also auto-restarts daily at 11:59 PM ET via an IBC-managed session
+token; as long as that restart is clean (container not killed mid-day), it
+won't re-prompt.
 
 Risk controls (validated over 214 days in `bot_risk_backtest.py`):
 - 1 position at a time (no stacking)

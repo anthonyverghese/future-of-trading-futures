@@ -1,8 +1,12 @@
 [Unit]
-Description=Weekly 2FA reminder — Sunday 6 PM Pacific (9 PM ET)
+Description=2FA reminder — Sun-Thu 8:30 PM PT (before each trading day)
 
 [Timer]
-OnCalendar=Sun *-*-* 21:00:00 America/New_York
+OnCalendar=Sun *-*-* 20:30:00 America/Los_Angeles
+OnCalendar=Mon *-*-* 20:30:00 America/Los_Angeles
+OnCalendar=Tue *-*-* 20:30:00 America/Los_Angeles
+OnCalendar=Wed *-*-* 20:30:00 America/Los_Angeles
+OnCalendar=Thu *-*-* 20:30:00 America/Los_Angeles
 Persistent=true
 
 [Install]

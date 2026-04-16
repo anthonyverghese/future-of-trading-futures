@@ -11,7 +11,7 @@ from notifications import send_notification, PRIORITY_HIGH
 send_notification(
     title="IB Gateway 2FA Reminder",
     message=(
-        "Approve the weekly IB Gateway 2FA login.\n\n"
+        "Approve tonight's IB Gateway 2FA login before tomorrow's open.\n\n"
         "1. ssh -NL 5900:localhost:5900 -i FuturesTrader.pem ec2-user@<EC2_IP>\n"
         "2. Open vnc://localhost:5900\n"
         "3. Approve the prompt on IBKR Mobile"
