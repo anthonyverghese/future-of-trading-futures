@@ -104,7 +104,7 @@ class IBKRBroker:
         self._pending_direction: str | None = None  # "up" or "down"
         self._pending_line_price: float | None = None
         self._pending_entry_fill: float | None = None  # actual fill price
-        self._pending_target_pts: float = 10.0
+        self._pending_target_pts: float = 8.0
         self._pending_stop_pts: float = 25.0
         self._pending_level_name: str | None = None
         self._pending_target_price: float | None = None
@@ -1214,9 +1214,9 @@ class IBKRBroker:
         score: int | None = None,
         trend_60m: float | None = None,
         entry_count: int | None = None,
-        target_pts: float = 10.0,
+        target_pts: float = 8.0,
         stop_pts: float = 25.0,
-        entry_limit_buffer: float = 5.0,
+        entry_limit_buffer: float = 4.0,
     ) -> TradeResult:
         """Submit a bracket order: market entry + limit target + stop loss.
 
@@ -1361,9 +1361,9 @@ class IBKRBroker:
         line_price: float,
         level_name: str,
         qty: int,
-        target_pts: float = 10.0,
+        target_pts: float = 8.0,
         stop_pts: float = 25.0,
-        entry_limit_buffer: float = 5.0,
+        entry_limit_buffer: float = 4.0,
     ) -> tuple["TradeResult", "Order | None", "object | None"]:
         """Internal bracket submission (must hold self._lock).
 

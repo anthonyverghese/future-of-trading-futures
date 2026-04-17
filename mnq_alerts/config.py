@@ -58,10 +58,9 @@ BOT_ENTRY_THRESHOLD = (
     1.0  # Bot trades when price is within 1 pt of level (vs 7 for human)
 )
 BOT_EXIT_THRESHOLD = 15.0  # Bot zone reset distance (vs 20 for human)
-BOT_TARGET_IB_RATIO = 0.07  # Target = 7% of IB range (walk-forward validated 2026-04-17)
-BOT_STOP_IB_RATIO = 0.20  # Stop = 20% of IB range
-BOT_TARGET_MIN_PTS = 4.0  # Minimum target in points (for narrow IB days)
-BOT_STOP_MIN_PTS = 8.0  # Minimum stop in points
+BOT_TARGET_POINTS = 8.0  # Fixed target (walk-forward OOS validated 2026-04-17)
+BOT_STOP_POINTS = 25.0  # Fixed stop
+BOT_INCLUDE_VWAP = True  # Include VWAP level in bot trading
 BOT_MIN_SCORE = -1  # Minimum entry score (bot-specific weights, walk-forward validated)
 BOT_TREND_LOOKBACK_MIN = 60  # Minutes to look back for trend calculation
 BOT_VOL_FILTER_MIN_RANGE_PCT = 0.0015  # Skip entry when 30m range < 0.15% of price

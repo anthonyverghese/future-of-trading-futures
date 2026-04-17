@@ -25,12 +25,11 @@ from cache import load_bot_daily_level_counts
 from config import (
     BOT_ENTRY_THRESHOLD,
     BOT_EXIT_THRESHOLD,
+    BOT_INCLUDE_VWAP,
     BOT_MAX_ENTRIES_PER_LEVEL,
     BOT_MIN_SCORE,
-    BOT_TARGET_IB_RATIO,
-    BOT_STOP_IB_RATIO,
-    BOT_TARGET_MIN_PTS,
-    BOT_STOP_MIN_PTS,
+    BOT_STOP_POINTS,
+    BOT_TARGET_POINTS,
     BOT_TREND_LOOKBACK_MIN,
     BOT_VOL_FILTER_MIN_RANGE_PCT,
 )
@@ -224,13 +223,11 @@ class BotTrader:
         ibl: float | None = None,
         vwap: float | None = None,
     ) -> None:
-        """Bulk update levels. Updates price on existing zones without resetting state.
-
-        VWAP is excluded from bot trading — walk-forward over 318 days showed
-        VWAP is net negative (-$68 P&L, $1,710 MaxDD) while IBH/IBL/Fib are
-        all solidly positive.
-        """
-        for name, price in {"IBH": ibh, "IBL": ibl}.items():
+        """Bulk update levels. Updates price on existing zones without resetting state."""
+        levels = {"IBH": ibh, "IBL": ibl}
+        if BOT_INCLUDE_VWAP:
+            levels["VWAP"] = vwap
+        for name, price in levels.items():
             if price is not None:
                 if name in self._zones:
                     self._zones[name].price = price
@@ -268,18 +265,8 @@ class BotTrader:
             trend_60m = 0.0
 
         # Compute IB-range-normalized T/S.
-        if ib_range and ib_range > 0:
-            target_pts = max(
-                round(ib_range * BOT_TARGET_IB_RATIO * 4) / 4,
-                BOT_TARGET_MIN_PTS,
-            )
-            stop_pts = max(
-                round(ib_range * BOT_STOP_IB_RATIO * 4) / 4,
-                BOT_STOP_MIN_PTS,
-            )
-        else:
-            target_pts = BOT_TARGET_MIN_PTS
-            stop_pts = BOT_STOP_MIN_PTS
+        target_pts = BOT_TARGET_POINTS
+        stop_pts = BOT_STOP_POINTS
         entry_limit_buffer = round(target_pts / 2 * 4) / 4
 
         # 30m range as % of price (for scoring).

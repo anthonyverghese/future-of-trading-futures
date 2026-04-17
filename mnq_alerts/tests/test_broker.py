@@ -358,7 +358,7 @@ class TestBracketPrices:
             result = b.submit_bracket("up", 20003.0, 20000.0, "IBL")
 
         assert result.success is True
-        assert result.target_price == 20010.0  # 20000 + 10
+        assert result.target_price == 20008.0  # 20000 + 8
         assert result.stop_price == 19975.0  # 20000 - 25
         assert result.order_id == 42
 
@@ -375,7 +375,7 @@ class TestBracketPrices:
             result = b.submit_bracket("down", 19997.0, 20000.0, "IBH")
 
         assert result.success is True
-        assert result.target_price == 19990.0  # 20000 - 10
+        assert result.target_price == 19992.0  # 20000 - 8
         assert result.stop_price == 20025.0  # 20000 + 25
         assert result.order_id == 43
 
@@ -386,14 +386,14 @@ class TestBracketPrices:
         b._contract = SimpleNamespace(symbol=MNQ_SYMBOL, secType="FUT")
         b._ib = _mock_ib_with_fill(44)
 
-        # Line at 20001.33 → target 20011.33 → rounds to 20011.25
+        # Line at 20001.33 → target 20009.33 → rounds to 20009.25
         #                   → stop 19976.33 → rounds to 19976.25
         with patch.object(
             type(b), "is_connected", new_callable=lambda: property(lambda self: True)
         ):
             result = b.submit_bracket("up", 20002.0, 20001.33, "VWAP")
 
-        assert result.target_price == 20011.25
+        assert result.target_price == 20009.25
         assert result.stop_price == 19976.25
 
     def test_sets_position_tracking_state(self):
@@ -489,7 +489,7 @@ class TestEntryLimitOrder:
         # Entry limit order is the first placeOrder call
         entry_order = mock_ib.placeOrder.call_args_list[0][0][1]
         assert entry_order.action == "BUY"
-        assert entry_order.lmtPrice == 20005.0  # 20000 + 5
+        assert entry_order.lmtPrice == 20004.0  # 20000 + 4
 
     def test_sell_entry_limit_below_line(self):
         """SELL entry limit is line - buffer (min price willing to accept)."""
@@ -509,7 +509,7 @@ class TestEntryLimitOrder:
 
         entry_order = mock_ib.placeOrder.call_args_list[0][0][1]
         assert entry_order.action == "SELL"
-        assert entry_order.lmtPrice == 19995.0  # 20000 - 5
+        assert entry_order.lmtPrice == 19996.0  # 20000 - 4
 
     def test_entry_limit_tick_rounding(self):
         """Entry limit price rounds to MNQ tick size (0.25)."""
@@ -522,14 +522,14 @@ class TestEntryLimitOrder:
         mock_ib.client.getReqId.return_value = 52
         b._ib = mock_ib
 
-        # Line at 20001.33 + 5.0 = 20006.33 → rounds to 20006.25
+        # Line at 20001.33 + 4.0 = 20005.33 → rounds to 20005.25
         with patch.object(
             type(b), "is_connected", new_callable=lambda: property(lambda self: True)
         ):
             b.submit_bracket("up", 20002.0, 20001.33, "VWAP")
 
         entry_order = mock_ib.placeOrder.call_args_list[0][0][1]
-        assert entry_order.lmtPrice == 20006.25
+        assert entry_order.lmtPrice == 20005.25
 
     def test_cancelled_entry_clears_position_state(self):
         """Cancelled parent limit order clears _position_open."""
