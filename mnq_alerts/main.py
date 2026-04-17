@@ -518,7 +518,17 @@ def run() -> None:
                         f"{e}\n{traceback.format_exc()}"
                     )
                 # Bot checks its own zones (1pt entry) and submits orders.
-                bot_call("on_tick", price)
+                ib_range = (ibh - ibl) if (ibh is not None and ibl is not None) else None
+                sm_pct = (session_move / price * 100) if session_move is not None and price > 0 else 0.0
+                bot_call(
+                    "on_tick",
+                    price,
+                    ib_range=ib_range,
+                    tick_rate=tick_rate,
+                    session_move_pct=sm_pct,
+                    range_30m=range_30m,
+                    now_et=trade_time,
+                )
             else:
                 try:
                     alert_manager.advance_state(price)

@@ -21,9 +21,6 @@ import time
 from dataclasses import dataclass
 
 from config import (
-    BOT_ENTRY_LIMIT_BUFFER,
-    BOT_STOP_POINTS,
-    BOT_TARGET_POINTS,
     BOT_TIMEOUT_SECS,
     DAILY_LOSS_LIMIT_USD,
     IBKR_ACCOUNT,
@@ -107,8 +104,8 @@ class IBKRBroker:
         self._pending_direction: str | None = None  # "up" or "down"
         self._pending_line_price: float | None = None
         self._pending_entry_fill: float | None = None  # actual fill price
-        self._pending_target_pts: float = BOT_TARGET_POINTS
-        self._pending_stop_pts: float = BOT_STOP_POINTS
+        self._pending_target_pts: float = 10.0
+        self._pending_stop_pts: float = 25.0
         self._pending_level_name: str | None = None
         self._pending_target_price: float | None = None
         self._pending_stop_price: float | None = None
@@ -490,8 +487,8 @@ class IBKRBroker:
             self._pending_level_name = row["level_name"]
             self._pending_target_price = target_price_live
             self._pending_stop_price = stop_price_live
-            self._pending_target_pts = BOT_TARGET_POINTS
-            self._pending_stop_pts = BOT_STOP_POINTS
+            self._pending_target_pts = abs(target_price_live - row["line_price"])
+            self._pending_stop_pts = abs(stop_price_live - row["line_price"])
             self._pending_db_trade_id = row["id"]
             self._pending_parent_order_id = parent_order_id
             self._pending_score = row["score"]
@@ -1217,6 +1214,9 @@ class IBKRBroker:
         score: int | None = None,
         trend_60m: float | None = None,
         entry_count: int | None = None,
+        target_pts: float = 10.0,
+        stop_pts: float = 25.0,
+        entry_limit_buffer: float = 5.0,
     ) -> TradeResult:
         """Submit a bracket order: market entry + limit target + stop loss.
 
@@ -1306,7 +1306,8 @@ class IBKRBroker:
             self._pending_entry_count = entry_count
 
             result, parent, parent_trade = self._submit_bracket_locked(
-                direction, current_price, line_price, level_name, qty
+                direction, current_price, line_price, level_name, qty,
+                target_pts, stop_pts, entry_limit_buffer,
             )
 
         # Lock is released. If submission failed, return immediately.
@@ -1360,6 +1361,9 @@ class IBKRBroker:
         line_price: float,
         level_name: str,
         qty: int,
+        target_pts: float = 10.0,
+        stop_pts: float = 25.0,
+        entry_limit_buffer: float = 5.0,
     ) -> tuple["TradeResult", "Order | None", "object | None"]:
         """Internal bracket submission (must hold self._lock).
 
@@ -1371,11 +1375,11 @@ class IBKRBroker:
 
         # Target and stop prices based on direction.
         if direction == "up":
-            target_price = line_price + BOT_TARGET_POINTS
-            stop_price = line_price - BOT_STOP_POINTS
+            target_price = line_price + target_pts
+            stop_price = line_price - stop_pts
         else:
-            target_price = line_price - BOT_TARGET_POINTS
-            stop_price = line_price + BOT_STOP_POINTS
+            target_price = line_price - target_pts
+            stop_price = line_price + stop_pts
 
         # Round to MNQ tick size (0.25).
         target_price = round(target_price * 4) / 4
@@ -1395,17 +1399,14 @@ class IBKRBroker:
 
         try:
             # Build bracket: limit entry + limit take-profit + stop loss.
-            # Entry uses a limit order at line_price ± BOT_ENTRY_LIMIT_BUFFER
-            # to cap slippage. A market order during a volatile spike can
-            # fill far from the line (observed 2026-04-16: 13 pts slippage,
-            # filled past the target for a guaranteed loss).
+            # Entry limit caps slippage at entry_limit_buffer pts from line.
             #
             # Must pre-assign orderId to the parent so children can reference
             # it via parentId BEFORE placeOrder is called.
             if direction == "up":
-                entry_limit = line_price + BOT_ENTRY_LIMIT_BUFFER
+                entry_limit = line_price + entry_limit_buffer
             else:
-                entry_limit = line_price - BOT_ENTRY_LIMIT_BUFFER
+                entry_limit = line_price - entry_limit_buffer
             entry_limit = round(entry_limit * 4) / 4  # MNQ tick size
             parent = LimitOrder(action, qty, entry_limit)
             parent.orderId = self._ib.client.getReqId()
@@ -1437,8 +1438,8 @@ class IBKRBroker:
             self._position_open = True
             self._pending_direction = direction
             self._pending_line_price = line_price
-            self._pending_target_pts = BOT_TARGET_POINTS
-            self._pending_stop_pts = BOT_STOP_POINTS
+            self._pending_target_pts = target_pts
+            self._pending_stop_pts = stop_pts
             self._pending_level_name = level_name
             self._pending_target_price = target_price
             self._pending_stop_price = stop_price
@@ -1448,8 +1449,8 @@ class IBKRBroker:
 
             print(
                 f"[broker] {action} {qty} MNQ @ limit {entry_limit:.2f} | "
-                f"target {target_price:.2f} (+{BOT_TARGET_POINTS}) | "
-                f"stop {stop_price:.2f} (-{BOT_STOP_POINTS}) | "
+                f"target {target_price:.2f} (+{target_pts}) | "
+                f"stop {stop_price:.2f} (-{stop_pts}) | "
                 f"level {level_name} @ {line_price:.2f} | "
                 f"order {parent_id} | {self.daily_stats}"
             )

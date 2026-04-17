@@ -5,11 +5,12 @@ Manages its own zone tracking (1pt entry, 15pt exit) and delegates
 order execution to IBKRBroker. Main.py calls into this module without
 needing to know bot internals.
 
-Bot parameters (validated via walk-forward in walk_forward.py):
+Bot parameters (walk-forward validated 2026-04-17 over 319 days):
   - Entry: price within 1 pt of level (vs 7 pt for human alerts)
   - Exit zone reset: 15 pts away (vs 20 pt for human alerts)
-  - Target: +12 pts, Stop: -25 pts, 15-min per-trade timeout
-  - Risk: $150/day loss limit, 4 consecutive loss stop, 1 position at a time
+  - Target/Stop: IB-range-normalized (7%/20% of IB range)
+  - Risk: $150/day loss limit, 3 consecutive loss stop, 1 position at a time
+  - Scoring: bot-specific weights (retrained on 1-pt entry outcomes)
 """
 
 from __future__ import annotations
@@ -26,9 +27,12 @@ from config import (
     BOT_EXIT_THRESHOLD,
     BOT_MAX_ENTRIES_PER_LEVEL,
     BOT_MIN_SCORE,
+    BOT_TARGET_IB_RATIO,
+    BOT_STOP_IB_RATIO,
+    BOT_TARGET_MIN_PTS,
+    BOT_STOP_MIN_PTS,
     BOT_TREND_LOOKBACK_MIN,
-    BOT_TREND_PENALTY,
-    BOT_TREND_THRESHOLD,
+    BOT_VOL_FILTER_MIN_RANGE_PCT,
 )
 
 _ET = pytz.timezone("America/New_York")
@@ -70,52 +74,86 @@ class BotZone:
 
 
 def bot_entry_score(
-    level: str, direction: str, entry_count: int, trend_60m: float = 0.0
+    level: str,
+    direction: str,
+    entry_count: int,
+    trend_60m: float = 0.0,
+    tick_rate: float = 0.0,
+    session_move_pct: float = 0.0,
+    range_30m_pct: float | None = None,
+    now_et: datetime.time | None = None,
 ) -> int:
-    """Score a bot zone entry. Higher = better quality.
+    """Score a bot zone entry using bot-specific weights.
 
-    Walk-forward validated over 318 days (VWAP-corrected):
-    - Score >= 1 filter: 4.0x P&L/DD
-    - Adding 60m trend penalty + max 5/level: 8.1x P&L/DD
+    Weights derived from factor analysis on 319 days of 1-pt bot entry
+    outcomes (bot_pct_backtest.py, 2026-04-17). These differ from the
+    human alert weights — e.g., power hour is -2 for bot entries (67.3%
+    WR, worst time bucket) but +2 for human alerts.
     """
     score = 0
-    # Level quality
+
+    # Level quality (bot: IBL +1, FIB_LO +1, others 0 or -1)
     if level == "IBL":
-        score += 2
-    elif level in ("FIB_EXT_LO_1.272", "FIB_EXT_HI_1.272"):
+        score += 1
+    elif level == "FIB_EXT_LO_1.272":
         score += 1
     elif level == "IBH":
         score -= 1
+    # VWAP, FIB_HI: 0
 
-    # Direction + level combos
-    if level == "IBL" and direction == "up":
+    # Direction × level combos
+    combo = (level, direction)
+    if combo == ("FIB_EXT_LO_1.272", "down"):
+        score += 2
+    elif combo == ("IBL", "down"):
         score += 1
-    if level == "IBH" and direction == "down":
+    elif combo == ("FIB_EXT_HI_1.272", "up"):
         score += 1
-    if level == "IBH" and direction == "up":
+    elif combo == ("IBH", "up"):
+        score -= 1
+    elif combo == ("FIB_EXT_HI_1.272", "down"):
+        score -= 1
+    elif combo == ("VWAP", "down"):
         score -= 1
 
-    # Entry count (retest)
-    if entry_count == 1:
-        score -= 2
-    elif entry_count >= 3:
+    # Entry count (test #)
+    if entry_count == 2:
         score += 1
+    elif entry_count == 3:
+        score -= 1
 
     # Time of day
-    now_et = datetime.datetime.now(_ET)
-    hour = now_et.hour + now_et.minute / 60.0
-    if hour >= 15.0:  # power hour
-        score += 2
-    elif 13.0 <= hour < 15.0:  # afternoon
+    if now_et is not None:
+        mins = now_et.hour * 60 + now_et.minute
+        if 10 * 60 + 31 <= mins < 11 * 60 + 30:
+            score += 1  # post-IB: 73.3% (best bucket for bot)
+        elif mins >= 15 * 60:
+            score -= 2  # power hour: 67.3% (worst for bot)
+
+    # Tick rate
+    if tick_rate < 500:
+        score -= 2
+    elif tick_rate < 1000:
+        score -= 1
+    elif tick_rate >= 2500:
         score += 1
-    elif 10.5 <= hour < 11.5:  # post-IB weakness
+
+    # Session move (%-based)
+    if -0.09 < session_move_pct <= -0.04:
+        score += 1
+    elif -0.05 < session_move_pct < 0:
+        score += 1
+    elif session_move_pct > 0.20:
         score -= 1
 
-    # Counter-trend penalty: don't buy into a falling market or sell into a rising one.
-    if direction == "up" and trend_60m < -BOT_TREND_THRESHOLD:
-        score += BOT_TREND_PENALTY
-    elif direction == "down" and trend_60m > BOT_TREND_THRESHOLD:
-        score += BOT_TREND_PENALTY
+    # 30-min range volatility (%-based)
+    if range_30m_pct is not None:
+        if range_30m_pct < 0.15:
+            score -= 4  # dead market: 61.8% WR
+        elif range_30m_pct > 0.50:
+            score += 1
+        elif 0.35 <= range_30m_pct <= 0.50:
+            score -= 1
 
     return score
 
@@ -205,7 +243,15 @@ class BotTrader:
             if name not in self._zones:
                 self._zones[name] = BotZone(name, price)
 
-    def on_tick(self, price: float) -> None:
+    def on_tick(
+        self,
+        price: float,
+        ib_range: float | None = None,
+        tick_rate: float = 0.0,
+        session_move_pct: float = 0.0,
+        range_30m: float | None = None,
+        now_et: datetime.time | None = None,
+    ) -> None:
         """Check all bot zones and submit orders on fresh entries."""
         if not self._broker.is_connected:
             return
@@ -216,11 +262,30 @@ class BotTrader:
         cutoff = now - datetime.timedelta(minutes=BOT_TREND_LOOKBACK_MIN)
         while self._price_window and self._price_window[0][0] < cutoff:
             self._price_window.popleft()
-        # Compute trend: price change over the window.
         if len(self._price_window) >= 2:
             trend_60m = self._price_window[-1][1] - self._price_window[0][1]
         else:
             trend_60m = 0.0
+
+        # Compute IB-range-normalized T/S.
+        if ib_range and ib_range > 0:
+            target_pts = max(
+                round(ib_range * BOT_TARGET_IB_RATIO * 4) / 4,
+                BOT_TARGET_MIN_PTS,
+            )
+            stop_pts = max(
+                round(ib_range * BOT_STOP_IB_RATIO * 4) / 4,
+                BOT_STOP_MIN_PTS,
+            )
+        else:
+            target_pts = BOT_TARGET_MIN_PTS
+            stop_pts = BOT_STOP_MIN_PTS
+        entry_limit_buffer = round(target_pts / 2 * 4) / 4
+
+        # 30m range as % of price (for scoring).
+        range_30m_pct = (
+            range_30m / price * 100 if range_30m is not None and price > 0 else None
+        )
 
         for bz in self._zones.values():
             if bz.update(price):
@@ -235,7 +300,27 @@ class BotTrader:
                     )
                     continue
 
-                score = bot_entry_score(bz.name, direction, bz.entry_count, trend_60m)
+                # Volatility filter: skip dead markets.
+                if (
+                    range_30m_pct is not None
+                    and range_30m_pct < BOT_VOL_FILTER_MIN_RANGE_PCT * 100
+                ):
+                    print(
+                        f"[bot] Skipped {bz.name} (low vol: 30m range "
+                        f"{range_30m_pct:.3f}% < {BOT_VOL_FILTER_MIN_RANGE_PCT*100:.2f}%)"
+                    )
+                    continue
+
+                score = bot_entry_score(
+                    bz.name,
+                    direction,
+                    bz.entry_count,
+                    trend_60m,
+                    tick_rate=tick_rate,
+                    session_move_pct=session_move_pct,
+                    range_30m_pct=range_30m_pct,
+                    now_et=now_et,
+                )
                 if score < BOT_MIN_SCORE:
                     print(
                         f"[bot] Skipped {bz.name} (score {score} < {BOT_MIN_SCORE}) | "
@@ -252,6 +337,9 @@ class BotTrader:
                         score=score,
                         trend_60m=trend_60m,
                         entry_count=bz.entry_count,
+                        target_pts=target_pts,
+                        stop_pts=stop_pts,
+                        entry_limit_buffer=entry_limit_buffer,
                     )
                     if result.success:
                         self._level_trade_counts[bz.name] = level_trades + 1

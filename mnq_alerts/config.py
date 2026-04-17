@@ -58,16 +58,16 @@ BOT_ENTRY_THRESHOLD = (
     1.0  # Bot trades when price is within 1 pt of level (vs 7 for human)
 )
 BOT_EXIT_THRESHOLD = 15.0  # Bot zone reset distance (vs 20 for human)
-BOT_TARGET_POINTS = 10.0  # Take profit distance from line price (walk-forward validated 2026-04-16)
-BOT_STOP_POINTS = 25.0  # Stop loss distance from line price
-BOT_ENTRY_LIMIT_BUFFER = 5.0  # Max pts from line for entry limit order (half of target)
-BOT_MIN_SCORE = 1  # Minimum entry score to trade (walk-forward validated)
+BOT_TARGET_IB_RATIO = 0.07  # Target = 7% of IB range (walk-forward validated 2026-04-17)
+BOT_STOP_IB_RATIO = 0.20  # Stop = 20% of IB range
+BOT_TARGET_MIN_PTS = 4.0  # Minimum target in points (for narrow IB days)
+BOT_STOP_MIN_PTS = 8.0  # Minimum stop in points
+BOT_MIN_SCORE = -1  # Minimum entry score (bot-specific weights, walk-forward validated)
 BOT_TREND_LOOKBACK_MIN = 60  # Minutes to look back for trend calculation
-BOT_TREND_THRESHOLD = 50.0  # Points — counter-trend above this penalizes score
-BOT_TREND_PENALTY = -3  # Score penalty for counter-trend entries
-BOT_MAX_ENTRIES_PER_LEVEL = 5  # Max trades per level per day (prevents chasing)
+BOT_VOL_FILTER_MIN_RANGE_PCT = 0.0015  # Skip entry when 30m range < 0.15% of price
+BOT_MAX_ENTRIES_PER_LEVEL = 3  # Max trades per level per day (prevents chasing)
 DAILY_LOSS_LIMIT_USD = 150.0  # Stop trading for the day after losing this much
-MAX_CONSECUTIVE_LOSSES = 5  # Stop trading for the day after N straight losses
+MAX_CONSECUTIVE_LOSSES = 3  # Stop trading for the day after N straight losses
 BOT_TIMEOUT_SECS = (
     15 * 60
 )  # Close position if neither target nor stop hits in this window
