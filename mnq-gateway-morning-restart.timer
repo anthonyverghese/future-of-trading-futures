@@ -1,8 +1,8 @@
 [Unit]
-Description=Morning IB Gateway restart — Mon-Fri 07:30 ET, 2h before market open
+Description=Daily IB Gateway restart — 07:30 ET, clears overnight login failures
 
 [Timer]
-OnCalendar=Mon..Fri *-*-* 07:30:00 America/New_York
+OnCalendar=*-*-* 07:30:00 America/New_York
 Persistent=true
 
 [Install]
