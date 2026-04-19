@@ -129,6 +129,13 @@ def main() -> None:
     seen_lines: set[str] = set()  # dedupe across polls (since windows overlap)
 
     while True:
+        # Skip weekends (Sat/Sun). Login failures during IBKR's weekend
+        # maintenance are expected and the Monday morning restart fixes them.
+        weekday = time.localtime().tm_wday  # 0=Mon ... 6=Sun
+        if weekday >= 5:  # Saturday or Sunday
+            time.sleep(POLL_INTERVAL_SECS)
+            continue
+
         if not container_running():
             # Container is stopped — clear failure count and seen lines, wait
             if failure_count > 0 or seen_lines:
