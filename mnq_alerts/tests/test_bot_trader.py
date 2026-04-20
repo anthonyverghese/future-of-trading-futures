@@ -52,7 +52,7 @@ with patch.dict(os.environ, {"IBKR_TRADING_ENABLED": "true"}):
     importlib.reload(_bt_mod)
 
 from bot_trader import BotZone, bot_entry_score
-from config import BOT_ENTRY_THRESHOLD, BOT_EXIT_THRESHOLD
+from config import BOT_ENTRY_THRESHOLD
 
 _ET = pytz.timezone("America/New_York")
 
@@ -92,60 +92,37 @@ class TestBotZone:
         result = bz.update(20000.5)  # still within zone
         assert result is False  # no fresh entry
 
-    def test_exit_when_beyond_exit_threshold(self):
+    def test_zone_stays_active_regardless_of_price(self):
+        """Zone does NOT exit on price distance — only on reset()."""
         bz = BotZone("IBL", 20000.0)
         bz.update(20000.0)  # enter
         assert bz.in_zone is True
-        bz.update(20000.0 + BOT_EXIT_THRESHOLD + 1)  # drift away
-        assert bz.in_zone is False
+        bz.update(20100.0)  # price moved 100 pts away
+        assert bz.in_zone is True  # still active — no exit threshold
 
-    def test_reentry_after_exit(self):
+    def test_reset_allows_reentry(self):
         bz = BotZone("IBL", 20000.0)
         bz.update(20000.0)  # first entry
         assert bz.entry_count == 1
-        bz.update(20000.0 + BOT_EXIT_THRESHOLD + 1)  # exit
+        bz.reset()  # trade closed
         assert bz.in_zone is False
         result = bz.update(20000.0)  # re-enter
         assert result is True
         assert bz.entry_count == 2
 
-    def test_entry_count_increments(self):
+    def test_entry_count_increments_across_resets(self):
         bz = BotZone("IBH", 20000.0)
         for i in range(3):
             bz.update(20000.0)  # enter
-            bz.update(20000.0 + BOT_EXIT_THRESHOLD + 1)  # exit
+            bz.reset()  # trade closed
         assert bz.entry_count == 3
 
     def test_update_returns_false_after_entry(self):
         bz = BotZone("IBL", 20000.0)
         assert bz.update(20000.0) is True
-        # Subsequent updates within zone return False
+        # Subsequent updates while zone active return False
         assert bz.update(20000.0) is False
         assert bz.update(20000.5) is False
-
-    def test_drifting_zone_uses_current_price_for_exit(self):
-        """BotZone with drifts=True uses self.price (not self._ref_price) for exit."""
-        bz = BotZone("VWAP", 20000.0, drifts=True)
-        bz.update(20000.0)  # enter — _ref_price locked at 20000
-        assert bz.in_zone is True
-
-        # Simulate VWAP drifting toward the current price
-        bz.price = 20010.0  # VWAP moved up
-
-        # Price at 20026 is >15 pts from drifted VWAP (20010) → should exit
-        # But only 26 pts from original _ref_price (20000) — if using _ref_price
-        # it would also exit. Let's pick a value that distinguishes the two:
-        # 20010 + 15.5 = 20025.5 → >15 from drifted (20010) → exits
-        # 20000 + 15.5 = only 25.5 from ref → also exits
-        # Instead test: price near ref but far from drifted VWAP
-        bz2 = BotZone("VWAP", 20000.0, drifts=True)
-        bz2.update(20000.0)  # enter, ref=20000
-        bz2.price = 20020.0  # VWAP drifted to 20020
-
-        # current_price=20000 → 20 pts from drifted VWAP (20020) > 15 → exit
-        # But only 0 pts from ref (20000) → would NOT exit with ref
-        bz2.update(20000.0)
-        assert bz2.in_zone is False  # exited because drifts=True uses self.price
 
 
 # ---------------------------------------------------------------------------

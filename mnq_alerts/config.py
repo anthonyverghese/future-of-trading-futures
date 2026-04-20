@@ -57,14 +57,13 @@ IBKR_ACCOUNT = os.getenv(
 BOT_ENTRY_THRESHOLD = (
     1.0  # Bot trades when price is within 1 pt of level (vs 7 for human)
 )
-BOT_EXIT_THRESHOLD = 15.0  # Bot zone reset distance (vs 20 for human)
-BOT_TARGET_POINTS = 8.0  # Fixed target (walk-forward OOS validated 2026-04-17)
-BOT_STOP_POINTS = 25.0  # Fixed stop
+BOT_TARGET_POINTS = 8.0  # Fixed target (walk-forward OOS validated 2026-04-19)
+BOT_STOP_POINTS = 20.0  # Fixed stop
 BOT_INCLUDE_VWAP = True  # Include VWAP level in bot trading
-BOT_MIN_SCORE = -1  # Minimum entry score (bot-specific weights, walk-forward validated)
+BOT_MIN_SCORE = 0  # Minimum entry score (walk-forward validated)
 BOT_TREND_LOOKBACK_MIN = 60  # Minutes to look back for trend calculation
 BOT_VOL_FILTER_MIN_RANGE_PCT = 0.0015  # Skip entry when 30m range < 0.15% of price
-BOT_MAX_ENTRIES_PER_LEVEL = 3  # Max trades per level per day (prevents chasing)
+BOT_MAX_ENTRIES_PER_LEVEL = 12  # Max trades per level per day
 DAILY_LOSS_LIMIT_USD = 150.0  # Stop trading for the day after losing this much
 MAX_CONSECUTIVE_LOSSES = 3  # Stop trading for the day after N straight losses
 BOT_TIMEOUT_SECS = (

@@ -24,7 +24,6 @@ from broker import IBKRBroker
 from cache import load_bot_daily_level_counts
 from config import (
     BOT_ENTRY_THRESHOLD,
-    BOT_EXIT_THRESHOLD,
     BOT_INCLUDE_VWAP,
     BOT_MAX_ENTRIES_PER_LEVEL,
     BOT_MIN_SCORE,
@@ -38,11 +37,13 @@ _ET = pytz.timezone("America/New_York")
 
 
 class BotZone:
-    """Zone tracker for a single level using bot thresholds (1pt/15pt).
+    """Zone tracker for a single level.
 
-    For drifting levels (VWAP), exit check uses the current level price
-    instead of the locked entry reference, preventing rapid re-triggering
-    as VWAP drifts toward price after a zone exit.
+    Zone lifecycle = trade lifecycle:
+    - Zone enters when price within BOT_ENTRY_THRESHOLD (1 pt) of level
+    - Zone stays active while a trade is open on this level
+    - Zone resets when the trade closes (via reset() call from BotTrader)
+    - No fixed exit threshold — the zone only resets on trade close
     """
 
     def __init__(self, name: str, price: float, drifts: bool = False) -> None:
@@ -51,25 +52,20 @@ class BotZone:
         self.in_zone = False
         self.entry_count = 0
         self.drifts = drifts  # True for VWAP
-        self._ref_price: float | None = None
 
     def update(self, current_price: float) -> bool:
         """Returns True on fresh zone entry (price within BOT_ENTRY_THRESHOLD)."""
         if self.in_zone:
-            exit_ref = self.price if self.drifts else self._ref_price
-            if (
-                exit_ref is not None
-                and abs(current_price - exit_ref) > BOT_EXIT_THRESHOLD
-            ):
-                self.in_zone = False
-                self._ref_price = None
-            return False
+            return False  # zone stays active until reset() is called
         if abs(current_price - self.price) <= BOT_ENTRY_THRESHOLD:
             self.in_zone = True
-            self._ref_price = self.price
             self.entry_count += 1
             return True
         return False
+
+    def reset(self) -> None:
+        """Reset zone after trade closes. Allows re-entry on next approach."""
+        self.in_zone = False
 
 
 def bot_entry_score(
@@ -170,6 +166,8 @@ class BotTrader:
         self._price_window: deque[tuple[datetime.datetime, float]] = deque()
         # Per-level daily trade count (reset each day via reset_daily_state).
         self._level_trade_counts: dict[str, int] = {}
+        # Track which level has the active trade (for zone reset on close).
+        self._active_trade_level: str | None = None
 
     def connect(self) -> bool:
         """Connect to IBKR. Returns True on success."""
@@ -253,6 +251,16 @@ class BotTrader:
         if not self._broker.is_connected:
             return
 
+        # If a trade just closed, reset the zone on that level.
+        if (
+            self._active_trade_level is not None
+            and not self._broker._position_open
+        ):
+            lv = self._active_trade_level
+            if lv in self._zones:
+                self._zones[lv].reset()
+            self._active_trade_level = None
+
         # Update 60-min price window for trend calculation.
         now = datetime.datetime.now(_ET)
         self._price_window.append((now, price))
@@ -330,8 +338,10 @@ class BotTrader:
                     )
                     if result.success:
                         self._level_trade_counts[bz.name] = level_trades + 1
+                        self._active_trade_level = bz.name
                     else:
                         print(f"[broker] Trade failed: {result.error}")
+                        bz.reset()  # zone entered but trade failed — reset
                 else:
                     print(f"[broker] Skipped {bz.name}: {reason}")
 
