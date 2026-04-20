@@ -360,6 +360,7 @@ class BotTrader:
         self._zones.clear()
         self._price_window.clear()
         self._level_trade_counts.clear()
+        self._active_trade_level = None
 
     def eod_flatten(self) -> None:
         """Flatten open position a few minutes before market close.
@@ -368,6 +369,10 @@ class BotTrader:
         Blocks any new trades after this is called.
         """
         self._broker.eod_flatten()
+        # Clear zone state since no more trades will happen today.
+        if self._active_trade_level and self._active_trade_level in self._zones:
+            self._zones[self._active_trade_level].reset()
+        self._active_trade_level = None
 
     def close_session(self) -> None:
         """Tracked close with failsafe verification, then disconnect."""
