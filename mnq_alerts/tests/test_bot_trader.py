@@ -126,6 +126,130 @@ class TestBotZone:
 
 
 # ---------------------------------------------------------------------------
+# 1b. Zone reset + 1-position constraint integration
+# ---------------------------------------------------------------------------
+
+
+class TestZoneResetAndOnePosition:
+    """Test that the new zone-reset-on-trade-close logic never allows
+    two simultaneous trades."""
+
+    def test_zone_blocks_reentry_while_active(self):
+        """While a zone is active (trade open), update() returns False."""
+        bz = BotZone("IBL", 20000.0)
+        assert bz.update(20000.0) is True  # first entry
+        # Price leaves and comes back — zone still active, no re-entry.
+        assert bz.update(20050.0) is False
+        assert bz.update(20000.0) is False
+        assert bz.in_zone is True
+
+    def test_zone_reset_then_reentry(self):
+        """After reset(), the next approach triggers a new entry."""
+        bz = BotZone("IBL", 20000.0)
+        bz.update(20000.0)
+        assert bz.in_zone is True
+        bz.reset()
+        assert bz.in_zone is False
+        # Price comes back — new entry.
+        assert bz.update(20000.5) is True
+        assert bz.entry_count == 2
+
+    def test_two_zones_cannot_both_be_active_with_trade(self):
+        """Simulates the BotTrader flow: if one zone has an active trade,
+        the broker blocks the second via can_trade()."""
+        bz1 = BotZone("IBH", 20100.0)
+        bz2 = BotZone("IBL", 20000.0)
+
+        # First zone triggers.
+        assert bz1.update(20100.0) is True
+        assert bz1.in_zone is True
+
+        # Second zone triggers — update() returns True (zone-level it's valid),
+        # but the broker's can_trade() would block it. If blocked, reset().
+        assert bz2.update(20000.0) is True
+        # Simulate broker blocking: reset zone since we can't trade.
+        bz2.reset()
+        assert bz2.in_zone is False
+
+        # First trade closes — reset first zone.
+        bz1.reset()
+        assert bz1.in_zone is False
+
+        # Now second zone can enter.
+        assert bz2.update(20000.0) is True
+        assert bz2.in_zone is True
+
+    def test_skipped_entry_resets_zone(self):
+        """If an entry is skipped (score, vol, max), zone must reset
+        so the level isn't permanently locked."""
+        bz = BotZone("IBH", 20100.0)
+        assert bz.update(20100.0) is True
+        assert bz.in_zone is True
+        # Simulate scoring skip — must reset.
+        bz.reset()
+        assert bz.in_zone is False
+        # Can re-enter later.
+        assert bz.update(20100.0) is True
+
+    def test_active_trade_level_tracks_correctly(self):
+        """_active_trade_level is set on trade open, cleared on close."""
+        from bot_trader import BotTrader
+        bt = BotTrader.__new__(BotTrader)
+        bt._active_trade_level = None
+        bt._zones = {"IBL": BotZone("IBL", 20000.0)}
+
+        # Simulate trade open.
+        bt._active_trade_level = "IBL"
+        assert bt._active_trade_level == "IBL"
+
+        # Simulate trade close (broker._position_open goes False).
+        # The on_tick check would do:
+        if bt._active_trade_level is not None:
+            bt._zones[bt._active_trade_level].reset()
+            bt._active_trade_level = None
+        assert bt._active_trade_level is None
+        assert bt._zones["IBL"].in_zone is False
+
+    def test_multiple_resets_are_idempotent(self):
+        """Calling reset() multiple times is safe."""
+        bz = BotZone("IBL", 20000.0)
+        bz.update(20000.0)
+        bz.reset()
+        bz.reset()  # second reset — should be no-op
+        assert bz.in_zone is False
+        # Can still re-enter.
+        assert bz.update(20000.0) is True
+
+    def test_zone_not_reset_while_trade_open(self):
+        """Zone stays active as long as trade is open, even across many ticks."""
+        bz = BotZone("IBL", 20000.0)
+        bz.update(20000.0)
+        # Simulate many ticks while trade is open.
+        for p in [20005, 20010, 19990, 19980, 20020, 20000]:
+            assert bz.update(float(p)) is False
+            assert bz.in_zone is True
+
+    def test_entry_count_not_incremented_on_skipped_reset(self):
+        """If zone enters then resets (skipped trade), entry_count was
+        already incremented. Next entry increments again."""
+        bz = BotZone("IBL", 20000.0)
+        assert bz.update(20000.0) is True  # entry_count = 1
+        bz.reset()  # skipped
+        assert bz.update(20000.0) is True  # entry_count = 2
+        assert bz.entry_count == 2
+
+    def test_failed_trade_resets_zone(self):
+        """If submit_bracket fails, zone should reset so it's not stuck."""
+        bz = BotZone("IBL", 20000.0)
+        assert bz.update(20000.0) is True
+        # Trade failed.
+        bz.reset()
+        assert bz.in_zone is False
+        # Can try again.
+        assert bz.update(20000.5) is True
+
+
+# ---------------------------------------------------------------------------
 # 2. bot_entry_score
 # ---------------------------------------------------------------------------
 

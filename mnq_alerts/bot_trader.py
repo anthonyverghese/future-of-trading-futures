@@ -293,6 +293,7 @@ class BotTrader:
                         f"[bot] Skipped {bz.name} (max {BOT_MAX_ENTRIES_PER_LEVEL} "
                         f"trades/level/day reached)"
                     )
+                    bz.reset()
                     continue
 
                 # Volatility filter: skip dead markets.
@@ -304,6 +305,7 @@ class BotTrader:
                         f"[bot] Skipped {bz.name} (low vol: 30m range "
                         f"{range_30m_pct:.3f}% < {BOT_VOL_FILTER_MIN_RANGE_PCT*100:.2f}%)"
                     )
+                    bz.reset()
                     continue
 
                 score = bot_entry_score(
@@ -321,6 +323,7 @@ class BotTrader:
                         f"[bot] Skipped {bz.name} (score {score} < {BOT_MIN_SCORE}) | "
                         f"test #{bz.entry_count}, {direction}, trend={trend_60m:+.0f}"
                     )
+                    bz.reset()
                     continue
                 allowed, reason = self._broker.can_trade()
                 if allowed:
@@ -344,6 +347,7 @@ class BotTrader:
                         bz.reset()  # zone entered but trade failed — reset
                 else:
                     print(f"[broker] Skipped {bz.name}: {reason}")
+                    bz.reset()  # zone entered but can't trade — reset
 
     def advance_zones(self, price: float) -> None:
         """Update zone state without trading (used during replay)."""
