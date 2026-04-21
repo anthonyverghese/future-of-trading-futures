@@ -65,7 +65,6 @@ BOT_TREND_LOOKBACK_MIN = 60  # Minutes to look back for trend calculation
 BOT_VOL_FILTER_MIN_RANGE_PCT = 0.0015  # Skip entry when 30m range < 0.15% of price
 BOT_MAX_ENTRIES_PER_LEVEL = 12  # Max trades per level per day
 DAILY_LOSS_LIMIT_USD = 150.0  # Stop trading for the day after losing this much
-MAX_CONSECUTIVE_LOSSES = 3  # Stop trading for the day after N straight losses
 BOT_TIMEOUT_SECS = (
     15 * 60
 )  # Close position if neither target nor stop hits in this window

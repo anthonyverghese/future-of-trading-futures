@@ -126,22 +126,13 @@ class TestCanTrade:
         assert "Daily loss limit" in reason
         assert b._stopped_for_day is True
 
-    def test_blocks_at_consecutive_loss_limit(self):
-        from config import MAX_CONSECUTIVE_LOSSES
-
-        b = _make_broker(consecutive_losses=MAX_CONSECUTIVE_LOSSES)
-        allowed, reason = b.can_trade()
-        assert allowed is False
-        assert "consecutive losses" in reason
-        assert b._stopped_for_day is True
-
-    def test_allows_just_under_daily_limit(self):
-        b = _make_broker(daily_pnl_usd=-149.99)
+    def test_allows_despite_consecutive_losses(self):
+        b = _make_broker(consecutive_losses=5)
         allowed, _ = b.can_trade()
         assert allowed is True
 
-    def test_allows_at_two_consecutive_losses(self):
-        b = _make_broker(consecutive_losses=2)
+    def test_allows_just_under_daily_limit(self):
+        b = _make_broker(daily_pnl_usd=-149.99)
         allowed, _ = b.can_trade()
         assert allowed is True
 
@@ -888,7 +879,7 @@ class TestRestoreDailyState:
         assert "loss limit" in b._stop_reason.lower()
 
     @patch("broker.load_bot_daily_risk_state")
-    def test_sets_stopped_when_consec_losses_hit(self, mock_load):
+    def test_not_stopped_by_consec_losses_alone(self, mock_load):
         mock_load.return_value = {
             "pnl_usd": -80.0,
             "trades": 5,
@@ -898,8 +889,7 @@ class TestRestoreDailyState:
         }
         b = _make_broker()
         b._restore_daily_state()
-        assert b._stopped_for_day is True
-        assert "consecutive losses" in b._stop_reason.lower()
+        assert b._stopped_for_day is False
 
     @patch("broker.load_bot_daily_risk_state")
     def test_noop_when_no_trades(self, mock_load):

@@ -28,7 +28,6 @@ from config import (
     IBKR_HOST,
     IBKR_PORT,
     IBKR_TRADING_ENABLED,
-    MAX_CONSECUTIVE_LOSSES,
 )
 
 # ib_insync is only imported when trading is enabled to avoid hard dependency.
@@ -177,7 +176,7 @@ class IBKRBroker:
             )
             print(
                 f"[broker] Risk limits: ${DAILY_LOSS_LIMIT_USD:.0f}/day, "
-                f"{MAX_CONSECUTIVE_LOSSES} consec losses, 1 position at a time"
+                f"1 position at a time"
             )
             return True
         except Exception as exc:
@@ -324,12 +323,6 @@ class IBKRBroker:
                 self._stop_reason = (
                     f"Daily loss limit hit (restored: "
                     f"${self._daily_pnl_usd:+.2f})"
-                )
-            elif self._consecutive_losses >= MAX_CONSECUTIVE_LOSSES:
-                self._stopped_for_day = True
-                self._stop_reason = (
-                    f"{self._consecutive_losses} consecutive losses "
-                    f"(restored)"
                 )
         print(
             f"[broker] Restored daily state: {self._trades_today} trades "
@@ -698,13 +691,6 @@ class IBKRBroker:
             self._stop_reason = (
                 f"Daily loss limit hit (${self._daily_pnl_usd:+.2f} "
                 f">= -${DAILY_LOSS_LIMIT_USD:.0f})"
-            )
-            return False, self._stop_reason
-        if self._consecutive_losses >= MAX_CONSECUTIVE_LOSSES:
-            self._stopped_for_day = True
-            self._stop_reason = (
-                f"{self._consecutive_losses} consecutive losses "
-                f"(limit: {MAX_CONSECUTIVE_LOSSES})"
             )
             return False, self._stop_reason
         return True, ""
