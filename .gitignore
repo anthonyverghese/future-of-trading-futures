@@ -7,3 +7,4 @@ mnq_alerts/.session_cache.db
 mnq_alerts/alert_model.joblib
 mnq_alerts/data_cache/
 mnq_alerts/streak_outcomes.json
+mnq_alerts/backtest/.array_cache/
