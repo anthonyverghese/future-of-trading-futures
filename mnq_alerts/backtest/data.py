@@ -47,8 +47,22 @@ def load_all_days() -> tuple[list[datetime.date], dict[datetime.date, DayCache]]
     return valid, caches
 
 
+_ARRAY_CACHE_DIR = os.path.join(os.path.dirname(__file__), ".array_cache")
+
+
 def precompute_arrays(dc: DayCache) -> DayArrays:
-    """Precompute all scoring factor arrays for one day. O(n) per factor."""
+    """Precompute all scoring factor arrays for one day. O(n) per factor.
+
+    Caches to disk so subsequent runs skip the expensive computation.
+    """
+    os.makedirs(_ARRAY_CACHE_DIR, exist_ok=True)
+    cache_path = os.path.join(_ARRAY_CACHE_DIR, f"{dc.date}.npz")
+    if os.path.exists(cache_path):
+        try:
+            d = np.load(cache_path)
+            return DayArrays(d["tr"], d["r30"], d["asp"], d["td"], d["em"], d["sm"])
+        except Exception:
+            pass  # recompute if cache is corrupt
     fp = dc.full_prices
     ft = dc.full_ts_ns
     nf = len(fp)
@@ -94,5 +108,11 @@ def precompute_arrays(dc: DayCache) -> DayArrays:
     sm = np.zeros(nf, dtype=np.float64)
     for i in range(s, nf):
         sm[i] = float(fp[i]) - fp0
+
+    # Cache to disk.
+    try:
+        np.savez_compressed(cache_path, tr=tr, r30=r30, asp=asp, td=td, em=em, sm=sm)
+    except Exception:
+        pass
 
     return DayArrays(tr, r30, asp, td, em, sm)

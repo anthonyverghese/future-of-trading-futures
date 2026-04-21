@@ -124,7 +124,7 @@ def save_result(result: BacktestResult) -> str:
     """Save a result to disk. Returns the file path."""
     RESULTS_DIR.mkdir(exist_ok=True)
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    desc = result.params.description.replace(" ", "_")[:40] or "backtest"
+    desc = result.params.description.replace(" ", "_").replace("/", "-").replace(">=", "gte")[:40] or "backtest"
     filename = f"{desc}_{ts}.json"
     path = RESULTS_DIR / filename
 

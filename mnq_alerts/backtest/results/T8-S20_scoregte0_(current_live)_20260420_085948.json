@@ -1,0 +1,63 @@
+{
+  "params": {
+    "zone_type": "BotZoneTradeReset",
+    "entry_threshold": 1.0,
+    "exit_threshold": "trade_reset",
+    "target": "T8",
+    "per_level_targets": null,
+    "stop_pts": 20.0,
+    "min_score": 0,
+    "weights_type": "trained",
+    "weights_values": null,
+    "scoring_factors": [
+      "level",
+      "combo",
+      "time",
+      "tick_sweet",
+      "tick_low",
+      "entry_count",
+      "session_move",
+      "streak",
+      "vol",
+      "approach",
+      "density"
+    ],
+    "include_vwap": true,
+    "vol_filter_pct": null,
+    "max_per_level": 12,
+    "timeout_secs": 900,
+    "time_exit_secs": null,
+    "trailing_stop": null,
+    "daily_loss": 150.0,
+    "max_consec": 3,
+    "data_days": 319,
+    "data_range": "2025-01-02 to 2026-04-15",
+    "train_days": 60,
+    "step_days": 20,
+    "description": "T8/S20 score>=0 (current live)"
+  },
+  "timestamp": "2026-04-20 08:59",
+  "in_sample": {
+    "trades": 4481,
+    "trades_per_day": 14.047021943573668,
+    "wr": 75.9,
+    "pnl_per_day": 12.3,
+    "max_dd": 829.0
+  },
+  "oos": {
+    "days": 259,
+    "trades": 3510,
+    "trades_per_day": 13.552123552123552,
+    "wr": 76.1,
+    "pnl_per_day": 11.0,
+    "max_dd": 1045.0
+  },
+  "recent": {
+    "days": 60,
+    "trades": 894,
+    "trades_per_day": 14.9,
+    "wr": 74.8,
+    "pnl_per_day": 7.6,
+    "max_dd": 798.0
+  }
+}

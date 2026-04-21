@@ -73,6 +73,33 @@ class BotZoneTradeReset:
         self.in_zone = False
 
 
+class HumanZoneTradeReset:
+    """Human alert zone: 7-pt entry, resets when outcome is decided.
+
+    Like HumanZone but no fixed 20-pt exit threshold. Instead, the zone
+    resets when the alert outcome is decided (correct/incorrect/inconclusive).
+    This allows faster re-alerting on the same level.
+    """
+
+    def __init__(self, price: float, drifts: bool = False):
+        self.price = price
+        self.drifts = drifts
+        self.in_zone = False
+        self.entry_count = 0
+
+    def update(self, current_price: float) -> bool:
+        if self.in_zone:
+            return False
+        if abs(current_price - self.price) <= 7.0:
+            self.in_zone = True
+            self.entry_count += 1
+            return True
+        return False
+
+    def reset(self):
+        self.in_zone = False
+
+
 class BotZoneFixedExit:
     """Bot zone: 1-pt entry, fixed exit threshold.
 
