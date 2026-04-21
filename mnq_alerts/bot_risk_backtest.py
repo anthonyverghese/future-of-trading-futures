@@ -153,7 +153,6 @@ def evaluate_bot_trade(
 def simulate_risk_day(
     dc: DayCache,
     daily_loss_limit_usd: float | None = None,
-    max_consecutive_losses: int | None = None,
     target_pts: float = TARGET_PTS,
     stop_pts: float = STOP_PTS,
     window_secs: int = WINDOW_SECS,
@@ -202,7 +201,6 @@ def simulate_risk_day(
     trades: list[TradeResult] = []
     position_exit_ns: int = 0  # when current position closes (0 = no position)
     daily_pnl_usd = 0.0
-    consec_losses = 0
     stopped_for_day = False
 
     for global_idx, level_name, entry_count, ref_price in all_entries:
@@ -262,19 +260,8 @@ def simulate_risk_day(
         trades.append(trade)
         daily_pnl_usd += pnl_usd
 
-        # Track consecutive losses for risk limit.
-        if outcome == "loss":
-            consec_losses += 1
-        else:
-            consec_losses = 0
-
-        # Check daily loss limits.
+        # Check daily loss limit.
         if daily_loss_limit_usd is not None and daily_pnl_usd <= -daily_loss_limit_usd:
-            stopped_for_day = True
-        if (
-            max_consecutive_losses is not None
-            and consec_losses >= max_consecutive_losses
-        ):
             stopped_for_day = True
 
     return trades
@@ -284,7 +271,6 @@ def run_risk_backtest(
     valid_days: list[datetime.date],
     day_caches: dict[datetime.date, DayCache],
     daily_loss_limit_usd: float | None = None,
-    max_consecutive_losses: int | None = None,
     target_pts: float = TARGET_PTS,
     stop_pts: float = STOP_PTS,
 ) -> list[TradeResult]:
@@ -297,7 +283,6 @@ def run_risk_backtest(
         day_trades = simulate_risk_day(
             dc,
             daily_loss_limit_usd=daily_loss_limit_usd,
-            max_consecutive_losses=max_consecutive_losses,
             target_pts=target_pts,
             stop_pts=stop_pts,
         )
@@ -539,7 +524,7 @@ def main() -> None:
     )
 
     for limit in consec_limits:
-        trades = run_risk_backtest(valid_days, day_caches, max_consecutive_losses=limit)
+        trades = run_risk_backtest(valid_days, day_caches)
         decided = [t for t in trades if t.outcome in ("win", "loss")]
         wins = sum(1 for t in decided if t.outcome == "win")
         losses_count = len(decided) - wins
@@ -594,7 +579,6 @@ def main() -> None:
             valid_days,
             day_caches,
             daily_loss_limit_usd=dollar_limit,
-            max_consecutive_losses=consec_limit,
         )
         decided = [t for t in trades if t.outcome in ("win", "loss")]
         wins = sum(1 for t in decided if t.outcome == "win")
@@ -632,9 +616,8 @@ def main() -> None:
         valid_days,
         day_caches,
         daily_loss_limit_usd=150,
-        max_consecutive_losses=3,
     )
-    print_risk_summary(trades_safe, "$150 limit + 3 consec stop", num_days)
+    print_risk_summary(trades_safe, "$150 daily limit", num_days)
 
     # Show worst 10 days.
     daily_pnl: dict[datetime.date, float] = {}
@@ -699,7 +682,6 @@ def main() -> None:
             valid_days,
             day_caches,
             daily_loss_limit_usd=150,
-            max_consecutive_losses=3,
             target_pts=target,
             stop_pts=stop,
         )

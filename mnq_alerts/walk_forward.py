@@ -87,13 +87,11 @@ TS_GRID = [
     (12.0, 25.0),
     (16.0, 25.0),
 ]
-RISK_GRID: list[tuple[float | None, int | None]] = [
-    (100.0, 3),
-    (150.0, 3),
-    (150.0, 4),
-    (200.0, 3),
-    (200.0, 4),
-    (None, None),
+RISK_GRID: list[float | None] = [
+    100.0,
+    150.0,
+    200.0,
+    None,
 ]
 
 
@@ -239,7 +237,6 @@ def replay_with_risk(
     entries_by_date: dict[datetime.date, DayEntries],
     outcomes_by_date: dict[datetime.date, DayOutcomes],
     daily_loss_usd: float | None,
-    max_consec_losses: int | None,
 ) -> list[Trade]:
     trades: list[Trade] = []
     for date in days:
@@ -252,7 +249,6 @@ def replay_with_risk(
         eod_ns = _eod_cutoff_ns(date)
         position_exit_ns = 0
         daily_pnl = 0.0
-        consec = 0
         stopped = False
         for i in range(len(de.global_idx)):
             if stopped:
@@ -268,15 +264,7 @@ def replay_with_risk(
                 Trade(date=date, level=de.level[i], outcome=outcome, pnl_usd=pnl)
             )
             daily_pnl += pnl
-            # Match live broker: consecutive-loss counter is by $ sign, not label.
-            # A timeout that closed at a loss should count toward the consec cap.
-            if pnl < 0:
-                consec += 1
-            else:
-                consec = 0
             if daily_loss_usd is not None and daily_pnl <= -daily_loss_usd:
-                stopped = True
-            if max_consec_losses is not None and consec >= max_consec_losses:
                 stopped = True
     return trades
 
@@ -318,7 +306,7 @@ class WFWindow:
     train_days: int
     test_days: int
     chosen_ts: tuple[float, float]
-    chosen_risk: tuple[float | None, int | None]
+    chosen_risk: float | None
     train_pnl_per_day: float
     test_trades: list[Trade]
 
@@ -337,13 +325,13 @@ def walk_forward_bot(
         if not test_days:
             break
         best_ts = None
-        best_risk: tuple[float | None, int | None] = (None, None)
+        best_risk: float | None = None
         best_per_day = -float("inf")
         for ts in TS_GRID:
             obd = outcomes_by_ts[ts]
             for risk in RISK_GRID:
                 trades = replay_with_risk(
-                    train_days, entries_by_date, obd, risk[0], risk[1]
+                    train_days, entries_by_date, obd, risk
                 )
                 if not trades:
                     continue
@@ -359,8 +347,7 @@ def walk_forward_bot(
             test_days,
             entries_by_date,
             outcomes_by_ts[best_ts],
-            best_risk[0],
-            best_risk[1],
+            best_risk,
         )
         windows.append(
             WFWindow(
@@ -650,8 +637,8 @@ def main() -> None:
         per_day = total / w.test_days
         ts_str = f"{int(w.chosen_ts[0])}/{int(w.chosen_ts[1])}"
         r_str = (
-            f"${int(w.chosen_risk[0])}/{w.chosen_risk[1]}"
-            if w.chosen_risk[0]
+            f"${int(w.chosen_risk)}"
+            if w.chosen_risk
             else "unrestr"
         )
         ts_counts[w.chosen_ts] = ts_counts.get(w.chosen_ts, 0) + 1
@@ -706,7 +693,7 @@ def main() -> None:
         ]
         fixed_all.extend(
             replay_with_risk(
-                test_days, entries_by_date, outcomes_by_ts[(12.0, 25.0)], 150.0, 3
+                test_days, entries_by_date, outcomes_by_ts[(12.0, 25.0)], 150.0
             )
         )
     total_f, wf_w, wf_l, wr_f, dd_f = trade_stats(fixed_all)
@@ -727,7 +714,7 @@ def main() -> None:
 
     # Also test each fixed T/S config on full OOS period (no walk-forward)
     print(
-        f"\n  FIXED CONFIG GRID (fixed T/S, $150/3, full OOS period, no retraining):",
+        f"\n  FIXED CONFIG GRID (fixed T/S, $150 limit, full OOS period, no retraining):",
         flush=True,
     )
     print(
@@ -742,7 +729,7 @@ def main() -> None:
         ]
     ]
     for ts in TS_GRID:
-        tr = replay_with_risk(oos_days, entries_by_date, outcomes_by_ts[ts], 150.0, 3)
+        tr = replay_with_risk(oos_days, entries_by_date, outcomes_by_ts[ts], 150.0)
         t_total, t_w, t_l, t_wr, t_dd = trade_stats(tr)
         marker = " <- current" if ts == (12.0, 25.0) else ""
         print(

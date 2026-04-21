@@ -35,18 +35,13 @@ TS_CONFIGS = [
     (12.0, 25.0),  # for reference vs current
 ]
 
-RISK_CONFIGS: list[tuple[float | None, int | None]] = [
-    (75.0, 3),
-    (100.0, 3),
-    (100.0, 4),
-    (150.0, 3),
-    (150.0, 4),
-    (150.0, 5),
-    (200.0, 3),
-    (200.0, 4),
-    (200.0, 5),
-    (300.0, 4),
-    (None, None),  # unrestricted
+RISK_CONFIGS: list[float | None] = [
+    75.0,
+    100.0,
+    150.0,
+    200.0,
+    300.0,
+    None,  # unrestricted
 ]
 
 
@@ -116,13 +111,13 @@ def main() -> None:
         obd = outcomes_by_ts[ts]
         results = []
         for risk in RISK_CONFIGS:
-            tr = replay_with_risk(oos_days, entries_by_date, obd, risk[0], risk[1])
+            tr = replay_with_risk(oos_days, entries_by_date, obd, risk)
             if not tr:
                 continue
             total, wins, losses, wr, dd = trade_stats(tr)
             per_day = total / len(oos_days)
             to_n, to_total, to_avg = timeout_stats(tr)
-            label = f"${int(risk[0])}/{risk[1]}" if risk[0] is not None else "unrestr"
+            label = f"${int(risk)}" if risk is not None else "unrestr"
             results.append(
                 (
                     label,

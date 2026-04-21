@@ -215,7 +215,7 @@ def main():
                 include_vwap=True, vol_filter_pct=None,
                 max_per_level=mpl, timeout_secs=900,
                 time_exit_secs=None, trailing_stop=None,
-                daily_loss=150.0, max_consec=3,
+                daily_loss=150.0, max_consec=None,
                 data_days=N, data_range=f"{valid_days[0]} to {valid_days[-1]}",
                 train_days=INITIAL_TRAIN_DAYS, step_days=STEP_DAYS,
                 description=label,

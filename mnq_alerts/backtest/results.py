@@ -50,7 +50,7 @@ class BacktestParams:
 
     # Risk limits
     daily_loss: float
-    max_consec: int
+    max_consec: int | None
 
     # Data
     data_days: int
@@ -227,7 +227,8 @@ def display_result_detail(result_dict: dict) -> None:
     print(f"  Timeout: {p.get('timeout_secs', 900)}s, Time exit: {p.get('time_exit_secs', 'none')}, Trailing: {p.get('trailing_stop', 'none')}")
     print(f"  Data: {p['data_days']} days ({p['data_range']})")
     print(f"  Walk-forward: {p['train_days']}d train, {p['step_days']}d step")
-    print(f"  Risk: ${p['daily_loss']}/day, {p['max_consec']} consec")
+    consec_str = str(p['max_consec']) if p.get('max_consec') else "none"
+    print(f"  Risk: ${p['daily_loss']}/day, consec limit: {consec_str}")
     print(f"  Run: {result_dict['timestamp']}")
 
     for stage, label in [("in_sample", "In-sample"), ("oos", "OOS"), ("recent", "Recent")]:
