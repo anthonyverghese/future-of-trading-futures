@@ -132,7 +132,7 @@ class TestCanTrade:
         assert allowed is True
 
     def test_allows_just_under_daily_limit(self):
-        b = _make_broker(daily_pnl_usd=-149.99)
+        b = _make_broker(daily_pnl_usd=-99.99)
         allowed, _ = b.can_trade()
         assert allowed is True
 

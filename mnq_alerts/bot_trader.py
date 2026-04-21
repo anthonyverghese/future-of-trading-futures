@@ -9,7 +9,7 @@ Bot parameters (walk-forward validated 2026-04-17 over 319 days):
   - Entry: price within 1 pt of level (vs 7 pt for human alerts)
   - Exit zone reset: 15 pts away (vs 20 pt for human alerts)
   - Target/Stop: IB-range-normalized (7%/20% of IB range)
-  - Risk: $150/day loss limit, 3 consecutive loss stop, 1 position at a time
+  - Risk: $100/day loss limit, 1 position at a time, 13:30-14:00 ET suppressed
   - Scoring: bot-specific weights (retrained on 1-pt entry outcomes)
 """
 
@@ -32,6 +32,7 @@ from config import (
     BOT_TREND_LOOKBACK_MIN,
     BOT_VOL_FILTER_MIN_RANGE_PCT,
 )
+from scoring import SUPPRESSED_WINDOWS
 
 _ET = pytz.timezone("America/New_York")
 
@@ -285,6 +286,17 @@ class BotTrader:
         for bz in self._zones.values():
             if bz.update(price):
                 direction = "up" if price > bz.price else "down"
+
+                # Suppress entries during weak time windows.
+                if now_et is not None:
+                    et_mins = now_et.hour * 60 + now_et.minute
+                    if any(ws <= et_mins < we for ws, we in SUPPRESSED_WINDOWS):
+                        print(
+                            f"[bot] Skipped {bz.name} (suppressed time window "
+                            f"{now_et.strftime('%H:%M')} ET)"
+                        )
+                        bz.reset()
+                        continue
 
                 # Per-level daily trade cap.
                 level_trades = self._level_trade_counts.get(bz.name, 0)

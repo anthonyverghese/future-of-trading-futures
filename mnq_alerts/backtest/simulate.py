@@ -36,6 +36,9 @@ class TradeRecord:
     outcome: str    # win, loss, timeout
     pnl_usd: float
     factors: EntryFactors
+    entry_idx: int = 0   # global tick index of entry
+    exit_idx: int = 0    # global tick index of exit
+    entry_ns: int = 0    # entry timestamp (ns since epoch)
 
 
 def simulate_day(
@@ -144,6 +147,7 @@ def simulate_day(
             ec[name] += 1
             trades.append(TradeRecord(
                 dc.date, name, d, ec[name], out, pnl_usd, fac,
+                entry_idx=gi, exit_idx=exit_idx, entry_ns=ens,
             ))
 
             # Update state.
