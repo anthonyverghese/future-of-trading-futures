@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from config import ALERT_EXIT_POINTS, ALERT_THRESHOLD_POINTS
-from scoring import MIN_SCORE, composite_score, score_tier
+from scoring import MIN_SCORE, SUPPRESSED_WINDOWS, composite_score, score_tier
 
 _ZONE_STATE_FILE = os.path.join(os.path.dirname(__file__), ".zone_state.json")
 
@@ -286,6 +286,17 @@ class AlertManager:
                 # Track every zone entry for streak computation.
                 all_zone_entries.append((level.name, level.price, direction))
 
+                # Suppress alerts during weak time windows.
+                if now_et is not None:
+                    et_mins = now_et.hour * 60 + now_et.minute
+                    if any(ws <= et_mins < we for ws, we in SUPPRESSED_WINDOWS):
+                        print(
+                            f"[ALERT suppressed — time window] {level.name} zone entered "
+                            f"(test #{level.entry_count}), price {current_price:.2f} | "
+                            f"{now_et.strftime('%H:%M')} ET in suppressed window"
+                        )
+                        continue
+
                 score, bd = composite_score(
                     level.name,
                     level.entry_count,
@@ -295,7 +306,6 @@ class AlertManager:
                     direction=direction,
                     consecutive_wins=consecutive_wins,
                     consecutive_losses=consecutive_losses,
-                    range_30m=range_30m,
                     breakdown=True,
                 )
 

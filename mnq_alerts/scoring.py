@@ -1,5 +1,5 @@
 """
-scoring.py — Composite alert quality scoring (214-day backtest, train/test validated).
+scoring.py — Composite alert quality scoring (319-day backtest validated).
 
 Separated from alert_manager.py so scoring logic can be tested, tuned, and
 backtested independently of the zone state machine and notification plumbing.
@@ -13,7 +13,10 @@ Components (each contributes an integer score):
   Session move:    sweet spots (10-20 green, -20 to -10 red) +2,
                    strongly red +1, near-zero green -3, rest 0
   Streak:          2+ wins +3, 2+ losses -2
-  Volatility:      30m range > 75 pts → -2 (walk-forward validated over 318 days)
+
+Filters:
+  MIN_SCORE >= 5 (82.5% WR at 5.6/day)
+  13:30-14:00 ET suppressed (74.3% WR — worst half-hour)
 """
 
 from __future__ import annotations
@@ -22,8 +25,8 @@ import datetime
 from dataclasses import dataclass
 
 # Minimum composite score to fire a notification.
-# Score ≥4 → ~84% win rate at ~9/day (214-day backtest, train/test validated).
-MIN_SCORE = 4
+# Score ≥5 → ~82.5% win rate at ~5.6/day (319-day backtest).
+MIN_SCORE = 5
 
 # Signal strength tiers shown in notifications (214-day backtest, train/test validated).
 TIER_LABELS: dict[int, tuple[str, str]] = {
@@ -45,7 +48,6 @@ class ScoreBreakdown:
     test: int = 0
     move: int = 0
     streak: int = 0
-    vol: int = 0
 
     @property
     def total(self) -> int:
@@ -57,20 +59,20 @@ class ScoreBreakdown:
             + self.test
             + self.move
             + self.streak
-            + self.vol
         )
 
     def __str__(self) -> str:
         parts = []
-        for name in ("level", "combo", "time", "tick", "test", "move", "streak", "vol"):
+        for name in ("level", "combo", "time", "tick", "test", "move", "streak"):
             val = getattr(self, name)
             if val != 0:
                 parts.append(f"{name}={val:+d}")
         return ", ".join(parts) if parts else "all zero"
 
 
-VOL_30M_THRESHOLD = 75.0  # 30-minute range above this = volatile
-VOL_PENALTY = -2  # score penalty when volatile
+# Time windows where alerts are suppressed (ET minutes-of-day).
+# 13:30-14:00 ET showed 74.3% WR (worst half-hour, 319-day backtest).
+SUPPRESSED_WINDOWS = [(810, 840)]  # (start_min, end_min) — 13*60+30=810, 14*60=840
 
 
 def composite_score(
@@ -82,7 +84,6 @@ def composite_score(
     direction: str | None = None,
     consecutive_wins: int = 0,
     consecutive_losses: int = 0,
-    range_30m: float | None = None,
     breakdown: bool = False,
 ) -> int | tuple[int, ScoreBreakdown]:
     """Compute composite alert quality score (318-day walk-forward validated).
@@ -168,11 +169,6 @@ def composite_score(
         bd.streak = 3
     elif consecutive_losses >= 2:
         bd.streak = -2
-
-    # Volatility: penalize alerts during high 30-min price range.
-    # 318-day walk-forward: +1.5% WR (81.7% → 83.2%) at 3.4 alerts/day.
-    if range_30m is not None and range_30m > VOL_30M_THRESHOLD:
-        bd.vol = VOL_PENALTY
 
     if breakdown:
         return bd.total, bd

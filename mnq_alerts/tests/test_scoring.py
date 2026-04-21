@@ -319,7 +319,7 @@ class TestScoreTier:
 
 class TestConstants:
     def test_min_score(self):
-        assert MIN_SCORE == 4
+        assert MIN_SCORE == 5
 
     def test_tier_labels_keys(self):
         assert set(TIER_LABELS.keys()) == {4, 5, 7}
@@ -402,14 +402,14 @@ class TestCombined:
         assert score == 0
 
     def test_boundary_exactly_min_score(self):
-        """Construct a scenario that scores exactly MIN_SCORE (4)."""
+        """Construct a scenario that scores exactly MIN_SCORE (5)."""
         score = composite_score(
             level_name="FIB_EXT_HI_1.272",  # +2
             direction="up",  # +2
-            entry_count=4,  # 0
+            entry_count=2,  # +1
             now_et=datetime.time(12, 0),  # 0
             tick_rate=None,  # 0
             session_move_pts=None,  # 0
         )
-        assert score == 4
+        assert score == 5
         assert score == MIN_SCORE
