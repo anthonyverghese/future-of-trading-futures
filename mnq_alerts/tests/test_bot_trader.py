@@ -92,13 +92,26 @@ class TestBotZone:
         result = bz.update(20000.5)  # still within zone
         assert result is False  # no fresh entry
 
-    def test_zone_stays_active_regardless_of_price(self):
-        """Zone does NOT exit on price distance — only on reset()."""
+    def test_zone_auto_exits_when_price_leaves_threshold(self):
+        """Zone auto-exits when price moves beyond entry threshold."""
         bz = BotZone("IBL", 20000.0)
         bz.update(20000.0)  # enter
         assert bz.in_zone is True
-        bz.update(20100.0)  # price moved 100 pts away
-        assert bz.in_zone is True  # still active — no exit threshold
+        bz.update(20000.5)  # still within 1pt
+        assert bz.in_zone is True
+        bz.update(20002.0)  # moved beyond 1pt threshold
+        assert bz.in_zone is False  # auto-exited
+
+    def test_zone_rearms_after_auto_exit(self):
+        """After auto-exit, zone fires again on next approach."""
+        bz = BotZone("IBL", 20000.0)
+        bz.update(20000.0)  # enter
+        assert bz.entry_count == 1
+        bz.update(20005.0)  # leave — auto-exit
+        assert bz.in_zone is False
+        result = bz.update(20000.5)  # approach again
+        assert result is True
+        assert bz.entry_count == 2
 
     def test_reset_allows_reentry(self):
         bz = BotZone("IBL", 20000.0)
@@ -109,6 +122,57 @@ class TestBotZone:
         result = bz.update(20000.0)  # re-enter
         assert result is True
         assert bz.entry_count == 2
+
+    def test_auto_exit_at_exact_boundary(self):
+        """Price at exactly BOT_ENTRY_THRESHOLD stays in zone."""
+        from config import BOT_ENTRY_THRESHOLD
+        bz = BotZone("IBL", 20000.0)
+        bz.update(20000.0)  # enter
+        assert bz.in_zone is True
+        # At exactly 1pt — still in zone (<=, not <)
+        bz.update(20000.0 + BOT_ENTRY_THRESHOLD)
+        assert bz.in_zone is True
+        # One tick beyond — auto-exit
+        bz.update(20000.0 + BOT_ENTRY_THRESHOLD + 0.25)
+        assert bz.in_zone is False
+
+    def test_auto_exit_below_line(self):
+        """Auto-exit works when price drops below the line too."""
+        bz = BotZone("IBL", 20000.0)
+        bz.update(19999.5)  # enter from below (within 1pt)
+        assert bz.in_zone is True
+        bz.update(19998.5)  # move beyond 1pt below
+        assert bz.in_zone is False
+
+    def test_rapid_reset_reenter_cycle(self):
+        """Simulates the blocked-trade scenario: enter, reset, re-enter
+        while price stays in zone, then price leaves."""
+        bz = BotZone("IBL", 20000.0)
+        # Tick 1: enter (trade blocked)
+        assert bz.update(20000.0) is True
+        bz.reset()  # trade was blocked
+        # Tick 2: still in zone, re-enter (trade blocked again)
+        assert bz.update(20000.25) is True
+        bz.reset()
+        # Tick 3: price leaves zone
+        bz.update(20005.0)
+        assert bz.in_zone is False
+        # Tick 4: price comes back — should fire
+        assert bz.update(20000.0) is True
+        assert bz.entry_count == 3
+
+    def test_vwap_zone_with_drifting_price(self):
+        """VWAP zone auto-exit uses current price, which drifts."""
+        bz = BotZone("VWAP", 20000.0, drifts=True)
+        bz.update(20000.5)  # enter
+        assert bz.in_zone is True
+        # VWAP drifts — update the price
+        bz.price = 20010.0
+        # Now 20000.5 is 9.5 pts from new VWAP — auto-exit
+        bz.update(20000.5)
+        assert bz.in_zone is False
+        # Approach new VWAP
+        assert bz.update(20010.0) is True
 
     def test_entry_count_increments_across_resets(self):
         bz = BotZone("IBH", 20000.0)
@@ -134,14 +198,22 @@ class TestZoneResetAndOnePosition:
     """Test that the new zone-reset-on-trade-close logic never allows
     two simultaneous trades."""
 
-    def test_zone_blocks_reentry_while_active(self):
-        """While a zone is active (trade open), update() returns False."""
+    def test_zone_blocks_reentry_while_in_threshold(self):
+        """While price stays within threshold, update() returns False."""
         bz = BotZone("IBL", 20000.0)
         assert bz.update(20000.0) is True  # first entry
-        # Price leaves and comes back — zone still active, no re-entry.
-        assert bz.update(20050.0) is False
-        assert bz.update(20000.0) is False
+        # Price stays within 1pt — zone still active, no re-entry.
+        assert bz.update(20000.5) is False
         assert bz.in_zone is True
+
+    def test_zone_reentry_after_price_leaves(self):
+        """After price leaves threshold, next approach re-enters."""
+        bz = BotZone("IBL", 20000.0)
+        assert bz.update(20000.0) is True  # first entry
+        bz.update(20050.0)  # price leaves — auto-exit
+        assert bz.in_zone is False
+        assert bz.update(20000.0) is True  # re-entry
+        assert bz.entry_count == 2
 
     def test_zone_reset_then_reentry(self):
         """After reset(), the next approach triggers a new entry."""
@@ -220,14 +292,16 @@ class TestZoneResetAndOnePosition:
         # Can still re-enter.
         assert bz.update(20000.0) is True
 
-    def test_zone_not_reset_while_trade_open(self):
-        """Zone stays active as long as trade is open, even across many ticks."""
+    def test_zone_auto_exits_during_trade(self):
+        """Zone auto-exits when price leaves threshold, even if trade is open.
+        The trade is protected by its bracket (target/stop), not the zone."""
         bz = BotZone("IBL", 20000.0)
         bz.update(20000.0)
-        # Simulate many ticks while trade is open.
-        for p in [20005, 20010, 19990, 19980, 20020, 20000]:
-            assert bz.update(float(p)) is False
-            assert bz.in_zone is True
+        assert bz.in_zone is True
+        bz.update(20005.0)  # price leaves threshold
+        assert bz.in_zone is False  # zone auto-exited
+        # Zone re-fires on next approach
+        assert bz.update(20000.0) is True
 
     def test_entry_count_not_incremented_on_skipped_reset(self):
         """If zone enters then resets (skipped trade), entry_count was

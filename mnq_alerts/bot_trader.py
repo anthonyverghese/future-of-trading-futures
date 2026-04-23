@@ -55,9 +55,20 @@ class BotZone:
         self.drifts = drifts  # True for VWAP
 
     def update(self, current_price: float) -> bool:
-        """Returns True on fresh zone entry (price within BOT_ENTRY_THRESHOLD)."""
+        """Returns True on fresh zone entry (price within BOT_ENTRY_THRESHOLD).
+
+        If in_zone and no trade was opened (reset was called but price
+        stayed within threshold), the zone will re-fire on the next tick.
+        If in_zone and price moves beyond threshold, zone auto-exits so
+        it doesn't get stuck permanently when a trade is blocked.
+        """
         if self.in_zone:
-            return False  # zone stays active until reset() is called
+            # Auto-exit if price moved beyond entry threshold.
+            # Without this, a zone that entered while a trade was blocked
+            # would stay in_zone=True forever (no trade close to reset it).
+            if abs(current_price - self.price) > BOT_ENTRY_THRESHOLD:
+                self.in_zone = False
+            return False
         if abs(current_price - self.price) <= BOT_ENTRY_THRESHOLD:
             self.in_zone = True
             self.entry_count += 1
@@ -286,6 +297,11 @@ class BotTrader:
         for bz in self._zones.values():
             if bz.update(price):
                 direction = "up" if price > bz.price else "down"
+                print(
+                    f"[bot] Zone entry: {bz.name} test #{bz.entry_count} "
+                    f"{direction} @ {price:.2f} (line {bz.price:.2f}, "
+                    f"dist={abs(price - bz.price):.2f})"
+                )
 
                 # Suppress entries during weak time windows.
                 if now_et is not None:

@@ -953,8 +953,8 @@ class TestHeartbeat:
 
 
 class TestEntryCancelRace:
-    def test_fill_during_cancel_returns_success(self):
-        """If entry fills during cancel, submit_bracket returns success=True."""
+    def test_fill_during_cancel_with_children_alive(self):
+        """If entry fills during cancel and children are alive, returns success."""
         b = _make_broker()
         b._connected = True
         b._contract = SimpleNamespace(symbol=MNQ_SYMBOL, secType="FUT")
@@ -962,15 +962,18 @@ class TestEntryCancelRace:
         mock_ib = MagicMock()
         mock_ib.isConnected.return_value = True
         mock_ib.client.getReqId.return_value = 50
-        # Entry stays "Submitted" during fill-check loop (not filled in 1s)
         unfilled = SimpleNamespace(
             orderStatus=SimpleNamespace(status="Submitted")
         )
         mock_ib.placeOrder.return_value = unfilled
-        mock_ib.openTrades.return_value = []
 
-        # Simulate fill sneaking in during the 0.5s post-cancel sleep:
-        # set _pending_entry_fill after cancelOrder is called.
+        # Children still alive (target order with matching parentId)
+        child = SimpleNamespace(
+            contract=SimpleNamespace(symbol=MNQ_SYMBOL),
+            order=SimpleNamespace(orderId=51, parentId=50, orderRef="bot-50-target"),
+        )
+        mock_ib.openTrades.return_value = [child]
+
         def fake_sleep(secs):
             b._pending_entry_fill = 20001.50
 
@@ -985,6 +988,37 @@ class TestEntryCancelRace:
         assert result.success is True
         assert result.entry_price == 20001.50
         assert b._position_open is True
+
+    def test_fill_during_cancel_without_children_flattens(self):
+        """If entry fills during cancel but children are cancelled, flattens."""
+        b = _make_broker()
+        b._connected = True
+        b._contract = SimpleNamespace(symbol=MNQ_SYMBOL, secType="FUT")
+
+        mock_ib = MagicMock()
+        mock_ib.isConnected.return_value = True
+        mock_ib.client.getReqId.return_value = 50
+        unfilled = SimpleNamespace(
+            orderStatus=SimpleNamespace(status="Submitted")
+        )
+        mock_ib.placeOrder.return_value = unfilled
+        # No children alive — bracket was cancelled
+        mock_ib.openTrades.return_value = []
+        mock_ib.positions.return_value = []
+
+        def fake_sleep(secs):
+            b._pending_entry_fill = 20001.50
+
+        mock_ib.sleep.side_effect = fake_sleep
+        b._ib = mock_ib
+
+        with patch.object(
+            type(b), "is_connected", new_callable=lambda: property(lambda self: True)
+        ):
+            result = b.submit_bracket("up", 20002.0, 20000.0, "IBL")
+
+        assert result.success is False
+        assert "bracket lost" in result.error
 
     def test_true_cancel_clears_state_and_sweeps_children(self):
         """If entry truly cancelled, position state cleared and children swept."""
@@ -1019,6 +1053,39 @@ class TestEntryCancelRace:
         assert b._position_open is False
         # Should have cancelled the stale child
         mock_ib.cancelOrder.assert_any_call(stale_child.order)
+
+
+    def test_fill_during_cancel_children_check_error_flattens(self):
+        """If children check throws, default to flatten (safe path)."""
+        b = _make_broker()
+        b._connected = True
+        b._contract = SimpleNamespace(symbol=MNQ_SYMBOL, secType="FUT")
+
+        mock_ib = MagicMock()
+        mock_ib.isConnected.return_value = True
+        mock_ib.client.getReqId.return_value = 50
+        unfilled = SimpleNamespace(
+            orderStatus=SimpleNamespace(status="Submitted")
+        )
+        mock_ib.placeOrder.return_value = unfilled
+        # openTrades raises an exception
+        mock_ib.openTrades.side_effect = Exception("connection lost")
+        mock_ib.positions.return_value = []
+
+        def fake_sleep(secs):
+            b._pending_entry_fill = 20001.50
+
+        mock_ib.sleep.side_effect = fake_sleep
+        b._ib = mock_ib
+
+        with patch.object(
+            type(b), "is_connected", new_callable=lambda: property(lambda self: True)
+        ):
+            result = b.submit_bracket("up", 20002.0, 20000.0, "IBL")
+
+        # children_alive stays False due to exception → flatten
+        assert result.success is False
+        assert "bracket lost" in result.error
 
 
 # ---------------------------------------------------------------------------

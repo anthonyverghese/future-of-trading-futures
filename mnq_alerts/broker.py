@@ -1457,19 +1457,63 @@ class IBKRBroker:
             with self._lock:
                 if self._pending_entry_fill is not None:
                     # Entry filled despite the cancel — position is OPEN.
-                    # Log the race condition but let the position live with
-                    # its target/stop orders intact.
-                    print(
-                        f"[broker] WARNING: Entry {parent_id} filled "
-                        f"@ {self._pending_entry_fill:.2f} during cancel "
-                        f"— position is OPEN with bracket protection",
-                        flush=True,
-                    )
-                    return TradeResult(
-                        success=True,
-                        order_id=parent_id,
-                        entry_price=self._pending_entry_fill,
-                    )
+                    # The cancel may have killed the child orders (target/
+                    # stop), leaving the position unprotected. Check if
+                    # children are still active.
+                    children_alive = False
+                    try:
+                        all_open = self._ib.openTrades()
+                        children = [
+                            t for t in all_open
+                            if t.contract.symbol == MNQ_SYMBOL
+                            and t.order.parentId == parent_id
+                        ]
+                        children_alive = len(children) > 0
+                        child_refs = [
+                            getattr(t.order, "orderRef", "") for t in children
+                        ]
+                        print(
+                            f"[broker] Fill-during-cancel: checking bracket "
+                            f"children for parent {parent_id} — "
+                            f"found {len(children)}: {child_refs}",
+                            flush=True,
+                        )
+                    except Exception as exc:
+                        print(
+                            f"[broker] Fill-during-cancel: error checking "
+                            f"children: {exc}",
+                            flush=True,
+                        )
+
+                    if children_alive:
+                        print(
+                            f"[broker] WARNING: Entry {parent_id} filled "
+                            f"@ {self._pending_entry_fill:.2f} during cancel "
+                            f"— position is OPEN with bracket protection",
+                            flush=True,
+                        )
+                        return TradeResult(
+                            success=True,
+                            order_id=parent_id,
+                            entry_price=self._pending_entry_fill,
+                        )
+                    else:
+                        # Children were cancelled — position is unprotected.
+                        # Close it immediately at market.
+                        print(
+                            f"[broker] WARNING: Entry {parent_id} filled "
+                            f"@ {self._pending_entry_fill:.2f} during cancel "
+                            f"but bracket children were cancelled — "
+                            f"closing unprotected position at market",
+                            flush=True,
+                        )
+                        self._defensive_flatten(
+                            f"entry {parent_id} filled without bracket"
+                        )
+                        return TradeResult(
+                            success=False,
+                            error="Entry filled during cancel but bracket lost",
+                        )
                 else:
                     # Entry truly cancelled. Cancel child orders from
                     # THIS bracket only (not all MNQ orders — a new
