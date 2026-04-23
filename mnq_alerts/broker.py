@@ -1321,13 +1321,14 @@ class IBKRBroker:
         if not result.success or parent is None:
             return result
 
-        # Wait up to 1s for the entry limit to fill. sleep() pumps the
+        # Wait up to 2s for the entry limit to fill. sleep() pumps the
         # event loop, which fires callbacks that acquire self._lock —
         # must NOT hold the lock here (threading.Lock is not reentrant).
+        # 2s gives enough time for EC2 → IB Gateway → IBKR → CME round-trip.
         parent_id = result.order_id
         filled = False
         try:
-            for _ in range(4):
+            for _ in range(8):
                 self._ib.sleep(0.25)
                 if parent_trade.orderStatus.status == "Filled":
                     filled = True
@@ -1337,7 +1338,7 @@ class IBKRBroker:
 
         if not filled:
             print(
-                f"[broker] Entry limit not filled within 1s — "
+                f"[broker] Entry limit not filled within 2s — "
                 f"cancelling bracket (order {parent_id})",
                 flush=True,
             )
@@ -1394,7 +1395,7 @@ class IBKRBroker:
                         print(f"[broker] Entry cancel cleanup error: {e}")
             return TradeResult(
                 success=False,
-                error="Entry limit not filled within 1s",
+                error="Entry limit not filled within 2s",
             )
 
         return result
