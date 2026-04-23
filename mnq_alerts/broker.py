@@ -1368,7 +1368,7 @@ class IBKRBroker:
                     return TradeResult(
                         success=True,
                         order_id=parent_id,
-                        fill_price=self._pending_entry_fill,
+                        entry_price=self._pending_entry_fill,
                     )
                 else:
                     # Entry truly cancelled. Cancel child orders from

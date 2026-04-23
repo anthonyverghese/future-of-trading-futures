@@ -945,3 +945,151 @@ class TestHeartbeat:
         b.process_events()
         captured = capsys.readouterr()
         assert "[broker] heartbeat:" not in captured.out
+
+
+# ---------------------------------------------------------------------------
+# 12. Entry cancel race condition
+# ---------------------------------------------------------------------------
+
+
+class TestEntryCancelRace:
+    def test_fill_during_cancel_returns_success(self):
+        """If entry fills during cancel, submit_bracket returns success=True."""
+        b = _make_broker()
+        b._connected = True
+        b._contract = SimpleNamespace(symbol=MNQ_SYMBOL, secType="FUT")
+
+        mock_ib = MagicMock()
+        mock_ib.isConnected.return_value = True
+        mock_ib.client.getReqId.return_value = 50
+        # Entry stays "Submitted" during fill-check loop (not filled in 1s)
+        unfilled = SimpleNamespace(
+            orderStatus=SimpleNamespace(status="Submitted")
+        )
+        mock_ib.placeOrder.return_value = unfilled
+        mock_ib.openTrades.return_value = []
+
+        # Simulate fill sneaking in during the 0.5s post-cancel sleep:
+        # set _pending_entry_fill after cancelOrder is called.
+        def fake_sleep(secs):
+            b._pending_entry_fill = 20001.50
+
+        mock_ib.sleep.side_effect = fake_sleep
+        b._ib = mock_ib
+
+        with patch.object(
+            type(b), "is_connected", new_callable=lambda: property(lambda self: True)
+        ):
+            result = b.submit_bracket("up", 20002.0, 20000.0, "IBL")
+
+        assert result.success is True
+        assert result.entry_price == 20001.50
+        assert b._position_open is True
+
+    def test_true_cancel_clears_state_and_sweeps_children(self):
+        """If entry truly cancelled, position state cleared and children swept."""
+        b = _make_broker()
+        b._connected = True
+        b._contract = SimpleNamespace(symbol=MNQ_SYMBOL, secType="FUT")
+
+        mock_ib = MagicMock()
+        mock_ib.isConnected.return_value = True
+        mock_ib.client.getReqId.return_value = 55
+        unfilled = SimpleNamespace(
+            orderStatus=SimpleNamespace(status="Submitted")
+        )
+        mock_ib.placeOrder.return_value = unfilled
+
+        # Simulate stale child order with matching parentId
+        stale_child = SimpleNamespace(
+            contract=SimpleNamespace(symbol=MNQ_SYMBOL),
+            order=SimpleNamespace(
+                orderId=56, parentId=55, orderRef="bot-55-target"
+            ),
+        )
+        mock_ib.openTrades.return_value = [stale_child]
+        b._ib = mock_ib
+
+        with patch.object(
+            type(b), "is_connected", new_callable=lambda: property(lambda self: True)
+        ):
+            result = b.submit_bracket("up", 20002.0, 20000.0, "IBL")
+
+        assert result.success is False
+        assert b._position_open is False
+        # Should have cancelled the stale child
+        mock_ib.cancelOrder.assert_any_call(stale_child.order)
+
+
+# ---------------------------------------------------------------------------
+# 13. Post-close stale order cleanup
+# ---------------------------------------------------------------------------
+
+
+class TestPostCloseCleanup:
+    def test_sweeps_stale_siblings_after_close(self, capsys):
+        """After trade close, stale sibling orders from same bracket are cancelled."""
+        b = _make_broker(
+            position_open=True,
+            pending_direction="up",
+            pending_entry_fill=20000.0,
+            pending_line_price=20000.0,
+            pending_target_pts=8.0,
+            pending_stop_pts=20.0,
+            pending_parent_order_id=60,
+        )
+
+        # Simulate a stale stop order from the same bracket
+        stale_stop = SimpleNamespace(
+            contract=SimpleNamespace(symbol=MNQ_SYMBOL),
+            order=SimpleNamespace(
+                orderId=62, parentId=60, orderRef="bot-60-stop"
+            ),
+        )
+        mock_ib = MagicMock()
+        mock_ib.openTrades.return_value = [stale_stop]
+        b._ib = mock_ib
+
+        # Fire the close callback (target fill)
+        close_trade = _fake_trade(
+            MNQ_SYMBOL, "Filled", order_type="LMT",
+            parent_id=60, fill_price=20008.0,
+            order_ref="bot-60-target",
+        )
+        b._on_order_status(close_trade)
+
+        # Stale stop should have been cancelled
+        mock_ib.cancelOrder.assert_called_with(stale_stop.order)
+
+    def test_does_not_cancel_other_bracket_orders(self, capsys):
+        """Post-close cleanup must not touch orders from a different bracket."""
+        b = _make_broker(
+            position_open=True,
+            pending_direction="up",
+            pending_entry_fill=20000.0,
+            pending_line_price=20000.0,
+            pending_target_pts=8.0,
+            pending_stop_pts=20.0,
+            pending_parent_order_id=60,
+        )
+
+        # Order from a DIFFERENT bracket (parentId=70)
+        other_bracket = SimpleNamespace(
+            contract=SimpleNamespace(symbol=MNQ_SYMBOL),
+            order=SimpleNamespace(
+                orderId=72, parentId=70, orderRef="bot-70-target"
+            ),
+        )
+        mock_ib = MagicMock()
+        mock_ib.openTrades.return_value = [other_bracket]
+        b._ib = mock_ib
+
+        close_trade = _fake_trade(
+            MNQ_SYMBOL, "Filled", order_type="LMT",
+            parent_id=60, fill_price=20008.0,
+            order_ref="bot-60-target",
+        )
+        b._on_order_status(close_trade)
+
+        # Should NOT have cancelled the other bracket's order
+        mock_ib.cancelOrder.assert_not_called()
