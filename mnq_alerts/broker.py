@@ -385,6 +385,8 @@ class IBKRBroker:
                         self._ib.cancelOrder(trade.order)
                     except Exception as exc:
                         print(f"[broker] Stray cancel error: {exc}")
+            else:
+                print("[broker] Startup reconcile: no positions or stray orders")
             return
         if len(mnq_positions) > 1:
             print(
@@ -616,27 +618,28 @@ class IBKRBroker:
         if not self._ib:
             return
         self._cancel_all_mnq(f"Defensive flatten ({reason})")
+        closed = False
         try:
             for pos in self._ib.positions():
                 if pos.contract.symbol == MNQ_SYMBOL and pos.position != 0:
                     action = "SELL" if pos.position > 0 else "BUY"
                     qty = abs(pos.position)
                     close_order = MarketOrder(action, qty)
-                    # Tag so _on_order_status ignores the fill instead
-                    # of mistaking it for a new entry. The defensive
-                    # flatten is intentionally untracked.
                     close_order.orderRef = "bot-defensive-flatten"
-                    # Use our pre-qualified contract (not pos.contract
-                    # which may lack exchange field — caused Error 321
-                    # "Missing order exchange" on 2026-04-23).
                     contract = self._contract or pos.contract
                     self._ib.placeOrder(contract, close_order)
                     print(
                         f"[broker] Defensive flatten ({reason}): "
                         f"{action} {qty} MNQ @ market"
                     )
+                    closed = True
+            if not closed:
+                print(
+                    f"[broker] Defensive flatten ({reason}): "
+                    f"no MNQ position found on IBKR"
+                )
         except Exception as exc:
-            print(f"[broker] Defensive flatten — close error: {exc}")
+            print(f"[broker] Defensive flatten ({reason}) — close error: {exc}")
 
         # Sweep any 'open' bot_trades rows for today so they don't stay
         # stuck forever — the fill from the flatten is ignored by
@@ -662,6 +665,7 @@ class IBKRBroker:
         # Check for leftover positions before resetting flags.
         if self._ib:
             try:
+                has_leftover = False
                 for p in self._ib.positions():
                     if p.contract.symbol == MNQ_SYMBOL and p.position != 0:
                         print(
@@ -669,7 +673,10 @@ class IBKRBroker:
                             f"position ({p.position}) — flattening"
                         )
                         self._defensive_flatten("daily reset leftover")
+                        has_leftover = True
                         break
+                if not has_leftover:
+                    print("[broker] Daily reset: no leftover IBKR positions")
             except Exception as e:
                 print(f"[broker] Daily reset: position check failed: {e}")
 
@@ -1114,7 +1121,8 @@ class IBKRBroker:
             print(f"[broker] EOD flatten: error checking IBKR positions: {e}")
 
         if direction is None and ibkr_position is None:
-            return  # truly no position anywhere
+            print("[broker] EOD flatten: no position (internal or IBKR)")
+            return
 
         if direction is None and ibkr_position is not None:
             # Phantom position: IBKR has it but we don't know about it.
@@ -1683,7 +1691,8 @@ class IBKRBroker:
             print(f"[broker] Session close: position check failed: {e}")
 
         if not has_tracked_position and not ibkr_has_position:
-            return  # truly nothing to close
+            print("[broker] Session close: no position (internal or IBKR)")
+            return
 
         if not has_tracked_position and ibkr_has_position:
             # Phantom position — use defensive flatten.
