@@ -873,6 +873,27 @@ class IBKRBroker:
             # Check if we should stop for the day.
             self.can_trade()  # updates _stopped_for_day if limits hit
 
+            # Cancel any stale sibling orders from THIS bracket only.
+            # Using _cancel_all_mnq here would risk cancelling a NEW
+            # bracket's orders if the bot re-entered immediately.
+            closed_parent_id = self._pending_parent_order_id
+            if closed_parent_id is not None:
+                try:
+                    for t in self._ib.openTrades():
+                        if (
+                            t.contract.symbol == MNQ_SYMBOL
+                            and t.order.parentId == closed_parent_id
+                        ):
+                            ref = getattr(t.order, "orderRef", "") or ""
+                            print(
+                                f"[broker] Post-close cleanup: cancelling "
+                                f"stale order {t.order.orderId} ({ref})",
+                                flush=True,
+                            )
+                            self._ib.cancelOrder(t.order)
+                except Exception as e:
+                    print(f"[broker] Post-close cleanup error: {e}")
+
     def _verify_and_failsafe_close(self, reason: str) -> None:
         """After submitting a close order, verify the position actually closed.
 
@@ -1328,11 +1349,49 @@ class IBKRBroker:
                     f"{parent_id} failed: {exc}",
                     flush=True,
                 )
+            # Give the cancel (or a last-moment fill) time to process.
+            try:
+                self._ib.sleep(0.5)
+            except Exception:
+                pass
             with self._lock:
-                # Only clear if the entry didn't sneak in during cancel.
-                if self._pending_entry_fill is None:
+                if self._pending_entry_fill is not None:
+                    # Entry filled despite the cancel — position is OPEN.
+                    # Log the race condition but let the position live with
+                    # its target/stop orders intact.
+                    print(
+                        f"[broker] WARNING: Entry {parent_id} filled "
+                        f"@ {self._pending_entry_fill:.2f} during cancel "
+                        f"— position is OPEN with bracket protection",
+                        flush=True,
+                    )
+                    return TradeResult(
+                        success=True,
+                        order_id=parent_id,
+                        fill_price=self._pending_entry_fill,
+                    )
+                else:
+                    # Entry truly cancelled. Cancel child orders from
+                    # THIS bracket only (not all MNQ orders — a new
+                    # bracket may have been submitted already).
                     self._position_open = False
                     self._position_opened_at = None
+                    self._pending_entry_fill = None
+                    try:
+                        for t in self._ib.openTrades():
+                            if (
+                                t.contract.symbol == MNQ_SYMBOL
+                                and t.order.parentId == parent_id
+                            ):
+                                ref = getattr(t.order, "orderRef", "") or ""
+                                print(
+                                    f"[broker] Entry cancel cleanup: "
+                                    f"cancelling child {t.order.orderId} ({ref})",
+                                    flush=True,
+                                )
+                                self._ib.cancelOrder(t.order)
+                    except Exception as e:
+                        print(f"[broker] Entry cancel cleanup error: {e}")
             return TradeResult(
                 success=False,
                 error="Entry limit not filled within 1s",
