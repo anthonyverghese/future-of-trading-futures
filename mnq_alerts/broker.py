@@ -626,7 +626,11 @@ class IBKRBroker:
                     # of mistaking it for a new entry. The defensive
                     # flatten is intentionally untracked.
                     close_order.orderRef = "bot-defensive-flatten"
-                    self._ib.placeOrder(pos.contract, close_order)
+                    # Use our pre-qualified contract (not pos.contract
+                    # which may lack exchange field — caused Error 321
+                    # "Missing order exchange" on 2026-04-23).
+                    contract = self._contract or pos.contract
+                    self._ib.placeOrder(contract, close_order)
                     print(
                         f"[broker] Defensive flatten ({reason}): "
                         f"{action} {qty} MNQ @ market"
@@ -1060,22 +1064,49 @@ class IBKRBroker:
         Called a few minutes before MARKET_CLOSE to avoid overnight margin
         requirements. Uses the same reverse-market-order approach as the
         timeout path so the fill callback records P&L normally.
+
+        As a safety net, also checks IBKR's actual positions — if IBKR
+        has an MNQ position but our internal flag is False (e.g. from a
+        race condition), we flatten it anyway to avoid overnight exposure.
         """
         if not self.is_connected:
             return
         with self._lock:
             if self._stopped_for_day and not self._position_open:
-                return  # already done
+                # Even if we think we're done, check IBKR for phantom positions.
+                pass
             if not self._stopped_for_day:
                 self._stopped_for_day = True
                 self._stop_reason = "Pre-close EOD flatten (no new trades)"
                 print(f"[broker] {self._stop_reason}")
-            if not self._position_open or self._position_opened_at is None:
-                return
-            direction = self._pending_direction
-            self._position_opened_at = None  # prevent timeout path racing
+            if self._position_open and self._position_opened_at is not None:
+                direction = self._pending_direction
+                self._position_opened_at = None  # prevent timeout path racing
+            else:
+                direction = None
 
-        if direction is None or self._contract is None:
+        # Safety net: check IBKR's actual positions regardless of our flag.
+        ibkr_position = None
+        try:
+            for p in self._ib.positions():
+                if p.contract.symbol == MNQ_SYMBOL and p.position != 0:
+                    ibkr_position = p
+                    break
+        except Exception as e:
+            print(f"[broker] EOD flatten: error checking IBKR positions: {e}")
+
+        if direction is None and ibkr_position is None:
+            return  # truly no position anywhere
+
+        if direction is None and ibkr_position is not None:
+            # Phantom position: IBKR has it but we don't know about it.
+            print(
+                f"[broker] EOD flatten: IBKR has untracked MNQ position "
+                f"({ibkr_position.position}) — flattening defensively"
+            )
+            direction = "up" if ibkr_position.position > 0 else "down"
+
+        if self._contract is None:
             return
         self._cancel_all_mnq("EOD flatten")
 
