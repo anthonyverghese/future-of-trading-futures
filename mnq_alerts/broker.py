@@ -1296,18 +1296,16 @@ class IBKRBroker:
         with self._lock:
             if ibkr_has_mnq_position and not self._position_open:
                 # Dangerous drift: IBKR holds a position we don't know
-                # about. Refuse the entry and fix the flag so subsequent
-                # can_trade() calls block new entries until the stuck
-                # position resolves (or manual intervention).
+                # about. Flatten it immediately so the bot can recover
+                # and resume trading, rather than staying stuck all day.
                 print(
                     "[broker] DRIFT: IBKR has an MNQ position but "
-                    "_position_open=False. Refusing entry and marking "
-                    "position open — manual reconciliation needed."
+                    "_position_open=False. Flattening untracked position."
                 )
-                self._position_open = True
+                self._defensive_flatten("pre-entry drift")
                 return TradeResult(
                     success=False,
-                    error="State drift — IBKR has untracked MNQ position",
+                    error="State drift — flattened untracked MNQ position",
                 )
 
             if not ibkr_has_mnq_position and self._position_open:
