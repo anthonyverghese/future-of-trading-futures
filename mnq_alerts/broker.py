@@ -654,7 +654,25 @@ class IBKRBroker:
             print(f"[broker] Orphan sweep error: {exc}")
 
     def reset_daily_state(self) -> None:
-        """Reset risk counters for a new trading day."""
+        """Reset risk counters for a new trading day.
+
+        Before clearing position state, checks IBKR for any leftover
+        MNQ position (e.g. from a failed flatten) and closes it.
+        """
+        # Check for leftover positions before resetting flags.
+        if self._ib:
+            try:
+                for p in self._ib.positions():
+                    if p.contract.symbol == MNQ_SYMBOL and p.position != 0:
+                        print(
+                            f"[broker] Daily reset: IBKR has leftover MNQ "
+                            f"position ({p.position}) — flattening"
+                        )
+                        self._defensive_flatten("daily reset leftover")
+                        break
+            except Exception as e:
+                print(f"[broker] Daily reset: position check failed: {e}")
+
         with self._lock:
             prev_pnl = self._daily_pnl_usd
             prev_trades = self._trades_today
@@ -1100,11 +1118,15 @@ class IBKRBroker:
 
         if direction is None and ibkr_position is not None:
             # Phantom position: IBKR has it but we don't know about it.
+            # Use _defensive_flatten which checks IBKR's actual positions
+            # directly — the normal close path would skip it because
+            # _position_open is False.
             print(
                 f"[broker] EOD flatten: IBKR has untracked MNQ position "
                 f"({ibkr_position.position}) — flattening defensively"
             )
-            direction = "up" if ibkr_position.position > 0 else "down"
+            self._defensive_flatten("EOD phantom position")
+            return
 
         if self._contract is None:
             return
@@ -1120,6 +1142,24 @@ class IBKRBroker:
                     "— skipping flatten (race with TP/stop fill)"
                 )
                 return
+
+        # Final safety: verify IBKR actually has a position.
+        try:
+            ibkr_has_position = any(
+                p.contract.symbol == MNQ_SYMBOL and p.position != 0
+                for p in self._ib.positions()
+            )
+            if not ibkr_has_position:
+                print(
+                    "[broker] EOD flatten: _position_open=True but IBKR has "
+                    "no MNQ position — clearing flag, skipping close"
+                )
+                with self._lock:
+                    self._position_open = False
+                    self._pending_entry_fill = None
+                return
+        except Exception as exc:
+            print(f"[broker] EOD flatten: position check failed: {exc}")
 
         close_action = "SELL" if direction == "up" else "BUY"
         close_order = MarketOrder(close_action, ORDER_QTY)
@@ -1185,6 +1225,28 @@ class IBKRBroker:
                     "— skipping close (race with TP/stop fill)"
                 )
                 return False
+
+        # Final safety: verify IBKR actually has a position. If our flag
+        # says open but IBKR has nothing (dropped fill callback), submitting
+        # a reverse order would accidentally open a new position.
+        try:
+            ibkr_has_position = any(
+                p.contract.symbol == MNQ_SYMBOL and p.position != 0
+                for p in self._ib.positions()
+            )
+            if not ibkr_has_position:
+                print(
+                    "[broker] Timeout: _position_open=True but IBKR has "
+                    "no MNQ position — clearing flag, skipping close"
+                )
+                with self._lock:
+                    self._position_open = False
+                    self._pending_entry_fill = None
+                return False
+        except Exception as exc:
+            print(f"[broker] Timeout: position check failed: {exc}")
+            # Proceed with close — safer to close a real position than
+            # to skip and leave it open overnight.
 
         # Submit reverse market order. orderRef "bot-<parent>-close"
         # routes the fill through the close/P&L path in
@@ -1584,7 +1646,8 @@ class IBKRBroker:
                 action = "SELL" if pos.position > 0 else "BUY"
                 qty = abs(pos.position)
                 order = MarketOrder(action, qty)
-                self._ib.placeOrder(pos.contract, order)
+                contract = self._contract or pos.contract
+                self._ib.placeOrder(contract, order)
                 print(f"[broker] Flattening: {action} {qty} MNQ @ market")
         self._position_open = False
         return True
@@ -1604,15 +1667,34 @@ class IBKRBroker:
             return
 
         with self._lock:
-            if not self._position_open:
-                return  # eod_flatten already closed it
+            has_tracked_position = self._position_open
             direction = self._pending_direction
-            self._position_opened_at = None  # prevent timeout path racing
+            if has_tracked_position:
+                self._position_opened_at = None  # prevent timeout path racing
+
+        # Safety net: check IBKR's actual positions regardless of our flag.
+        ibkr_has_position = False
+        try:
+            ibkr_has_position = any(
+                p.contract.symbol == MNQ_SYMBOL and p.position != 0
+                for p in self._ib.positions()
+            )
+        except Exception as e:
+            print(f"[broker] Session close: position check failed: {e}")
+
+        if not has_tracked_position and not ibkr_has_position:
+            return  # truly nothing to close
+
+        if not has_tracked_position and ibkr_has_position:
+            # Phantom position — use defensive flatten.
+            print(
+                "[broker] Session close: IBKR has untracked MNQ position "
+                "— flattening defensively"
+            )
+            self._defensive_flatten("session_close phantom")
+            return
 
         if direction is None or self._contract is None:
-            # Can't determine direction from bot state — fall back to
-            # reading the raw IBKR position and closing it directly via
-            # the failsafe path.
             print(
                 "[broker] Session close: no direction/contract — "
                 "falling back to failsafe"
@@ -1631,6 +1713,23 @@ class IBKRBroker:
                     "order — skipping (race with TP/stop fill)"
                 )
                 return
+
+        # Verify IBKR still has a position before submitting close order.
+        try:
+            if not any(
+                p.contract.symbol == MNQ_SYMBOL and p.position != 0
+                for p in self._ib.positions()
+            ):
+                print(
+                    "[broker] Session close: _position_open=True but IBKR "
+                    "has no MNQ position — clearing flag, skipping close"
+                )
+                with self._lock:
+                    self._position_open = False
+                    self._pending_entry_fill = None
+                return
+        except Exception:
+            pass  # proceed with close if check fails
 
         close_action = "SELL" if direction == "up" else "BUY"
         close_order = MarketOrder(close_action, ORDER_QTY)
