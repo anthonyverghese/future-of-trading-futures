@@ -73,6 +73,39 @@ def save_trades(trades: pd.DataFrame) -> None:
     print(f"[cache] Saved {len(trades)} trades.")
 
 
+def export_daily_parquet(trades: pd.DataFrame) -> str | None:
+    """Export today's session trades to a parquet file for backtesting.
+
+    Saves to data_cache/MNQ_<date>.parquet in the same format as the
+    historical Databento downloads (columns: price, size; index: ET
+    DatetimeIndex). This lets the backtest infrastructure use live-
+    collected data without needing Databento.
+
+    Returns the file path on success, None on failure.
+    """
+    if trades.empty:
+        print("[cache] No trades to export to parquet.")
+        return None
+    today = datetime.datetime.now(ET).date().isoformat()
+    cache_dir = os.path.join(os.path.dirname(__file__), "data_cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    path = os.path.join(cache_dir, f"MNQ_{today}.parquet")
+
+    try:
+        # Convert from session format (Price/Size) to backtest format
+        # (price/size) to match historical Databento parquet files.
+        df = pd.DataFrame(
+            {"price": trades["Price"].values, "size": trades["Size"].values},
+            index=trades.index,
+        )
+        df.to_parquet(path)
+        print(f"[cache] Exported {len(df)} trades to {path}")
+        return path
+    except Exception as e:
+        print(f"[cache] Failed to export parquet: {e}")
+        return None
+
+
 def load_trades() -> pd.DataFrame:
     """Load today's cached trades. Returns empty DataFrame if none exist."""
     if not os.path.exists(CACHE_PATH):

@@ -1,7 +1,7 @@
 [Unit]
-Description=Back up alerts_log.db to S3
+Description=Back up alerts_log.db and parquet files to S3
 
 [Service]
 Type=oneshot
 User=ec2-user
-ExecStart=/usr/bin/aws s3 cp /home/ec2-user/future-of-trading-futures/mnq_alerts/alerts_log.db s3://mnq-alerts-backup/alerts_log.db
+ExecStart=/bin/bash -c '/usr/bin/aws s3 cp /home/ec2-user/future-of-trading-futures/mnq_alerts/alerts_log.db s3://mnq-alerts-backup/alerts_log.db && /usr/bin/aws s3 sync /home/ec2-user/future-of-trading-futures/mnq_alerts/data_cache/ s3://mnq-alerts-backup/data_cache/ --exclude "*" --include "MNQ_*.parquet"'

@@ -39,6 +39,7 @@ from cache import (
     get_replay_start,
     load_pending_alerts,
     load_recent_outcomes,
+    export_daily_parquet,
     load_trades,
     save_trades,
     upsert_daily_stats,
@@ -366,7 +367,9 @@ def run() -> None:
                         )
 
             try:
-                save_trades(get_session_trades())
+                session_trades = get_session_trades()
+                save_trades(session_trades)
+                export_daily_parquet(session_trades)
             except Exception as e:
                 print(
                     f"[alerts] Error saving trades at close: {e}\n{traceback.format_exc()}"
