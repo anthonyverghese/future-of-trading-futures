@@ -1121,7 +1121,13 @@ class IBKRBroker:
             print(f"[broker] EOD flatten: error checking IBKR positions: {e}")
 
         if direction is None and ibkr_position is None:
-            print("[broker] EOD flatten: no position (internal or IBKR)")
+            # No position, but sweep any stale orders (e.g. unfilled
+            # entry limits that could fill after hours).
+            stale = self._cancel_all_mnq("EOD order sweep")
+            if stale:
+                print(f"[broker] EOD flatten: no position but cancelled {stale} stale order(s)")
+            else:
+                print("[broker] EOD flatten: no position, no orders")
             return
 
         if direction is None and ibkr_position is not None:
@@ -1160,11 +1166,14 @@ class IBKRBroker:
             if not ibkr_has_position:
                 print(
                     "[broker] EOD flatten: _position_open=True but IBKR has "
-                    "no MNQ position — clearing flag, skipping close"
+                    "no MNQ position — clearing flag, sweeping orders"
                 )
                 with self._lock:
                     self._position_open = False
                     self._pending_entry_fill = None
+                stale = self._cancel_all_mnq("EOD no-position sweep")
+                if stale:
+                    print(f"[broker] EOD flatten: cancelled {stale} stale order(s)")
                 return
         except Exception as exc:
             print(f"[broker] EOD flatten: position check failed: {exc}")
@@ -1245,11 +1254,15 @@ class IBKRBroker:
             if not ibkr_has_position:
                 print(
                     "[broker] Timeout: _position_open=True but IBKR has "
-                    "no MNQ position — clearing flag, skipping close"
+                    "no MNQ position — clearing flag, sweeping orders"
                 )
                 with self._lock:
                     self._position_open = False
                     self._pending_entry_fill = None
+                # Sweep any stale orders that might still be open.
+                stale = self._cancel_all_mnq("Timeout no-position sweep")
+                if stale:
+                    print(f"[broker] Timeout: cancelled {stale} stale order(s)")
                 return False
         except Exception as exc:
             print(f"[broker] Timeout: position check failed: {exc}")
@@ -1385,8 +1398,8 @@ class IBKRBroker:
                 # entry can proceed cleanly.
                 print(
                     "[broker] DRIFT: _position_open=True but IBKR has "
-                    "no MNQ position. Clearing stale pending state and "
-                    "allowing entry."
+                    "no MNQ position. Clearing stale pending state, "
+                    "sweeping orders, and allowing entry."
                 )
                 self._position_open = False
                 self._pending_direction = None
@@ -1399,6 +1412,10 @@ class IBKRBroker:
                 self._pending_stop_price = None
                 self._pending_exit_reason = None
                 self._position_opened_at = None
+                # Sweep stale orders from the phantom position.
+                stale = self._cancel_all_mnq("Drift safe-clear sweep")
+                if stale:
+                    print(f"[broker] DRIFT: cancelled {stale} stale order(s)")
 
             # Check risk limits.
             allowed, reason = self.can_trade()
@@ -1735,7 +1752,11 @@ class IBKRBroker:
             print(f"[broker] Session close: position check failed: {e}")
 
         if not has_tracked_position and not ibkr_has_position:
-            print("[broker] Session close: no position (internal or IBKR)")
+            stale = self._cancel_all_mnq("Session close order sweep")
+            if stale:
+                print(f"[broker] Session close: no position but cancelled {stale} stale order(s)")
+            else:
+                print("[broker] Session close: no position, no orders")
             return
 
         if not has_tracked_position and ibkr_has_position:
@@ -1775,11 +1796,14 @@ class IBKRBroker:
             ):
                 print(
                     "[broker] Session close: _position_open=True but IBKR "
-                    "has no MNQ position — clearing flag, skipping close"
+                    "has no MNQ position — clearing flag, sweeping orders"
                 )
                 with self._lock:
                     self._position_open = False
                     self._pending_entry_fill = None
+                stale = self._cancel_all_mnq("Session close no-position sweep")
+                if stale:
+                    print(f"[broker] Session close: cancelled {stale} stale order(s)")
                 return
         except Exception:
             pass  # proceed with close if check fails
