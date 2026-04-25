@@ -98,6 +98,7 @@ def export_daily_parquet(trades: pd.DataFrame) -> str | None:
             {"price": trades["Price"].values, "size": trades["Size"].values},
             index=trades.index,
         )
+        df.index.name = "ts"  # match Databento parquet format
         df.to_parquet(path)
         print(f"[cache] Exported {len(df)} trades to {path}")
         return path
