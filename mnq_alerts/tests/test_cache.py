@@ -57,6 +57,114 @@ class TestSaveLoadTrades:
         assert loaded.empty
 
 
+# ── Daily parquet export ────────────────────────────────────────────────────
+
+
+class TestExportDailyParquet:
+    """Tests use monkeypatch on os.path.dirname inside cache module to
+    redirect parquet output to tmp_path instead of the real data_cache/."""
+
+    @pytest.fixture(autouse=True)
+    def _redirect_data_cache(self, tmp_path, monkeypatch):
+        """Redirect export_daily_parquet output to tmp_path/data_cache/."""
+        self._data_cache = str(tmp_path / "data_cache")
+        # cache.py uses os.path.dirname(__file__) to find data_cache.
+        # Monkeypatch __file__ so dirname points to tmp_path.
+        monkeypatch.setattr(cache, "__file__", str(tmp_path / "cache.py"))
+
+    def _exported_path(self):
+        today = datetime.datetime.now(ET).date().isoformat()
+        return os.path.join(self._data_cache, f"MNQ_{today}.parquet")
+
+    def test_exports_correct_format(self):
+        """Exported parquet matches Databento format."""
+        trades = _make_trades(10)
+        path = cache.export_daily_parquet(trades)
+
+        assert path is not None
+        assert os.path.exists(path)
+
+        df = pd.read_parquet(path)
+        assert list(df.columns) == ["price", "size"]
+        assert df.index.name == "ts"
+        assert "America/New_York" in str(df.index.tz)
+        assert len(df) == 10
+        assert df["price"].dtype == float
+        assert df["size"].dtype == int
+
+    def test_empty_trades_returns_none(self):
+        empty = pd.DataFrame({"Price": [], "Size": []}, index=pd.DatetimeIndex([]))
+        result = cache.export_daily_parquet(empty)
+        assert result is None
+
+    def test_wrong_columns_returns_none(self, capsys):
+        bad = pd.DataFrame({"price": [100.0], "size": [1]},
+                           index=pd.DatetimeIndex([datetime.datetime.now(ET)]))
+        result = cache.export_daily_parquet(bad)
+        assert result is None
+        captured = capsys.readouterr()
+        assert "unexpected columns" in captured.out
+
+    def test_skips_overwrite_if_existing_larger(self, capsys):
+        """Don't overwrite existing parquet if it has more trades."""
+        # First export: 20 trades
+        large = _make_trades(20)
+        path1 = cache.export_daily_parquet(large)
+        assert path1 is not None
+        df1 = pd.read_parquet(path1)
+        assert len(df1) == 20
+
+        # Second export: 10 trades — should skip
+        small = _make_trades(10)
+        path2 = cache.export_daily_parquet(small)
+
+        # File should still have 20 trades
+        df2 = pd.read_parquet(self._exported_path())
+        assert len(df2) == 20
+        captured = capsys.readouterr()
+        assert "skipping overwrite" in captured.out
+
+    def test_overwrites_if_new_has_more_trades(self):
+        """Overwrite existing parquet if new export has more trades."""
+        # First export: 10 trades
+        small = _make_trades(10)
+        cache.export_daily_parquet(small)
+
+        # Second export: 20 trades — should overwrite
+        large = _make_trades(20)
+        cache.export_daily_parquet(large)
+
+        df = pd.read_parquet(self._exported_path())
+        assert len(df) == 20
+
+    def test_overwrites_corrupted_file(self):
+        """Overwrite if existing parquet is corrupted."""
+        # Write garbage to the path
+        path = self._exported_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write("not a parquet file")
+
+        trades = _make_trades(5)
+        result = cache.export_daily_parquet(trades)
+        assert result is not None
+
+        df = pd.read_parquet(result)
+        assert len(df) == 5
+
+    def test_backtest_load_day_compatible(self):
+        """Exported parquet can be loaded by targeted_backtest.load_day."""
+        trades = _make_trades(10)
+        path = cache.export_daily_parquet(trades)
+        assert path is not None
+
+        df = pd.read_parquet(path)
+        # Verify it has the same structure load_day expects
+        assert "price" in df.columns
+        assert "size" in df.columns
+        assert df.index.tz is not None
+
+
 # ── Alert log ────────────────────────────────────────────────────────────────
 
 

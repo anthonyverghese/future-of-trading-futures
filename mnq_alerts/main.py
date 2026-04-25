@@ -369,10 +369,17 @@ def run() -> None:
             try:
                 session_trades = get_session_trades()
                 save_trades(session_trades)
-                export_daily_parquet(session_trades)
             except Exception as e:
                 print(
                     f"[alerts] Error saving trades at close: {e}\n{traceback.format_exc()}"
+                )
+                session_trades = None
+            try:
+                if session_trades is not None:
+                    export_daily_parquet(session_trades)
+            except Exception as e:
+                print(
+                    f"[alerts] Error exporting parquet: {e}\n{traceback.format_exc()}"
                 )
 
             print(

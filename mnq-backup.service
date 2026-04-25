@@ -4,4 +4,4 @@ Description=Back up alerts_log.db and parquet files to S3
 [Service]
 Type=oneshot
 User=ec2-user
-ExecStart=/bin/bash -c '/usr/bin/aws s3 cp /home/ec2-user/future-of-trading-futures/mnq_alerts/alerts_log.db s3://mnq-alerts-backup/alerts_log.db && /usr/bin/aws s3 sync /home/ec2-user/future-of-trading-futures/mnq_alerts/data_cache/ s3://mnq-alerts-backup/data_cache/ --exclude "*" --include "MNQ_*.parquet" && find /home/ec2-user/future-of-trading-futures/mnq_alerts/data_cache/ -name "MNQ_*.parquet" -mtime +7 -delete && echo "[backup] Cleaned parquet files older than 7 days from EC2"'
+ExecStart=/bin/bash -c 'set -e; /usr/bin/aws s3 cp /home/ec2-user/future-of-trading-futures/mnq_alerts/alerts_log.db s3://mnq-alerts-backup/alerts_log.db; /usr/bin/aws s3 sync /home/ec2-user/future-of-trading-futures/mnq_alerts/data_cache/ s3://mnq-alerts-backup/data_cache/ --exclude "*" --include "MNQ_*.parquet"; echo "[backup] S3 upload complete — cleaning old parquets"; find /home/ec2-user/future-of-trading-futures/mnq_alerts/data_cache/ -name "MNQ_*.parquet" -mtime +7 -delete; echo "[backup] Done"'

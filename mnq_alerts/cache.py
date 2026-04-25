@@ -86,10 +86,31 @@ def export_daily_parquet(trades: pd.DataFrame) -> str | None:
     if trades.empty:
         print("[cache] No trades to export to parquet.")
         return None
+    if "Price" not in trades.columns or "Size" not in trades.columns:
+        print(
+            f"[cache] Cannot export parquet: unexpected columns "
+            f"{list(trades.columns)}, expected ['Price', 'Size']"
+        )
+        return None
+
     today = datetime.datetime.now(ET).date().isoformat()
     cache_dir = os.path.join(os.path.dirname(__file__), "data_cache")
     os.makedirs(cache_dir, exist_ok=True)
     path = os.path.join(cache_dir, f"MNQ_{today}.parquet")
+
+    # Don't overwrite a larger existing file (e.g. from a mid-day restart
+    # where the second session has fewer trades than the first).
+    if os.path.exists(path):
+        try:
+            existing = pd.read_parquet(path)
+            if len(existing) >= len(trades):
+                print(
+                    f"[cache] Parquet already exists with {len(existing)} trades "
+                    f"(>= {len(trades)} current) — skipping overwrite"
+                )
+                return path
+        except Exception:
+            pass  # corrupted file, overwrite it
 
     try:
         # Convert from session format (Price/Size) to backtest format
