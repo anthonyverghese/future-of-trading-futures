@@ -28,11 +28,10 @@ callbacks and order execution callbacks. The broker uses clientId from
 config.py (IBKR_CLIENT_ID, default 1); this module uses clientId
 IBKR_CLIENT_ID + 1.
 
-Limitation: IBKR tick-by-tick data is live-only — no historical replay.
-The session_start parameter is accepted for interface compatibility but
-has no effect. On startup, main.py's session cache mechanism provides
-trades up to the last cache save; ticks between the last save and now
-are lost. This gap is typically <5 minutes.
+On startup, if session_start is provided, historical ticks are replayed
+via reqHistoricalTicks (up to 1000 ticks per request, paginated) before
+switching to live tick-by-tick data. This fills the gap between the last
+session cache save and now, matching the Databento feed's replay behavior.
 """
 
 from __future__ import annotations
@@ -88,6 +87,7 @@ def load_session_cache(trades: pd.DataFrame) -> None:
     """Pre-populate session trades from a cache snapshot."""
     global _prices, _sizes, _timestamps, _trades_cache, _current_price
     if trades.empty:
+        print("[market_data] Session cache is empty — starting fresh.")
         return
     # Validate expected columns.
     if "Price" not in trades.columns or "Size" not in trades.columns:
@@ -130,12 +130,13 @@ def _connect_ibkr():
     """Create a new IB connection for market data (separate from broker)."""
     from ib_insync import IB
 
+    print(
+        f"[market_data] Connecting to IBKR at "
+        f"{IBKR_HOST}:{IBKR_PORT} (clientId={_FEED_CLIENT_ID})..."
+    )
     ib = IB()
     ib.connect(IBKR_HOST, IBKR_PORT, clientId=_FEED_CLIENT_ID, timeout=20)
-    print(
-        f"[market_data] Connected to IBKR at "
-        f"{IBKR_HOST}:{IBKR_PORT} (clientId={_FEED_CLIENT_ID})"
-    )
+    print(f"[market_data] Connected to IBKR")
     return ib
 
 
@@ -146,12 +147,16 @@ def _resolve_mnq_contract(ib):
     # ContFuture auto-resolves the front month. qualifyContracts fills
     # in the conId which we use to get the specific FUT contract
     # (required for tick data subscriptions).
+    print(f"[market_data] Qualifying {_MNQ_SYMBOL} contract...")
     contfut = ContFuture(symbol=_MNQ_SYMBOL, exchange="CME", currency="USD")
     qualified = ib.qualifyContracts(contfut)
     if not qualified:
         raise RuntimeError(
             f"Failed to qualify ContFuture for {_MNQ_SYMBOL}"
         )
+    print(
+        f"[market_data] ContFuture resolved: conId={qualified[0].conId}"
+    )
 
     fut = Future(conId=qualified[0].conId)
     qualified_fut = ib.qualifyContracts(fut)
@@ -168,28 +173,136 @@ def _resolve_mnq_contract(ib):
     return contract
 
 
+def _replay_historical(
+    ib, contract, start: datetime.datetime, end: datetime.datetime,
+) -> int:
+    """Fetch historical ticks from start to end and accumulate them.
+
+    Uses reqHistoricalTicks which returns up to 1000 ticks per call.
+    Paginates forward until we reach `end`. Returns the number of
+    ticks replayed.
+
+    Ticks are accumulated into the session lists (same as live ticks)
+    so VWAP and IB calculations are correct from the first live tick.
+
+    Note: reqHistoricalTicks requires either startDateTime or
+    endDateTime to be empty string, not both set. We paginate forward
+    using startDateTime with endDateTime=''.
+    """
+    global _current_price, _trades_cache
+
+    total = 0
+    skipped = 0
+    t0 = time.monotonic()
+    # Ensure cursor and end are both UTC for consistent comparison.
+    if hasattr(start, 'tzinfo') and start.tzinfo is not None:
+        cursor = start.astimezone(pytz.utc)
+    else:
+        cursor = pytz.utc.localize(start)
+    if hasattr(end, 'tzinfo') and end.tzinfo is not None:
+        end = end.astimezone(pytz.utc)
+    else:
+        end = pytz.utc.localize(end)
+    batch = 0
+    max_batches = 500  # safety limit (~500K ticks, ~full RTH session)
+
+    while cursor < end and batch < max_batches:
+        batch += 1
+        try:
+            ticks = ib.reqHistoricalTicks(
+                contract,
+                startDateTime=cursor,
+                endDateTime="",
+                numberOfTicks=1000,
+                whatToShow="Trades",
+                useRth=True,
+            )
+        except Exception as exc:
+            print(
+                f"[market_data] Historical tick request failed "
+                f"(batch {batch}, cursor={cursor}): {exc}"
+            )
+            break
+
+        if not ticks:
+            print(f"[market_data] No more historical ticks (batch {batch})")
+            break
+
+        batch_count = 0
+        for tick in ticks:
+            price = tick.price
+            size = tick.size
+            if price is None or price <= 0 or size is None or size <= 0:
+                skipped += 1
+                continue
+
+            tick_time = tick.time
+            if tick_time.tzinfo is None:
+                tick_time = pytz.utc.localize(tick_time)
+
+            # Stop if we've reached the current time.
+            if tick_time >= end:
+                break
+
+            ts_et = tick_time.astimezone(ET)
+            ts_pd = pd.Timestamp(ts_et).as_unit("ns")
+
+            _prices.append(price)
+            _sizes.append(size)
+            _timestamps.append(ts_pd)
+            _current_price = price
+            total += 1
+            batch_count += 1
+
+        _trades_cache = None  # invalidate after batch
+
+        if batch_count == 0:
+            break  # all ticks in this batch were past `end`
+
+        if batch % 10 == 0:
+            print(
+                f"[market_data] Replay progress: {total} ticks "
+                f"({batch} batches)...",
+                flush=True,
+            )
+
+        # Advance cursor past the last tick received.
+        last_time = ticks[-1].time
+        if last_time.tzinfo is None:
+            last_time = pytz.utc.localize(last_time)
+        cursor = last_time + datetime.timedelta(seconds=1)
+
+        if len(ticks) < 1000:
+            break  # no more data available
+
+    elapsed = time.monotonic() - t0
+    if batch >= max_batches:
+        print(
+            f"[market_data] WARNING: hit replay safety limit "
+            f"({max_batches} batches, {total} ticks, {skipped} skipped, "
+            f"{elapsed:.1f}s). Some historical data may be missing."
+        )
+    elif total > 0:
+        print(
+            f"[market_data] Replay done: {total} ticks in {batch} batches, "
+            f"{skipped} skipped, {elapsed:.1f}s"
+        )
+
+    return total
+
+
 def trade_stream(
     session_start: datetime.datetime | None = None,
 ) -> Generator[tuple[float, int, datetime.datetime], None, None]:
     """
     Yield (price, size, timestamp_et) for each live MNQ trade.
 
-    Uses IBKR's tick-by-tick "AllLast" data which provides every trade
-    print with price, size, and exchange timestamp.
-
-    session_start is accepted for interface compatibility with the
-    Databento version but is not used — IBKR tick-by-tick data is
-    live-only. The session cache mechanism in main.py handles
-    replaying cached trades on startup.
+    If session_start is provided, replays historical ticks from that
+    point first (via reqHistoricalTicks), then switches to live tick-
+    by-tick data. This matches the Databento feed's behavior so VWAP
+    and IB levels are accurate from the first live tick.
     """
     global _current_price, _trades_cache, _reconnect_count
-
-    if session_start is not None:
-        print(
-            "[market_data] Note: IBKR feed does not support historical "
-            "replay. Session cache provides trades up to the last save. "
-            "Live ticks start from now."
-        )
 
     while True:
         ib = None
@@ -198,8 +311,36 @@ def trade_stream(
             ib = _connect_ibkr()
             contract = _resolve_mnq_contract(ib)
 
-            # Subscribe to tick-by-tick trade data.
-            # "AllLast" includes all trade types (regular + irregular).
+            # Replay historical ticks on first connection only.
+            if session_start is not None:
+                now_utc = datetime.datetime.now(pytz.utc)
+                print(
+                    f"[market_data] Replaying historical ticks from "
+                    f"{session_start.strftime('%H:%M:%S')} ET..."
+                )
+                replayed = _replay_historical(
+                    ib, contract, session_start, now_utc,
+                )
+                print(
+                    f"[market_data] Replayed {replayed} historical ticks"
+                )
+                # Clear so reconnects don't re-replay.
+                session_start = None
+
+                # Yield all replayed ticks to main.py so it processes
+                # them (updates IB levels, VWAP, zone state, etc.).
+                if replayed > 0:
+                    start_idx = len(_prices) - replayed
+                    for i in range(start_idx, len(_prices)):
+                        ts_pd = _timestamps[i]
+                        ts_dt = ts_pd.to_pydatetime(warn=False)
+                        yield _prices[i], _sizes[i], ts_dt
+                    print(
+                        f"[feed] Replay complete — now processing live "
+                        f"trades"
+                    )
+
+            # Subscribe to live tick-by-tick trade data.
             ticker = ib.reqTickByTickData(contract, "AllLast")
             print("[market_data] Subscribed to tick-by-tick AllLast data")
 
@@ -292,7 +433,7 @@ def trade_stream(
             # Cancel tick subscription before disconnecting.
             if ticker is not None and ib is not None:
                 try:
-                    ib.cancelTickByTickData(contract, "AllLast")
+                    ib.cancelTickByTickData(ticker)
                 except Exception:
                     pass
             if ib is not None:
