@@ -359,14 +359,19 @@ def trade_stream(
                 if now_mono - last_stats_time >= 60.0:
                     elapsed = now_mono - last_stats_time
                     rate = tick_count / elapsed if elapsed > 0 else 0
-                    print(
+                    msg = (
                         f"[market_data] Stats: {tick_count} ticks in last "
                         f"{elapsed:.0f}s ({rate:.0f}/s), "
                         f"{len(_prices)} total session ticks, "
                         f"{skipped_ticks} skipped"
-                        + (f", price={_current_price:.2f}" if _current_price else ""),
-                        flush=True,
+                        + (f", price={_current_price:.2f}" if _current_price else "")
                     )
+                    if tick_count == 0 and len(_prices) == 0:
+                        msg += (
+                            " | WARNING: no ticks received — check CME "
+                            "market data subscription in IBKR"
+                        )
+                    print(msg, flush=True)
                     tick_count = 0
                     skipped_ticks = 0
                     last_stats_time = now_mono
@@ -374,7 +379,13 @@ def trade_stream(
                 if not ticker.tickByTicks:
                     continue
 
-                for tick in ticker.tickByTicks:
+                # Snapshot the current batch and clear immediately.
+                # This prevents losing ticks that arrive while main.py
+                # processes yielded ticks (between yield and next()).
+                batch = list(ticker.tickByTicks)
+                ticker.tickByTicks.clear()
+
+                for tick in batch:
                     price = tick.price
                     size = tick.size
 
@@ -414,9 +425,6 @@ def trade_stream(
 
                     yield price, size, ts_et
 
-                # Clear processed ticks so they don't re-process.
-                ticker.tickByTicks.clear()
-
             # If we get here, ib.isConnected() returned False.
             print(
                 "[market_data] IBKR connection lost "
@@ -425,11 +433,31 @@ def trade_stream(
 
         except Exception as exc:
             _reconnect_count += 1
-            print(
-                f"[market_data] IBKR feed error (reconnect #{_reconnect_count}): "
-                f"{type(exc).__name__}: {exc}. Reconnecting in 5s..."
-            )
-            time.sleep(5)
+            exc_str = str(exc).lower()
+            # TimeoutError on connect often means the clientId is still
+            # held by a stale connection from a crash. IB Gateway logs
+            # "Error 326: client id already in use" but the Python side
+            # only sees a timeout. Wait longer so the gateway releases it.
+            if isinstance(exc, (TimeoutError, ConnectionError)) or \
+               "client id" in exc_str or "already in use" in exc_str or \
+               "timeout" in exc_str:
+                wait = 30
+                print(
+                    f"[market_data] Connection failed "
+                    f"(reconnect #{_reconnect_count}): "
+                    f"{type(exc).__name__}. "
+                    f"May be stale clientId — waiting {wait}s for "
+                    f"IB Gateway to release it..."
+                )
+            else:
+                wait = 5
+                print(
+                    f"[market_data] IBKR feed error "
+                    f"(reconnect #{_reconnect_count}): "
+                    f"{type(exc).__name__}: {exc}. "
+                    f"Reconnecting in {wait}s..."
+                )
+            time.sleep(wait)
         finally:
             # Cancel tick subscription before disconnecting.
             # cancelTickByTickData takes (contract, tickType).

@@ -44,7 +44,7 @@ from cache import (
     save_trades,
     upsert_daily_stats,
 )
-from market_data import (
+from market_data_ibkr import (
     get_session_trades,
     load_session_cache,
     reset_session,
