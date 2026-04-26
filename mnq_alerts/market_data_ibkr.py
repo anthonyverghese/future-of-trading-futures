@@ -307,6 +307,7 @@ def trade_stream(
     while True:
         ib = None
         ticker = None
+        contract = None
         try:
             ib = _connect_ibkr()
             contract = _resolve_mnq_contract(ib)
@@ -431,9 +432,10 @@ def trade_stream(
             time.sleep(5)
         finally:
             # Cancel tick subscription before disconnecting.
-            if ticker is not None and ib is not None:
+            # cancelTickByTickData takes (contract, tickType).
+            if ticker is not None and contract is not None and ib is not None:
                 try:
-                    ib.cancelTickByTickData(ticker)
+                    ib.cancelTickByTickData(contract, "AllLast")
                 except Exception:
                     pass
             if ib is not None:
