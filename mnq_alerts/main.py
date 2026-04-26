@@ -44,7 +44,8 @@ from cache import (
     save_trades,
     upsert_daily_stats,
 )
-from market_data_ibkr import (
+from ibkr_feed_compare import start_comparison, stop_comparison, log_comparison
+from market_data import (
     get_session_trades,
     load_session_cache,
     reset_session,
@@ -206,6 +207,12 @@ def run() -> None:
             send_notification("Bot Init Failed", f"Bot disabled for today: {e}")
             bot = None
 
+    # Start IBKR shadow feed for comparison (runs in background thread).
+    try:
+        start_comparison()
+    except Exception as e:
+        print(f"[ibkr-compare] Failed to start: {e}")
+
     ib_locked = False
     ibh: float | None = None
     ibl: float | None = None
@@ -315,6 +322,13 @@ def run() -> None:
                 f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] "
                 f"Session close sequence started"
             )
+
+            # Final IBKR comparison and shutdown.
+            try:
+                log_comparison(get_session_trades())
+                stop_comparison()
+            except Exception:
+                pass
 
             try:
                 evaluator.close_session()
@@ -584,6 +598,16 @@ def run() -> None:
                     f"{ib_str}"
                 )
             last_status_ts = now_ts
+
+            # Log IBKR feed comparison every ~5 min (every 60th status).
+            if not hasattr(log_comparison, '_counter'):
+                log_comparison._counter = 0
+            log_comparison._counter += 1
+            if log_comparison._counter % 60 == 0:
+                try:
+                    log_comparison(get_session_trades())
+                except Exception:
+                    pass
 
 
 if __name__ == "__main__":
