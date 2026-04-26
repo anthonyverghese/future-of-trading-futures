@@ -66,11 +66,18 @@ def stop_comparison() -> None:
 def get_ibkr_stats() -> dict:
     """Return current IBKR feed stats for comparison logging."""
     vwap = None
-    if _ibkr_prices and _ibkr_sizes:
-        total_pv = sum(p * s for p, s in zip(_ibkr_prices, _ibkr_sizes))
-        total_vol = sum(_ibkr_sizes)
-        if total_vol > 0:
-            vwap = total_pv / total_vol
+    # Snapshot lengths to avoid race with background thread appending.
+    try:
+        n = min(len(_ibkr_prices), len(_ibkr_sizes))
+        if n > 0:
+            total_pv = sum(
+                _ibkr_prices[i] * _ibkr_sizes[i] for i in range(n)
+            )
+            total_vol = sum(_ibkr_sizes[:n])
+            if total_vol > 0:
+                vwap = total_pv / total_vol
+    except (IndexError, ValueError):
+        pass  # race condition — skip this cycle
     return {
         "tick_count": _ibkr_tick_count,
         "skipped": _ibkr_skipped,
@@ -146,6 +153,7 @@ def _run_ibkr_feed() -> None:
 
     while not _stop_event.is_set():
         ib = None
+        contract = None
         try:
             print(
                 f"[ibkr-compare] Connecting to IBKR at "
@@ -278,7 +286,7 @@ def _run_ibkr_feed() -> None:
                         break
                     time.sleep(0.5)
         finally:
-            if ib is not None:
+            if ib is not None and contract is not None:
                 try:
                     ib.cancelTickByTickData(contract, "AllLast")
                 except Exception:

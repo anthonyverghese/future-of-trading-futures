@@ -44,7 +44,12 @@ from cache import (
     save_trades,
     upsert_daily_stats,
 )
-from ibkr_feed_compare import start_comparison, stop_comparison, log_comparison
+try:
+    from ibkr_feed_compare import start_comparison, stop_comparison, log_comparison
+    _IBKR_COMPARE_AVAILABLE = True
+except Exception as _compare_err:
+    _IBKR_COMPARE_AVAILABLE = False
+    print(f"[ibkr-compare] Module not available: {_compare_err}")
 from market_data import (
     get_session_trades,
     load_session_cache,
@@ -208,10 +213,11 @@ def run() -> None:
             bot = None
 
     # Start IBKR shadow feed for comparison (runs in background thread).
-    try:
-        start_comparison()
-    except Exception as e:
-        print(f"[ibkr-compare] Failed to start: {e}")
+    if _IBKR_COMPARE_AVAILABLE:
+        try:
+            start_comparison()
+        except Exception as e:
+            print(f"[ibkr-compare] Failed to start: {e}")
 
     ib_locked = False
     ibh: float | None = None
@@ -324,11 +330,12 @@ def run() -> None:
             )
 
             # Final IBKR comparison and shutdown.
-            try:
-                log_comparison(get_session_trades())
-                stop_comparison()
-            except Exception:
-                pass
+            if _IBKR_COMPARE_AVAILABLE:
+                try:
+                    log_comparison(get_session_trades())
+                    stop_comparison()
+                except Exception:
+                    pass
 
             try:
                 evaluator.close_session()
@@ -600,14 +607,16 @@ def run() -> None:
             last_status_ts = now_ts
 
             # Log IBKR feed comparison every ~5 min (every 60th status).
-            if not hasattr(log_comparison, '_counter'):
-                log_comparison._counter = 0
-            log_comparison._counter += 1
-            if log_comparison._counter % 60 == 0:
-                try:
-                    log_comparison(get_session_trades())
-                except Exception:
-                    pass
+            if _IBKR_COMPARE_AVAILABLE:
+                _ibkr_compare_counter = getattr(
+                    trade_stream, '_compare_counter', 0
+                ) + 1
+                trade_stream._compare_counter = _ibkr_compare_counter
+                if _ibkr_compare_counter % 60 == 0:
+                    try:
+                        log_comparison(get_session_trades())
+                    except Exception:
+                        pass
 
 
 if __name__ == "__main__":
