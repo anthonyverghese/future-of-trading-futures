@@ -7,7 +7,7 @@ Handles:
 - 1-position constraint
 - Scoring filter (skipped entries don't activate zone)
 - Streak tracking across days
-- Risk limits ($150 daily loss, 3 consecutive losses)
+- Daily loss limit (default $100)
 """
 
 from __future__ import annotations
@@ -51,8 +51,8 @@ def simulate_day(
     weights: dict | None = None,
     min_score: int = -99,
     streak_state: tuple[int, int] = (0, 0),
-    daily_loss: float = 150.0,
-    max_consec: int = 3,
+    daily_loss: float = 100.0,
+    max_consec: int = 999,
     timeout_secs: int = 900,
 ) -> tuple[list[TradeRecord], tuple[int, int]]:
     """Simulate one day. Returns (trades, (cw, cl))."""
@@ -94,7 +94,7 @@ def simulate_day(
         if ens >= eod:
             break
         if stopped:
-            continue
+            break
         if gi <= pos_exit_idx:
             continue
 
@@ -117,14 +117,28 @@ def simulate_day(
             if not zone.update(pj):
                 continue
 
+            # Precompute values used by both filters and factors.
+            et_mins = int(arrays.et_mins[gi])
+            range_30m = float(arrays.range_30m_pts[gi])
+
+            # Suppress entries during weak time windows (13:30-14:00 ET).
+            if 810 <= et_mins < 840:
+                zone.reset()
+                continue
+
+            # Vol filter: skip dead markets (matches live bot).
+            if pj > 0 and range_30m / pj < 0.0015:
+                zone.reset()
+                continue
+
             # Zone entry fired. Compute factors and score.
             d = "up" if pj > zone.price else "down"
             fac = EntryFactors(
                 level=name, direction=d, entry_count=ec[name] + 1,
-                et_mins=int(arrays.et_mins[gi]),
+                et_mins=et_mins,
                 tick_rate=float(arrays.tick_rates[gi]),
                 session_move=float(arrays.session_move[gi]),
-                range_30m=float(arrays.range_30m_pts[gi]),
+                range_30m=range_30m,
                 approach_speed=float(arrays.approach_speed[gi]),
                 tick_density=float(arrays.tick_density[gi]),
             )

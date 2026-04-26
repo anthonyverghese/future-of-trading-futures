@@ -38,10 +38,16 @@ class BacktestParams:
     weights_values: dict | None # actual weight dict (None if too large)
     scoring_factors: list[str]  # e.g. ["level","combo","time","tick","entry_count","session_move","streak","vol","approach","density"]
 
+    # Levels
+    levels: list[str] | None = None  # e.g. ["IBH","IBL","VWAP","FIB_EXT_HI","FIB_EXT_LO","FIB_0.5"]
+    include_vwap: bool = True
+
     # Filters
-    include_vwap: bool
-    vol_filter_pct: float | None  # 0.15 or None (disabled)
-    max_per_level: int
+    vol_filter_pct: float | None = None  # 0.15 or None (disabled)
+    max_per_level: int = 12
+
+    # Approach features (Phase 2)
+    approach_features: list[str] | None = None  # e.g. ["duration","velocity","volume","deceleration"]
 
     # Trade management
     timeout_secs: int           # 900 default
