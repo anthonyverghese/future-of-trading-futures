@@ -1,0 +1,51 @@
+{
+  "description": "Bot 7 levels unscored DEPLOYED",
+  "timestamp": "2026-04-26",
+  "params": {
+    "zone_type": "BotZoneTradeReset",
+    "entry_threshold": 1.0,
+    "exit_threshold": "trade_reset",
+    "target": "T8",
+    "per_level_targets": null,
+    "stop_pts": 20.0,
+    "min_score": -99,
+    "weights_type": "none (unscored)",
+    "levels": [
+      "IBH",
+      "FIB_EXT_HI_1.272",
+      "FIB_EXT_LO_1.272",
+      "FIB_0.236",
+      "FIB_0.5",
+      "FIB_0.618",
+      "FIB_0.786"
+    ],
+    "include_vwap": false,
+    "vol_filter_pct": 0.0015,
+    "max_per_level": 12,
+    "timeout_secs": 900,
+    "daily_loss": 100.0,
+    "max_consec": null,
+    "data_days": 331,
+    "data_range": "2025-01-02 to 2026-04-23",
+    "suppressed_windows": [
+      [
+        810,
+        840
+      ]
+    ],
+    "description": "Bot 7 levels unscored DEPLOYED"
+  },
+  "full_sample": {
+    "days": 331,
+    "trades": 7790,
+    "trades_per_day": 23.5,
+    "wr": 75.0,
+    "pnl_per_day": 30.8,
+    "max_dd": 699
+  },
+  "recent_60": {
+    "trades_per_day": 23.4,
+    "wr": 74.4,
+    "pnl_per_day": 10.98
+  }
+}

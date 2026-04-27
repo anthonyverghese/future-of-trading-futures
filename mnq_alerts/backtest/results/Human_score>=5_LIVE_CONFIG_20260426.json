@@ -1,0 +1,40 @@
+{
+  "description": "Human score>=5 LIVE CONFIG",
+  "timestamp": "2026-04-26",
+  "params": {
+    "zone_type": "HumanZone",
+    "entry_threshold": 7.0,
+    "exit_threshold": "20.0",
+    "levels": [
+      "IBH",
+      "IBL",
+      "VWAP",
+      "FIB_EXT_HI_1.272",
+      "FIB_EXT_LO_1.272"
+    ],
+    "min_score": 5,
+    "weights_type": "hand-tuned (composite_score)",
+    "suppressed_windows": [
+      [
+        810,
+        840
+      ]
+    ],
+    "data_days": 331,
+    "data_range": "2025-01-02 to 2026-04-23",
+    "description": "Human score>=5 LIVE CONFIG"
+  },
+  "full_sample": {
+    "days": 331,
+    "trades": 1882,
+    "trades_per_day": 5.7,
+    "wr": 81.9,
+    "pnl_per_day": 19.18,
+    "max_dd": 532
+  },
+  "recent_60": {
+    "trades_per_day": 6.2,
+    "wr": 81.6,
+    "pnl_per_day": 20.1
+  }
+}
