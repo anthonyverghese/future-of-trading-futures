@@ -60,27 +60,24 @@ class BotZone:
         self.entry_count = 0
         self.drifts = drifts  # True for VWAP
 
-    # Exit threshold: price must move this far from level to clear
-    # in_zone/suppressed state. Wider than entry to prevent oscillation
-    # when price hovers near the boundary.
-    _EXIT_MULTIPLIER = 3  # 3 × BOT_ENTRY_THRESHOLD = 3pts
-
     def update(self, current_price: float) -> bool:
         """Returns True on fresh zone entry (price within BOT_ENTRY_THRESHOLD).
 
         Zone lifecycle:
         - Price enters 1pt threshold → fires (returns True)
-        - If trade opens → zone stays in_zone, reset on trade close
-        - If trade blocked/skipped → zone is suppressed, won't re-fire
-          until price moves beyond 3pt (hysteresis prevents oscillation)
+        - If trade opens → zone stays in_zone, reset when trade closes
+        - If trade blocked (position open) → stays in_zone, reset when
+          trade closes (all zones reset on trade close)
+        - If skipped (vol/score/time) → suppressed, clears when price
+          leaves the 1pt threshold
         """
-        dist = abs(current_price - self.price)
+        near = abs(current_price - self.price) <= BOT_ENTRY_THRESHOLD
         if self.in_zone or self.suppressed:
-            if dist > BOT_ENTRY_THRESHOLD * self._EXIT_MULTIPLIER:
+            if not near:
                 self.in_zone = False
                 self.suppressed = False
             return False
-        if dist <= BOT_ENTRY_THRESHOLD:
+        if near:
             self.in_zone = True
             self.entry_count += 1
             return True
@@ -285,14 +282,14 @@ class BotTrader:
         if not self._broker.is_connected:
             return
 
-        # If a trade just closed, reset the zone on that level.
+        # If a trade just closed, reset ALL zones so levels that were
+        # blocked by "position already open" can fire again.
         if (
             self._active_trade_level is not None
             and not self._broker._position_open
         ):
-            lv = self._active_trade_level
-            if lv in self._zones:
-                self._zones[lv].reset()
+            for z in self._zones.values():
+                z.reset()
             self._active_trade_level = None
 
         # Update 60-min price window for trend calculation.
@@ -399,7 +396,8 @@ class BotTrader:
                         bz.suppress()
                 else:
                     print(f"[broker] Skipped {bz.name}: {reason}")
-                    bz.suppress()
+                    # Zone stays in_zone=True — won't re-fire until
+                    # trade closes (which resets all zones)
 
     def advance_zones(self, price: float) -> None:
         """Update zone state without trading (used during replay)."""
