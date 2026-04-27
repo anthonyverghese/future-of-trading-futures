@@ -22,6 +22,7 @@ from alert_manager import AlertManager
 from config import (
     ALERT_THRESHOLD_POINTS,
     BOT_EOD_FLATTEN_BUFFER_MIN,
+    BOT_INCLUDE_INTERIOR_FIBS,
     DISPLAY_TZ,
     IB_END_HOUR,
     IB_END_MIN,
@@ -31,7 +32,7 @@ from config import (
     MARKET_OPEN_HOUR,
     MARKET_OPEN_MIN,
 )
-from levels import calculate_fib_levels
+from levels import calculate_fib_levels, calculate_interior_fibs
 from cache import (
     CACHE_INTERVAL_SECONDS,
     clear_if_stale,
@@ -485,8 +486,6 @@ def run() -> None:
                 alert_manager.update_fib_levels(fib_levels)
                 bot_call("update_fib_levels", fib_levels)
                 # Interior fib retracements for bot only.
-                from levels import calculate_interior_fibs
-                from config import BOT_INCLUDE_INTERIOR_FIBS
                 if BOT_INCLUDE_INTERIOR_FIBS:
                     interior_fibs = calculate_interior_fibs(ibh, ibl)
                     bot_call("update_fib_levels", interior_fibs)
