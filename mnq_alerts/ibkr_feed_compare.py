@@ -149,6 +149,12 @@ def _run_ibkr_feed() -> None:
     """Background thread: connect to IBKR and accumulate ticks."""
     global _ibkr_tick_count, _ibkr_skipped, _ibkr_last_price
 
+    # ib_insync requires an asyncio event loop. Background threads
+    # don't have one by default — create one.
+    import asyncio
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     from ib_insync import IB, ContFuture, Future
 
     while not _stop_event.is_set():
