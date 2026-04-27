@@ -56,7 +56,6 @@ class BotZone:
         self.name = name
         self.price = price
         self.in_zone = False
-        self.suppressed = False  # True when entry was blocked; clears on price exit
         self.entry_count = 0
         self.drifts = drifts  # True for VWAP
 
@@ -64,37 +63,26 @@ class BotZone:
         """Returns True on fresh zone entry (price within BOT_ENTRY_THRESHOLD).
 
         Zone lifecycle:
-        - Price enters 1pt threshold → fires (returns True)
-        - If trade opens → zone stays in_zone, reset when trade closes
-        - If trade blocked (position open) → stays in_zone, reset when
-          trade closes (all zones reset on trade close)
-        - If skipped (vol/score/time) → suppressed, clears when price
-          leaves the 1pt threshold
+        - Price enters 1pt threshold → fires (returns True), in_zone=True
+        - Zone stays in_zone (won't re-fire) until either:
+          a) Price leaves 1pt threshold → in_zone clears, can fire on
+             next approach
+          b) reset() called (trade closes) → in_zone clears immediately
+        - Trade close resets ALL zones so any level can fire
         """
-        near = abs(current_price - self.price) <= BOT_ENTRY_THRESHOLD
-        if self.in_zone or self.suppressed:
-            if not near:
+        if self.in_zone:
+            if abs(current_price - self.price) > BOT_ENTRY_THRESHOLD:
                 self.in_zone = False
-                self.suppressed = False
             return False
-        if near:
+        if abs(current_price - self.price) <= BOT_ENTRY_THRESHOLD:
             self.in_zone = True
             self.entry_count += 1
             return True
         return False
 
-    def suppress(self) -> None:
-        """Suppress zone after a skipped/blocked entry.
-
-        Zone won't re-fire until price leaves the threshold area.
-        """
-        self.in_zone = False
-        self.suppressed = True
-
     def reset(self) -> None:
         """Reset zone after trade closes. Allows re-entry on next approach."""
         self.in_zone = False
-        self.suppressed = False
 
 
 def bot_entry_score(
@@ -332,7 +320,7 @@ class BotTrader:
                             f"[bot] Skipped {bz.name} (suppressed time window "
                             f"{now_et.strftime('%H:%M')} ET)"
                         )
-                        bz.suppress()
+                        # Zone stays in_zone — clears when price leaves 1pt
                         continue
 
                 # Per-level daily trade cap.
@@ -342,7 +330,7 @@ class BotTrader:
                         f"[bot] Skipped {bz.name} (max {BOT_MAX_ENTRIES_PER_LEVEL} "
                         f"trades/level/day reached)"
                     )
-                    bz.suppress()
+                    # Zone stays in_zone — clears when price leaves 1pt
                     continue
 
                 # Volatility filter: skip dead markets.
@@ -354,7 +342,7 @@ class BotTrader:
                         f"[bot] Skipped {bz.name} (low vol: 30m range "
                         f"{range_30m_pct:.3f}% < {BOT_VOL_FILTER_MIN_RANGE_PCT*100:.2f}%)"
                     )
-                    bz.suppress()
+                    # Zone stays in_zone — clears when price leaves 1pt
                     continue
 
                 score = bot_entry_score(
@@ -372,7 +360,7 @@ class BotTrader:
                         f"[bot] Skipped {bz.name} (score {score} < {BOT_MIN_SCORE}) | "
                         f"test #{bz.entry_count}, {direction}, trend={trend_60m:+.0f}"
                     )
-                    bz.suppress()
+                    # Zone stays in_zone — clears when price leaves 1pt
                     continue
                 allowed, reason = self._broker.can_trade()
                 if allowed:
@@ -393,7 +381,7 @@ class BotTrader:
                         self._active_trade_level = bz.name
                     else:
                         print(f"[broker] Trade failed: {result.error}")
-                        bz.suppress()
+                        # Zone stays in_zone — clears when price leaves 1pt
                 else:
                     print(f"[broker] Skipped {bz.name}: {reason}")
                     # Zone stays in_zone=True — won't re-fire until
