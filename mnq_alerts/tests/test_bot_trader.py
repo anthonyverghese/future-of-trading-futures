@@ -378,3 +378,80 @@ class TestBotEntryScore:
         # range_30m_pct=0.10 (<0.15)=-4, no time/tick
         score = bot_entry_score("IBL", "up", 2, tick_rate=1500, range_30m_pct=0.10)
         assert score == -2  # 1 + 0 + 1 + (-4)
+
+
+# ---------------------------------------------------------------------------
+# 4. Per-level target/stop configuration
+# ---------------------------------------------------------------------------
+
+
+class TestPerLevelTS:
+    def test_per_level_ts_has_all_deployed_levels(self):
+        """Every deployed bot level must have a T/S entry."""
+        from config import BOT_PER_LEVEL_TS
+        expected_levels = [
+            "IBH", "FIB_EXT_HI_1.272", "FIB_EXT_LO_1.272",
+            "FIB_0.236", "FIB_0.5", "FIB_0.618", "FIB_0.786",
+        ]
+        for level in expected_levels:
+            assert level in BOT_PER_LEVEL_TS, f"Missing T/S for {level}"
+
+    def test_per_level_ts_values_valid(self):
+        """All targets >= 6, all stops >= 6, stop >= target."""
+        from config import BOT_PER_LEVEL_TS
+        for level, (tgt, stop) in BOT_PER_LEVEL_TS.items():
+            assert tgt >= 6, f"{level}: target {tgt} < 6"
+            assert stop >= 6, f"{level}: stop {stop} < 6"
+            assert stop >= tgt, f"{level}: stop {stop} < target {tgt}"
+
+    def test_interior_fibs_have_bigger_targets(self):
+        """Interior fibs should have T >= 8 (bigger bounces inside IB range)."""
+        from config import BOT_PER_LEVEL_TS
+        interior = ["FIB_0.236", "FIB_0.5", "FIB_0.618", "FIB_0.786"]
+        for level in interior:
+            tgt, _ = BOT_PER_LEVEL_TS[level]
+            assert tgt >= 8, f"{level}: interior fib target {tgt} < 8"
+
+    def test_extension_levels_have_smaller_targets(self):
+        """Extension/IBH levels should have T <= 8 (quick small bounces)."""
+        from config import BOT_PER_LEVEL_TS
+        extensions = ["IBH", "FIB_EXT_HI_1.272", "FIB_EXT_LO_1.272"]
+        for level in extensions:
+            tgt, _ = BOT_PER_LEVEL_TS[level]
+            assert tgt <= 8, f"{level}: extension target {tgt} > 8"
+
+    def test_fallback_to_default_for_unknown_level(self):
+        """Unknown levels should use default BOT_TARGET/STOP_POINTS."""
+        from config import BOT_PER_LEVEL_TS, BOT_TARGET_POINTS, BOT_STOP_POINTS
+        tgt, stop = BOT_PER_LEVEL_TS.get("UNKNOWN_LEVEL", (BOT_TARGET_POINTS, BOT_STOP_POINTS))
+        assert tgt == BOT_TARGET_POINTS
+        assert stop == BOT_STOP_POINTS
+
+
+# ---------------------------------------------------------------------------
+# 5. Interior fib level calculation
+# ---------------------------------------------------------------------------
+
+
+class TestInteriorFibs:
+    def test_calculate_interior_fibs(self):
+        from levels import calculate_interior_fibs
+        fibs = calculate_interior_fibs(27100.0, 26900.0)
+        # IB range = 200
+        assert abs(fibs["FIB_0.236"] - (26900 + 0.236 * 200)) < 0.01
+        assert abs(fibs["FIB_0.5"] - (26900 + 0.5 * 200)) < 0.01
+        assert abs(fibs["FIB_0.618"] - (26900 + 0.618 * 200)) < 0.01
+        assert abs(fibs["FIB_0.786"] - (26900 + 0.786 * 200)) < 0.01
+
+    def test_interior_fibs_within_ib_range(self):
+        from levels import calculate_interior_fibs
+        ibh, ibl = 27100.0, 26900.0
+        fibs = calculate_interior_fibs(ibh, ibl)
+        for name, price in fibs.items():
+            assert ibl <= price <= ibh, f"{name}={price} outside IB range [{ibl}, {ibh}]"
+
+    def test_interior_fibs_excludes_0382(self):
+        """FIB_0.382 should NOT be included (weakest level, 70.3% WR)."""
+        from levels import calculate_interior_fibs
+        fibs = calculate_interior_fibs(27100.0, 26900.0)
+        assert "FIB_0.382" not in fibs

@@ -1,0 +1,86 @@
+{
+  "description": "Bot 7 levels per-level T/S unscored",
+  "timestamp": "2026-04-26",
+  "params": {
+    "zone_type": "BotZoneTradeReset",
+    "entry_threshold": 1.0,
+    "levels": [
+      "IBH",
+      "FIB_EXT_HI_1.272",
+      "FIB_EXT_LO_1.272",
+      "FIB_0.236",
+      "FIB_0.5",
+      "FIB_0.618",
+      "FIB_0.786"
+    ],
+    "per_level_ts": {
+      "IBH": [
+        6,
+        20
+      ],
+      "FIB_EXT_HI_1.272": [
+        6,
+        20
+      ],
+      "FIB_EXT_LO_1.272": [
+        6,
+        20
+      ],
+      "FIB_0.236": [
+        8,
+        25
+      ],
+      "FIB_0.5": [
+        10,
+        25
+      ],
+      "FIB_0.618": [
+        12,
+        20
+      ],
+      "FIB_0.786": [
+        10,
+        25
+      ]
+    },
+    "min_score": -99,
+    "weights_type": "none (unscored)",
+    "include_vwap": false,
+    "include_ibl": false,
+    "vol_filter_pct": 0.0015,
+    "max_per_level": 12,
+    "timeout_secs": 900,
+    "daily_loss": 100.0,
+    "suppressed_windows": [
+      [
+        810,
+        840
+      ]
+    ],
+    "data_days": 331,
+    "data_range": "2025-01-02 to 2026-04-23",
+    "ts_training_days": 200,
+    "ts_test_days": 131,
+    "description": "Bot 7 levels per-level T/S unscored \u2014 proper simulation"
+  },
+  "full_sample": {
+    "days": 331,
+    "trades": 7220,
+    "trades_per_day": 21.8,
+    "wr": 76.8,
+    "pnl_per_day": 37.64,
+    "max_dd": 594
+  },
+  "test_131": {
+    "days": 131,
+    "trades": 2741,
+    "trades_per_day": 20.9,
+    "wr": 77.0,
+    "pnl_per_day": 31.6
+  },
+  "recent_60": {
+    "trades_per_day": 23.2,
+    "wr": 76.6,
+    "pnl_per_day": 30.89
+  }
+}

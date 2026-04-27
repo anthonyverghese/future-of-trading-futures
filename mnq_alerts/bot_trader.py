@@ -31,6 +31,7 @@ from config import (
     BOT_INCLUDE_VWAP,
     BOT_MAX_ENTRIES_PER_LEVEL,
     BOT_MIN_SCORE,
+    BOT_PER_LEVEL_TS,
     BOT_STOP_POINTS,
     BOT_TARGET_POINTS,
     BOT_TREND_LOOKBACK_MIN,
@@ -290,11 +291,6 @@ class BotTrader:
         else:
             trend_60m = 0.0
 
-        # Compute IB-range-normalized T/S.
-        target_pts = BOT_TARGET_POINTS
-        stop_pts = BOT_STOP_POINTS
-        entry_limit_buffer = round(target_pts / 2 * 4) / 4
-
         # 30m range as % of price (for scoring).
         range_30m_pct = (
             range_30m / price * 100 if range_30m is not None and price > 0 else None
@@ -303,10 +299,17 @@ class BotTrader:
         for bz in self._zones.values():
             if bz.update(price):
                 direction = "up" if price > bz.price else "down"
+
+                # Per-level target/stop (falls back to default if not configured).
+                target_pts, stop_pts = BOT_PER_LEVEL_TS.get(
+                    bz.name, (BOT_TARGET_POINTS, BOT_STOP_POINTS)
+                )
+                entry_limit_buffer = round(target_pts / 2 * 4) / 4
                 print(
                     f"[bot] Zone entry: {bz.name} test #{bz.entry_count} "
                     f"{direction} @ {price:.2f} (line {bz.price:.2f}, "
-                    f"dist={abs(price - bz.price):.2f})"
+                    f"dist={abs(price - bz.price):.2f}, "
+                    f"T{target_pts}/S{stop_pts})"
                 )
 
                 # Suppress entries during weak time windows.

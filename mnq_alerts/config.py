@@ -57,8 +57,19 @@ IBKR_ACCOUNT = os.getenv(
 BOT_ENTRY_THRESHOLD = (
     1.0  # Bot trades when price is within 1 pt of level (vs 7 for human)
 )
-BOT_TARGET_POINTS = 8.0  # Fixed target (walk-forward OOS validated 2026-04-19)
-BOT_STOP_POINTS = 20.0  # Fixed stop
+BOT_TARGET_POINTS = 8.0  # Default target (used if level not in PER_LEVEL_TS)
+BOT_STOP_POINTS = 20.0  # Default stop
+# Per-level target/stop: MFE-based, trained on first 200 days, validated on 131 held-out.
+# Interior fibs have bigger bounces (T10-T12), extensions/IBH have smaller (T6).
+BOT_PER_LEVEL_TS = {
+    "IBH": (6, 20),
+    "FIB_EXT_HI_1.272": (6, 20),
+    "FIB_EXT_LO_1.272": (6, 20),
+    "FIB_0.236": (8, 25),
+    "FIB_0.5": (10, 25),
+    "FIB_0.618": (12, 20),
+    "FIB_0.786": (10, 25),
+}
 BOT_INCLUDE_VWAP = False  # VWAP excluded: drags in weak regimes (66% WR)
 BOT_INCLUDE_IBL = False  # IBL excluded: -$1.5/day, 72.2% WR (weakest level)
 BOT_INCLUDE_INTERIOR_FIBS = True  # Interior fib retracements (0.236, 0.5, 0.618, 0.786)
