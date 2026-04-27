@@ -34,6 +34,9 @@ _ibkr_timestamps: list[datetime.datetime] = []
 _ibkr_tick_count: int = 0
 _ibkr_skipped: int = 0
 _ibkr_last_price: float | None = None
+_ibkr_high: float = -float("inf")
+_ibkr_low: float = float("inf")
+_ibkr_start_time: float | None = None  # monotonic time when first tick arrived
 
 # Control.
 _thread: threading.Thread | None = None
@@ -78,12 +81,18 @@ def get_ibkr_stats() -> dict:
                 vwap = total_pv / total_vol
     except (IndexError, ValueError):
         pass  # race condition — skip this cycle
+    elapsed = time.monotonic() - _ibkr_start_time if _ibkr_start_time else 0
+    ticks_per_min = _ibkr_tick_count / (elapsed / 60) if elapsed > 0 else 0
     return {
         "tick_count": _ibkr_tick_count,
         "skipped": _ibkr_skipped,
         "last_price": _ibkr_last_price,
         "vwap": vwap,
         "total_trades": len(_ibkr_prices),
+        "high": _ibkr_high if _ibkr_high > -float("inf") else None,
+        "low": _ibkr_low if _ibkr_low < float("inf") else None,
+        "ticks_per_min": ticks_per_min,
+        "elapsed_min": elapsed / 60 if elapsed > 0 else 0,
     }
 
 
@@ -134,13 +143,24 @@ def log_comparison(databento_trades: pd.DataFrame) -> None:
     ibkr_last_s = f"{ibkr_last:.2f}" if ibkr_last else "N/A"
     price_diff_s = f"{price_diff:+.2f}" if price_diff is not None else "N/A"
 
+    # High/low comparison
+    ibkr_hi = ibkr.get("high")
+    ibkr_lo = ibkr.get("low")
+    db_hi = float(databento_trades["Price"].max()) if not databento_trades.empty else None
+    db_lo = float(databento_trades["Price"].min()) if not databento_trades.empty else None
+    hi_diff_s = f"{ibkr_hi - db_hi:+.2f}" if ibkr_hi and db_hi else "N/A"
+    lo_diff_s = f"{ibkr_lo - db_lo:+.2f}" if ibkr_lo and db_lo else "N/A"
+
+    tpm = ibkr.get("ticks_per_min", 0)
+    elapsed = ibkr.get("elapsed_min", 0)
+
     print(
         f"[ibkr-compare] "
-        f"Ticks: DB={db_count:,} IBKR={ibkr_total:,} "
-        f"diff={count_diff:+,} ({count_pct:.1f}%) | "
-        f"VWAP: DB={db_vwap_s} IBKR={ibkr_vwap_s} diff={vwap_diff_s} | "
+        f"IBKR: {ibkr_total:,} ticks ({tpm:.0f}/min, {elapsed:.0f}min) | "
         f"Last: DB={db_last_s} IBKR={ibkr_last_s} diff={price_diff_s} | "
-        f"IBKR skipped: {ibkr['skipped']}",
+        f"Hi diff={hi_diff_s} Lo diff={lo_diff_s} | "
+        f"VWAP diff={vwap_diff_s} | "
+        f"skipped={ibkr['skipped']}",
         flush=True,
     )
 
@@ -256,10 +276,16 @@ def _run_ibkr_feed() -> None:
                     _ibkr_last_price = price
                     _ibkr_tick_count += 1
                     interval_ticks += 1
+                    if price > _ibkr_high:
+                        _ibkr_high = price
+                    if price < _ibkr_low:
+                        _ibkr_low = price
+                    if _ibkr_start_time is None:
+                        _ibkr_start_time = time.monotonic()
 
-                # Periodic stats (every 5 min).
+                # Periodic stats (every 1 min for validation).
                 now_mono = time.monotonic()
-                if now_mono - last_log_time >= 300.0:
+                if now_mono - last_log_time >= 60.0:
                     elapsed = now_mono - last_log_time
                     rate = interval_ticks / elapsed if elapsed > 0 else 0
                     print(

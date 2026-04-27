@@ -618,7 +618,7 @@ def run() -> None:
                     trade_stream, '_compare_counter', 0
                 ) + 1
                 trade_stream._compare_counter = _ibkr_compare_counter
-                if _ibkr_compare_counter % 60 == 0:
+                if _ibkr_compare_counter % 12 == 0:  # ~every 1 min
                     try:
                         log_comparison(get_session_trades())
                     except Exception:
