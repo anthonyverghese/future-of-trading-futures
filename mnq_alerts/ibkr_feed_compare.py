@@ -168,6 +168,7 @@ def log_comparison(databento_trades: pd.DataFrame) -> None:
 def _run_ibkr_feed() -> None:
     """Background thread: connect to IBKR and accumulate ticks."""
     global _ibkr_tick_count, _ibkr_skipped, _ibkr_last_price
+    global _ibkr_high, _ibkr_low, _ibkr_start_time
 
     # ib_insync requires an asyncio event loop. Background threads
     # don't have one by default — create one.
