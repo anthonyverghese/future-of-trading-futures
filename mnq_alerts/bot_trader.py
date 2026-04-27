@@ -10,7 +10,7 @@ Bot parameters (walk-forward validated 2026-04-17 over 319 days):
   - Exit zone reset: 15 pts away (vs 20 pt for human alerts)
   - Target/Stop: IB-range-normalized (7%/20% of IB range)
   - Risk: $100/day loss limit, 1 position at a time, 13:30-14:00 ET suppressed
-  - Levels: IBH, FIB_EXT_HI, FIB_EXT_LO, FIB_0.236, FIB_0.5, FIB_0.618, FIB_0.786
+  - Levels: IBH, FIB_EXT_HI, FIB_EXT_LO, FIB_0.236, FIB_0.5, FIB_0.618, FIB_0.764
     (IBL and VWAP excluded — weak OOS performance)
   - Scoring: unscored (scoring hurts OOS, validated 2026-04-26)
 """
@@ -60,6 +60,11 @@ class BotZone:
         self.entry_count = 0
         self.drifts = drifts  # True for VWAP
 
+    # Exit threshold: price must move this far from level to clear
+    # in_zone/suppressed state. Wider than entry to prevent oscillation
+    # when price hovers near the boundary.
+    _EXIT_MULTIPLIER = 3  # 3 × BOT_ENTRY_THRESHOLD = 3pts
+
     def update(self, current_price: float) -> bool:
         """Returns True on fresh zone entry (price within BOT_ENTRY_THRESHOLD).
 
@@ -67,15 +72,15 @@ class BotZone:
         - Price enters 1pt threshold → fires (returns True)
         - If trade opens → zone stays in_zone, reset on trade close
         - If trade blocked/skipped → zone is suppressed, won't re-fire
-          until price leaves the threshold and comes back
+          until price moves beyond 3pt (hysteresis prevents oscillation)
         """
-        near = abs(current_price - self.price) <= BOT_ENTRY_THRESHOLD
+        dist = abs(current_price - self.price)
         if self.in_zone or self.suppressed:
-            if not near:
+            if dist > BOT_ENTRY_THRESHOLD * self._EXIT_MULTIPLIER:
                 self.in_zone = False
                 self.suppressed = False
             return False
-        if near:
+        if dist <= BOT_ENTRY_THRESHOLD:
             self.in_zone = True
             self.entry_count += 1
             return True
