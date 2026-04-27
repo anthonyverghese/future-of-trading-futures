@@ -36,7 +36,6 @@ if IBKR_TRADING_ENABLED:
 
 from cache import (
     load_bot_daily_risk_state,
-    load_bot_open_trade_by_parent_order_id,
     log_bot_trade_entry,
     mark_open_bot_trades_orphaned,
     update_bot_trade_exit,
@@ -333,17 +332,13 @@ class IBKRBroker:
         )
 
     def _reconcile_open_position(self) -> None:
-        """Detect and adopt any MNQ position left by a previous session.
+        """Flatten any leftover MNQ positions and cancel stray orders on startup.
 
-        Called from connect(). Walks ib.positions() for MNQ; if a non-zero
-        position exists, tries to match its bracket children by orderRef
-        (tagged at submission time) and look up the originating bot_trades
-        row by parent_order_id. On a clean match, hydrates _pending_* so
-        risk tracking and fill callbacks work on the adopted position.
-
-        On any mismatch (no orderRef, multiple positions, no DB row) we
-        flatten defensively — trading blind on an orphaned position could
-        stack a second entry or lose track of the target/stop.
+        A restart mid-trade orphans bracket orders from the old process,
+        leaving a naked position that can't be tracked. Rather than trying
+        to adopt the position (which has caused repeated issues), we simply
+        flatten everything and start clean. Daily risk state is already
+        restored from the DB so P&L tracking is preserved.
         """
         if not self._ib:
             return
@@ -353,6 +348,32 @@ class IBKRBroker:
             self._ib.sleep(1.0)
         except Exception:
             pass
+
+        # Cancel any open MNQ orders first (before flattening positions,
+        # so stray bracket orders don't interfere).
+        try:
+            stray = [
+                t
+                for t in self._ib.openTrades()
+                if t.contract.symbol == MNQ_SYMBOL
+            ]
+        except Exception:
+            stray = []
+        if stray:
+            print(
+                f"[broker] Startup: cancelling {len(stray)} stray MNQ order(s)"
+            )
+            for trade in stray:
+                try:
+                    self._ib.cancelOrder(trade.order)
+                except Exception as exc:
+                    print(f"[broker] Stray cancel error: {exc}")
+            try:
+                self._ib.sleep(1.0)
+            except Exception:
+                pass
+
+        # Flatten any open MNQ positions.
         try:
             mnq_positions = [
                 p
@@ -362,155 +383,48 @@ class IBKRBroker:
         except Exception as exc:
             print(f"[broker] Failed to query positions during reconcile: {exc}")
             return
-        if not mnq_positions:
-            # Even with no position, leftover orders from a dead prior
-            # session can still be live (e.g. parent hadn't filled yet).
-            # Cancel any MNQ orders so we don't silently open a new
-            # position at an unexpected moment.
-            try:
-                stray = [
-                    t
-                    for t in self._ib.openTrades()
-                    if t.contract.symbol == MNQ_SYMBOL
-                ]
-            except Exception:
-                stray = []
-            if stray:
+
+        if mnq_positions:
+            for pos in mnq_positions:
+                qty = int(pos.position)
+                action = "BUY" if qty < 0 else "SELL"
                 print(
-                    f"[broker] No open position but {len(stray)} live MNQ "
-                    f"order(s) found — cancelling stray orders"
+                    f"[broker] Startup: flattening leftover {pos.contract.localSymbol} "
+                    f"qty={qty} @ market"
                 )
-                for trade in stray:
-                    try:
-                        self._ib.cancelOrder(trade.order)
-                    except Exception as exc:
-                        print(f"[broker] Stray cancel error: {exc}")
+                try:
+                    contract = self._contract or pos.contract
+                    order = MarketOrder(action, abs(qty))
+                    trade = self._ib.placeOrder(contract, order)
+                    self._ib.sleep(2.0)
+                    print(
+                        f"[broker] Startup flatten: {action} {abs(qty)} "
+                        f"{pos.contract.localSymbol} status={trade.orderStatus.status}"
+                    )
+                except Exception as exc:
+                    print(f"[broker] Startup flatten error: {exc}")
+            # Verify.
+            try:
+                self._ib.sleep(1.0)
+                remaining = [
+                    p
+                    for p in self._ib.positions()
+                    if p.contract.symbol == MNQ_SYMBOL and p.position != 0
+                ]
+                if remaining:
+                    print(
+                        f"[broker] WARNING: {len(remaining)} MNQ position(s) "
+                        f"still open after startup flatten"
+                    )
+                else:
+                    print("[broker] Startup reconcile: all positions flattened")
+            except Exception:
+                pass
+        else:
+            if stray:
+                print("[broker] Startup reconcile: no positions, stray orders cancelled")
             else:
                 print("[broker] Startup reconcile: no positions or stray orders")
-            return
-        if len(mnq_positions) > 1:
-            print(
-                f"[broker] WARNING: {len(mnq_positions)} MNQ positions found on "
-                f"reconnect — flattening all (expected 1 at a time)"
-            )
-            self._defensive_flatten("multiple positions")
-            return
-
-        pos = mnq_positions[0]
-        direction = "up" if pos.position > 0 else "down"
-        try:
-            multiplier = float(pos.contract.multiplier or MNQ_MULTIPLIER)
-        except (TypeError, ValueError):
-            multiplier = float(MNQ_MULTIPLIER)
-        entry_price = pos.avgCost / multiplier if multiplier else 0.0
-
-        # Partition open MNQ orders by orderRef role.
-        try:
-            open_trades = [
-                t for t in self._ib.openTrades() if t.contract.symbol == MNQ_SYMBOL
-            ]
-        except Exception as exc:
-            print(f"[broker] Failed to query open trades during reconcile: {exc}")
-            open_trades = []
-
-        parent_order_id: int | None = None
-        target_trade = None
-        stop_trade = None
-        for t in open_trades:
-            ref = (t.order.orderRef or "").strip()
-            if not ref.startswith("bot-"):
-                continue
-            parts = ref.split("-")
-            if len(parts) < 3:
-                continue
-            try:
-                this_pid = int(parts[1])
-            except ValueError:
-                continue
-            role = parts[2]
-            if parent_order_id is None:
-                parent_order_id = this_pid
-            elif parent_order_id != this_pid:
-                print(
-                    f"[broker] WARNING: conflicting orderRefs on open MNQ orders "
-                    f"({parent_order_id} vs {this_pid}) — flattening"
-                )
-                self._defensive_flatten("conflicting orderRefs")
-                return
-            if role == "target":
-                target_trade = t
-            elif role == "stop":
-                stop_trade = t
-
-        if parent_order_id is None:
-            print(
-                f"[broker] WARNING: open MNQ position ({direction} "
-                f"{abs(pos.position)} @ ~{entry_price:.2f}) has no recognizable "
-                f"orderRef — flattening defensively"
-            )
-            self._defensive_flatten("no orderRef linkage")
-            return
-
-        now = datetime.datetime.now(datetime.timezone.utc).astimezone()
-        today = now.strftime("%Y-%m-%d")
-        row = load_bot_open_trade_by_parent_order_id(parent_order_id, today)
-        if row is None:
-            print(
-                f"[broker] WARNING: open MNQ position "
-                f"(parent_order_id={parent_order_id}) has no matching "
-                f"bot_trades row for {today} — flattening defensively"
-            )
-            self._defensive_flatten("no matching DB row")
-            return
-
-        target_price_live = (
-            target_trade.order.lmtPrice
-            if target_trade and target_trade.order.lmtPrice
-            else row["target_price"]
-        )
-        stop_price_live = (
-            stop_trade.order.auxPrice
-            if stop_trade and stop_trade.order.auxPrice
-            else row["stop_price"]
-        )
-
-        with self._lock:
-            self._position_open = True
-            self._pending_direction = direction
-            self._pending_entry_fill = entry_price
-            self._pending_line_price = row["line_price"]
-            self._pending_level_name = row["level_name"]
-            self._pending_target_price = target_price_live
-            self._pending_stop_price = stop_price_live
-            self._pending_target_pts = abs(target_price_live - row["line_price"])
-            self._pending_stop_pts = abs(stop_price_live - row["line_price"])
-            self._pending_db_trade_id = row["id"]
-            self._pending_parent_order_id = parent_order_id
-            self._pending_score = row["score"]
-            self._pending_trend_60m = row["trend_60m"]
-            self._pending_entry_count = row["entry_count"]
-            # Fresh 15-min timeout from the reconnect moment. We lose the
-            # original entry timestamp (monotonic clocks don't survive the
-            # process boundary) but a new window is safer than infinity.
-            self._position_opened_at = time.monotonic()
-
-        missing_children = []
-        if target_trade is None:
-            missing_children.append("target")
-        if stop_trade is None:
-            missing_children.append("stop")
-        missing_note = (
-            f" | missing children: {','.join(missing_children)}"
-            if missing_children
-            else ""
-        )
-        print(
-            f"[broker] Adopted open position: {direction} "
-            f"{abs(pos.position)} MNQ @ {entry_price:.2f} "
-            f"({row['level_name']}) | target {target_price_live:.2f} "
-            f"stop {stop_price_live:.2f} | db_id={row['id']} "
-            f"parent_order_id={parent_order_id}{missing_note}"
-        )
 
     def _cancel_all_mnq(self, context: str = "") -> int:
         """Cancel all open MNQ orders using both local and server-side queries.
