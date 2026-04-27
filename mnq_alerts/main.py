@@ -264,6 +264,10 @@ def run() -> None:
             alert_manager.update_levels(ibh=ibh, ibl=ibl, vwap=vwap)
             fib_levels = calculate_fib_levels(ibh, ibl)
             alert_manager.update_fib_levels(fib_levels)
+            bot_call("update_levels", ibh=ibh, ibl=ibl)
+            bot_call("update_fib_levels", fib_levels)
+            interior_fibs = calculate_interior_fibs(ibh, ibl)
+            bot_call("update_fib_levels", interior_fibs)
             print(f"[cache] IB already locked — IBH: {ibh:.2f}, IBL: {ibl:.2f}")
             alert_manager.restore_zone_state()
         print(
