@@ -45,12 +45,10 @@ from cache import (
     save_trades,
     upsert_daily_stats,
 )
-try:
-    from ibkr_feed_compare import start_comparison, stop_comparison, log_comparison
-    _IBKR_COMPARE_AVAILABLE = True
-except Exception as _compare_err:
-    _IBKR_COMPARE_AVAILABLE = False
-    print(f"[ibkr-compare] Module not available: {_compare_err}")
+# IBKR feed comparison disabled — IBKR provides 6x fewer ticks than
+# Databento (throttled reqTickByTickData), so not viable as a replacement.
+# Code kept in ibkr_feed_compare.py for future reference.
+_IBKR_COMPARE_AVAILABLE = False
 from market_data import (
     get_session_trades,
     load_session_cache,
