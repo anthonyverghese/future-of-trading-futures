@@ -10,7 +10,9 @@ Bot parameters (walk-forward validated 2026-04-17 over 319 days):
   - Exit zone reset: 15 pts away (vs 20 pt for human alerts)
   - Target/Stop: IB-range-normalized (7%/20% of IB range)
   - Risk: $100/day loss limit, 1 position at a time, 13:30-14:00 ET suppressed
-  - Scoring: bot-specific weights (retrained on 1-pt entry outcomes)
+  - Levels: IBH, FIB_EXT_HI, FIB_EXT_LO, FIB_0.236, FIB_0.5, FIB_0.618, FIB_0.786
+    (IBL and VWAP excluded — weak OOS performance)
+  - Scoring: unscored (scoring hurts OOS, validated 2026-04-26)
 """
 
 from __future__ import annotations
@@ -24,6 +26,8 @@ from broker import IBKRBroker
 from cache import load_bot_daily_level_counts
 from config import (
     BOT_ENTRY_THRESHOLD,
+    BOT_INCLUDE_IBL,
+    BOT_INCLUDE_INTERIOR_FIBS,
     BOT_INCLUDE_VWAP,
     BOT_MAX_ENTRIES_PER_LEVEL,
     BOT_MIN_SCORE,
@@ -234,7 +238,9 @@ class BotTrader:
         vwap: float | None = None,
     ) -> None:
         """Bulk update levels. Updates price on existing zones without resetting state."""
-        levels = {"IBH": ibh, "IBL": ibl}
+        levels = {"IBH": ibh}
+        if BOT_INCLUDE_IBL:
+            levels["IBL"] = ibl
         if BOT_INCLUDE_VWAP:
             levels["VWAP"] = vwap
         for name, price in levels.items():

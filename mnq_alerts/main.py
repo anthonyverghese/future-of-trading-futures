@@ -484,6 +484,13 @@ def run() -> None:
                 fib_levels = calculate_fib_levels(ibh, ibl)
                 alert_manager.update_fib_levels(fib_levels)
                 bot_call("update_fib_levels", fib_levels)
+                # Interior fib retracements for bot only.
+                from levels import calculate_interior_fibs
+                from config import BOT_INCLUDE_INTERIOR_FIBS
+                if BOT_INCLUDE_INTERIOR_FIBS:
+                    interior_fibs = calculate_interior_fibs(ibh, ibl)
+                    bot_call("update_fib_levels", interior_fibs)
+                    fib_levels.update(interior_fibs)
                 fib_str = ", ".join(f"{k}: {v:.2f}" for k, v in fib_levels.items())
                 print(
                     f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] Fib levels: {fib_str}"

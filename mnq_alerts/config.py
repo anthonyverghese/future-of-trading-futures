@@ -59,8 +59,10 @@ BOT_ENTRY_THRESHOLD = (
 )
 BOT_TARGET_POINTS = 8.0  # Fixed target (walk-forward OOS validated 2026-04-19)
 BOT_STOP_POINTS = 20.0  # Fixed stop
-BOT_INCLUDE_VWAP = True  # Include VWAP level in bot trading
-BOT_MIN_SCORE = -1  # Minimum entry score (unbiased sweep validated 2026-04-20)
+BOT_INCLUDE_VWAP = False  # VWAP excluded: drags in weak regimes (66% WR)
+BOT_INCLUDE_IBL = False  # IBL excluded: -$1.5/day, 72.2% WR (weakest level)
+BOT_INCLUDE_INTERIOR_FIBS = True  # Interior fib retracements (0.236, 0.5, 0.618, 0.786)
+BOT_MIN_SCORE = -99  # Unscored: scoring hurts OOS (validated 2026-04-26)
 BOT_TREND_LOOKBACK_MIN = 60  # Minutes to look back for trend calculation
 BOT_VOL_FILTER_MIN_RANGE_PCT = 0.0015  # Skip entry when 30m range < 0.15% of price
 BOT_MAX_ENTRIES_PER_LEVEL = 12  # Max trades per level per day
