@@ -68,7 +68,7 @@ BOT_PER_LEVEL_TS = {
     "FIB_0.236": (8, 25),
     "FIB_0.5": (10, 25),
     "FIB_0.618": (12, 20),
-    "FIB_0.786": (10, 25),
+    "FIB_0.764": (10, 25),
 }
 BOT_INCLUDE_VWAP = False  # VWAP excluded: drags in weak regimes (66% WR)
 BOT_INCLUDE_IBL = False  # IBL excluded: -$1.5/day, 72.2% WR (weakest level)

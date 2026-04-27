@@ -391,7 +391,7 @@ class TestPerLevelTS:
         from config import BOT_PER_LEVEL_TS
         expected_levels = [
             "IBH", "FIB_EXT_HI_1.272", "FIB_EXT_LO_1.272",
-            "FIB_0.236", "FIB_0.5", "FIB_0.618", "FIB_0.786",
+            "FIB_0.236", "FIB_0.5", "FIB_0.618", "FIB_0.764",
         ]
         for level in expected_levels:
             assert level in BOT_PER_LEVEL_TS, f"Missing T/S for {level}"
@@ -407,7 +407,7 @@ class TestPerLevelTS:
     def test_interior_fibs_have_bigger_targets(self):
         """Interior fibs should have T >= 8 (bigger bounces inside IB range)."""
         from config import BOT_PER_LEVEL_TS
-        interior = ["FIB_0.236", "FIB_0.5", "FIB_0.618", "FIB_0.786"]
+        interior = ["FIB_0.236", "FIB_0.5", "FIB_0.618", "FIB_0.764"]
         for level in interior:
             tgt, _ = BOT_PER_LEVEL_TS[level]
             assert tgt >= 8, f"{level}: interior fib target {tgt} < 8"
@@ -441,7 +441,7 @@ class TestInteriorFibs:
         assert abs(fibs["FIB_0.236"] - (26900 + 0.236 * 200)) < 0.01
         assert abs(fibs["FIB_0.5"] - (26900 + 0.5 * 200)) < 0.01
         assert abs(fibs["FIB_0.618"] - (26900 + 0.618 * 200)) < 0.01
-        assert abs(fibs["FIB_0.786"] - (26900 + 0.786 * 200)) < 0.01
+        assert abs(fibs["FIB_0.764"] - (26900 + 0.764 * 200)) < 0.01
 
     def test_interior_fibs_within_ib_range(self):
         from levels import calculate_interior_fibs

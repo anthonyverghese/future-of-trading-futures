@@ -46,16 +46,21 @@ def simulate_day(
     arrays: DayArrays,
     zone_factory,
     target_fn,
-    stop_pts: float,
-    max_per_level: int,
+    stop_pts=None,
+    max_per_level: int = 12,
     weights: dict | None = None,
     min_score: int = -99,
     streak_state: tuple[int, int] = (0, 0),
     daily_loss: float = 100.0,
     max_consec: int = 999,
     timeout_secs: int = 900,
+    stop_fn=None,
 ) -> tuple[list[TradeRecord], tuple[int, int]]:
-    """Simulate one day. Returns (trades, (cw, cl))."""
+    """Simulate one day. Returns (trades, (cw, cl)).
+
+    stop_pts: fixed stop for all levels (legacy).
+    stop_fn: callable(level_name) -> stop_pts (per-level, takes priority).
+    """
     prices = dc.post_ib_prices
     n = len(prices)
     start = dc.post_ib_start_idx
@@ -64,11 +69,16 @@ def simulate_day(
     eod = _eod_cutoff_ns(dc.date)
 
     # Level configs.
+    ib_range = dc.ibh - dc.ibl
     fixed_levels = [
         ("IBH", dc.ibh, False),
         ("IBL", dc.ibl, False),
         ("FIB_EXT_HI_1.272", dc.fib_hi, False),
         ("FIB_EXT_LO_1.272", dc.fib_lo, False),
+        ("FIB_0.236", dc.ibl + 0.236 * ib_range, False),
+        ("FIB_0.5", dc.ibl + 0.5 * ib_range, False),
+        ("FIB_0.618", dc.ibl + 0.618 * ib_range, False),
+        ("FIB_0.764", dc.ibl + 0.764 * ib_range, False),
     ]
     has_vwap = hasattr(dc, "post_ib_vwaps") and dc.post_ib_vwaps is not None
 
@@ -151,9 +161,10 @@ def simulate_day(
 
             # Evaluate trade outcome.
             tgt = target_fn(name)
+            stp = stop_fn(name) if stop_fn is not None else stop_pts
             out, exit_idx, pnl_pts = evaluate_bot_trade(
                 gi, zone.price, d,
-                ft, fp, tgt, stop_pts, timeout_secs, eod,
+                ft, fp, tgt, stp, timeout_secs, eod,
             )
             pnl_usd = pnl_pts * MULTIPLIER
 

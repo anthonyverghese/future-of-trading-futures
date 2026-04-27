@@ -31,5 +31,5 @@ def calculate_interior_fibs(ibh: float, ibl: float) -> dict[str, float]:
         "FIB_0.236": ibl + 0.236 * ib_range,
         "FIB_0.5": ibl + 0.5 * ib_range,
         "FIB_0.618": ibl + 0.618 * ib_range,
-        "FIB_0.786": ibl + 0.786 * ib_range,
+        "FIB_0.764": ibl + 0.764 * ib_range,
     }
