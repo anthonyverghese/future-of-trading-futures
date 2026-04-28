@@ -52,15 +52,19 @@
     "pnl_per_day": 36.60
   },
   "pattern_filters_tested": {
-    "note": "22 variants tested on 332 days. Full results in pattern_filters_20260428_125547.json",
-    "filters_that_beat_baseline": {
-      "mon_double_caps": {"pnl_per_day": 33.17, "diff": "+2.18", "reason": "Monday 77% WR, structural edge from weekend gap"},
-      "vix15_raise_vol": {"pnl_per_day": 31.82, "diff": "+0.83", "reason": "Low VIX = dead market, require more confirmation"}
+    "note": "22 pattern variants + 10 VIX variants tested on 332 days. Full results in pattern_filters_20260428_125547.json and vix_filters_20260428_142353.json",
+    "filters_deployed": {
+      "mon_double_caps": {"pnl_per_day": 33.17, "diff": "+2.18 vs pre-Monday baseline", "reason": "Monday 77% WR, structural edge from weekend gap"}
     },
-    "filters_that_hurt": [
-      "Gap-based filters (-$5 to -$13/day): gaps too common (193/331 unfilled) to filter",
-      "First-loss filters (-$6 to -$15/day): stops recovery trades",
-      "All defensive combined (-$10/day): over-filtered"
-    ]
+    "filters_tested_but_not_deployed": {
+      "vix_lt15_raise_vol": {"best_variant": "Open VIX<15 vol 0.25%", "pnl_per_day": 32.87, "diff": -0.30, "reason": "Too small improvement, not worth the complexity. VIX<15 only affects 21 days."},
+      "vix_gt30_halve_caps": {"best_variant": "Prev VIX>30 halve", "pnl_per_day": 32.44, "diff": -0.73, "reason": "Only 14 VIX>30 days — too few to matter. Halving caps costs more than it saves."},
+      "vix_gt25_halve_caps": {"pnl_per_day": 30.75, "diff": -2.42, "reason": "34 days affected but cuts into good trading days too much."},
+      "gap_based_filters": {"diff": "-$5 to -$13/day", "reason": "Gaps too common (193/331 unfilled) to filter profitably."},
+      "first_loss_filters": {"diff": "-$6 to -$15/day", "reason": "Stops recovery trades that make most days profitable."},
+      "adr_steep_filters": {"diff": "-$0.32 to -$2.53/day", "reason": "Marginal improvement in bad days but costs more in P&L."},
+      "all_defensive_combined": {"pnl_per_day": 20.64, "diff": -10.35, "reason": "Over-filtered. Only 25 bad days but $10/day cost."}
+    },
+    "key_insight": "The bot's edge comes from taking every valid setup. Defensive filters consistently hurt more than they help because the same conditions that predict losing days also occur on winning days. Only structural edges (Monday) improve P&L."
   }
 }
