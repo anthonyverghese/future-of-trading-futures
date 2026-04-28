@@ -417,7 +417,6 @@ def load_pending_alerts(date_str: str) -> list[dict]:
                 f"{date} {time_clean}", "%Y-%m-%d %H:%M:%S"
             )
             # Localize to ET so it's timezone-aware (matches live feed timestamps).
-            import pytz
             _et = pytz.timezone("America/New_York")
             alert_dt = _et.localize(alert_dt_naive)
         except (ValueError, TypeError):
@@ -608,10 +607,12 @@ def close_open_bot_trades(
     pnl_usd: float,
     exit_reason: str = "startup_flatten",
 ) -> int:
-    """Close any `outcome='open'` bot_trades rows for the given date
-    with actual exit details. Returns the number of rows updated.
+    """Close the most recent `outcome='open'` bot_trades row for the
+    given date with actual exit details. Returns the number of rows updated.
 
-    Called from startup flatten so the DB reflects the real P&L.
+    Only updates the single most recent open row (by id) to avoid
+    applying the same P&L to multiple rows if duplicates exist.
+    Any remaining open rows are marked orphaned.
     """
     if not os.path.exists(ALERTS_LOG_PATH):
         return 0
@@ -619,14 +620,27 @@ def close_open_bot_trades(
         outcome = "win" if pnl_usd >= 0 else "loss"
         with sqlite3.connect(ALERTS_LOG_PATH) as conn:
             _ensure_alerts_schema(conn)
+            # Update only the most recent open row.
             cur = conn.execute(
                 """UPDATE bot_trades
                    SET exit_time = ?, exit_price = ?, pnl_usd = ?,
                        outcome = ?, exit_reason = ?
-                   WHERE date = ? AND outcome = 'open'""",
+                   WHERE id = (
+                       SELECT id FROM bot_trades
+                       WHERE date = ? AND outcome = 'open'
+                       ORDER BY id DESC LIMIT 1
+                   )""",
                 (exit_time, exit_price, pnl_usd, outcome, exit_reason, date_str),
             )
-            return cur.rowcount
+            updated = cur.rowcount
+            # Mark any remaining open rows as orphaned.
+            conn.execute(
+                """UPDATE bot_trades
+                   SET outcome = 'orphaned', exit_reason = 'startup_flatten'
+                   WHERE date = ? AND outcome = 'open'""",
+                (date_str,),
+            )
+            return updated
     except Exception:
         return 0
 
