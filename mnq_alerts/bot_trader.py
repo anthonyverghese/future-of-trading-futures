@@ -304,6 +304,10 @@ class BotTrader:
         )
 
         for bz in self._zones.values():
+            # Skip the active trade level — its zone is managed by
+            # trade-close reset, not price-based auto-exit.
+            if bz.name == self._active_trade_level:
+                continue
             if bz.update(price):
                 direction = "up" if price > bz.price else "down"
 
