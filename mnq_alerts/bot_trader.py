@@ -315,13 +315,15 @@ class BotTrader:
             return
 
         for bz in self._zones.values():
+            # Cooldown after failed entry — skip update entirely so
+            # in_zone isn't set. After cooldown expires, the zone can
+            # fire on the next approach (even if price never left).
+            cooldown = self._level_cooldown_until.get(bz.name, 0)
+            if cooldown > 0 and time.monotonic() < cooldown:
+                continue
+
             if bz.update(price):
                 direction = "up" if price > bz.price else "down"
-
-                # Cooldown after failed entry (unfilled limit cancel).
-                cooldown = self._level_cooldown_until.get(bz.name, 0)
-                if cooldown > 0 and time.monotonic() < cooldown:
-                    continue
 
                 # Suppress entries during weak time windows.
                 if now_et is not None:
@@ -401,7 +403,9 @@ class BotTrader:
                     else:
                         print(f"[broker] Trade failed: {result.error}")
                         # Cooldown: don't retry this level for 60s.
+                        # Reset zone so it can fire fresh after cooldown.
                         self._level_cooldown_until[bz.name] = time.monotonic() + 60
+                        bz.reset()
                 else:
                     print(f"[broker] Skipped {bz.name}: {reason}")
                     # Zone stays in_zone=True — won't re-fire until
