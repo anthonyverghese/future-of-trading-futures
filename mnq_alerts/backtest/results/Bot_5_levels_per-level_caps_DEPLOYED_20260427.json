@@ -1,0 +1,97 @@
+{
+  "description": "Bot 5 levels with per-level entry caps DEPLOYED",
+  "timestamp": "2026-04-27",
+  "params": {
+    "zone_type": "BotZoneTradeReset",
+    "entry_threshold": 1.0,
+    "exit_threshold": "1pt_auto_exit_or_trade_reset",
+    "per_level_targets": {
+      "FIB_EXT_HI_1.272": [6, 20],
+      "FIB_EXT_LO_1.272": [6, 20],
+      "FIB_0.236": [8, 25],
+      "FIB_0.618": [12, 20],
+      "FIB_0.764": [10, 25]
+    },
+    "min_score": -99,
+    "weights_type": "none (unscored)",
+    "levels": [
+      "FIB_EXT_HI_1.272",
+      "FIB_EXT_LO_1.272",
+      "FIB_0.236",
+      "FIB_0.618",
+      "FIB_0.764"
+    ],
+    "excluded_levels": ["IBH", "IBL", "VWAP", "FIB_0.5"],
+    "exclude_reasons": {
+      "IBH": "Edge eroded Q1→Q4: +$1.69/trade → -$1.20/trade",
+      "IBL": "-$1.5/day, 72.2% WR (weakest level)",
+      "VWAP": "Drags in weak regimes (66% WR)",
+      "FIB_0.5": "Test #1 is negative (-$0.66/trade), no consistent edge"
+    },
+    "per_level_max_entries": {
+      "FIB_0.236": 12,
+      "FIB_0.618": 3,
+      "FIB_0.764": 5,
+      "FIB_EXT_HI_1.272": 6,
+      "FIB_EXT_LO_1.272": 6
+    },
+    "per_level_cap_reasons": {
+      "FIB_0.236": "Gets stronger with more tests, no cap needed",
+      "FIB_0.618": "Collapses at test #4 (57.5% WR, -$4.84/trade)",
+      "FIB_0.764": "Degrades after test #5",
+      "FIB_EXT_HI_1.272": "Weakening in recent quarters, cap for safety",
+      "FIB_EXT_LO_1.272": "Weak at tests #7-9"
+    },
+    "include_vwap": false,
+    "vol_filter_pct": 0.0015,
+    "timeout_secs": 900,
+    "daily_loss": 100.0,
+    "data_days": 332,
+    "data_range": "2025-01-02 to 2026-04-27",
+    "suppressed_windows": [[810, 840]],
+    "fib_0764_note": "Corrected from 0.786 to 0.764 (= 1-0.236, matches standard retracement)"
+  },
+  "full_sample": {
+    "days": 332,
+    "trades": 5192,
+    "trades_per_day": 15.6,
+    "wr": 79.3,
+    "pnl_per_day": 31.0,
+    "winning_days_pct": 66,
+    "days_below_neg100": 50
+  },
+  "quarterly": {
+    "Q1_oldest": {"days": 83, "pnl_per_day": 43.4, "wr_approx": 80.6},
+    "Q2": {"days": 83, "pnl_per_day": 26.5},
+    "Q3": {"days": 83, "pnl_per_day": 21.3},
+    "Q4_newest": {"days": 83, "pnl_per_day": 32.8}
+  },
+  "recent_60": {
+    "trades_per_day": 15.6,
+    "wr": 78.3,
+    "pnl_per_day": 35.3
+  },
+  "recent_30": {
+    "wr": 76.3,
+    "pnl_per_day": 6.52
+  },
+  "vs_baseline": {
+    "baseline_config": "7 levels (incl IBH, FIB_0.5), uniform max=12",
+    "baseline_pnl_per_day": 34.89,
+    "baseline_Q4": 23.8,
+    "baseline_last_60d": 24.1,
+    "baseline_days_below_neg100": 67,
+    "improvement_Q4": "+$9.0/day",
+    "improvement_last_60d": "+$11.2/day",
+    "improvement_bad_days": "-17 fewer (-25%)",
+    "tradeoff": "-$3.9/day overall but improving trend vs declining baseline"
+  },
+  "filters_tested_and_rejected": {
+    "post_ib_cooldown_15min": {"pnl_per_day": 28.5, "reason": "Post-IB period is profitable on average"},
+    "post_ib_cooldown_30min": {"pnl_per_day": 28.1, "reason": "Same — blunt time filter hurts"},
+    "no_repeat_loss_combo": {"pnl_per_day": 29.8, "reason": "Prevents good trades too, persists too aggressively"},
+    "max_3_consec_wins": {"pnl_per_day": 22.6, "reason": "Too aggressive, kills profitable level campaigns"},
+    "5min_level_cooldown": {"pnl_per_day": 25.5, "reason": "Too blunt, misses rapid re-entries that are profitable"},
+    "kitchen_sink": {"pnl_per_day": 15.5, "reason": "Over-filtered, only 44 bad days but $15/day isn't worth it"}
+  }
+}
