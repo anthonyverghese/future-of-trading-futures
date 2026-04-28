@@ -777,9 +777,9 @@ class IBKRBroker:
                         trend_60m=self._pending_trend_60m,
                         entry_count=self._pending_entry_count,
                         parent_order_id=self._pending_parent_order_id,
-                        range_30m=getattr(self, "_pending_range_30m", None),
-                        tick_rate=getattr(self, "_pending_tick_rate", None),
-                        session_move_pct=getattr(self, "_pending_session_move_pct", None),
+                        range_30m=self._pending_range_30m,
+                        tick_rate=self._pending_tick_rate,
+                        session_move_pct=self._pending_session_move_pct,
                         entry_limit=self._pending_entry_limit,
                     )
                 except Exception as e:
@@ -1379,6 +1379,10 @@ class IBKRBroker:
                 self._pending_target_price = None
                 self._pending_stop_price = None
                 self._pending_exit_reason = None
+                self._pending_entry_limit = None
+                self._pending_range_30m = None
+                self._pending_tick_rate = None
+                self._pending_session_move_pct = None
                 self._position_opened_at = None
                 # Sweep stale orders from the phantom position.
                 stale = self._cancel_all_mnq("Drift safe-clear sweep")
@@ -1509,6 +1513,10 @@ class IBKRBroker:
                     self._position_open = False
                     self._position_opened_at = None
                     self._pending_entry_fill = None
+                    self._pending_entry_limit = None
+                    self._pending_range_30m = None
+                    self._pending_tick_rate = None
+                    self._pending_session_move_pct = None
                     try:
                         for t in self._ib.openTrades():
                             if (
