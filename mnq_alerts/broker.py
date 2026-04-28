@@ -113,6 +113,10 @@ class IBKRBroker:
         self._pending_trend_60m: float | None = None  # 60m trend at entry
         self._pending_entry_count: int | None = None  # which retest of this level
         self._pending_parent_order_id: int | None = None  # parent orderId (for recovery)
+        self._pending_entry_limit: float | None = None  # limit order price
+        self._pending_range_30m: float | None = None  # 30m range at entry
+        self._pending_tick_rate: float | None = None  # tick rate at entry
+        self._pending_session_move_pct: float | None = None  # session move % at entry
         self._position_opened_at: float | None = None  # monotonic() timestamp
 
     def connect(self) -> bool:
@@ -773,6 +777,10 @@ class IBKRBroker:
                         trend_60m=self._pending_trend_60m,
                         entry_count=self._pending_entry_count,
                         parent_order_id=self._pending_parent_order_id,
+                        range_30m=getattr(self, "_pending_range_30m", None),
+                        tick_rate=getattr(self, "_pending_tick_rate", None),
+                        session_move_pct=getattr(self, "_pending_session_move_pct", None),
+                        entry_limit=self._pending_entry_limit,
                     )
                 except Exception as e:
                     print(f"[broker] Error logging trade entry to DB: {e}")
@@ -1295,6 +1303,9 @@ class IBKRBroker:
         target_pts: float = 8.0,
         stop_pts: float = 25.0,
         entry_limit_buffer: float = 4.0,
+        range_30m: float | None = None,
+        tick_rate: float | None = None,
+        session_move_pct: float | None = None,
     ) -> TradeResult:
         """Submit a bracket order: market entry + limit target + stop loss.
 
@@ -1384,6 +1395,9 @@ class IBKRBroker:
             self._pending_score = score
             self._pending_trend_60m = trend_60m
             self._pending_entry_count = entry_count
+            self._pending_range_30m = range_30m
+            self._pending_tick_rate = tick_rate
+            self._pending_session_move_pct = session_move_pct
 
             result, parent, parent_trade = self._submit_bracket_locked(
                 direction, current_price, line_price, level_name, qty,
@@ -1571,6 +1585,7 @@ class IBKRBroker:
             else:
                 entry_limit = line_price - entry_limit_buffer
             entry_limit = round(entry_limit * 4) / 4  # MNQ tick size
+            self._pending_entry_limit = entry_limit
             parent = LimitOrder(action, qty, entry_limit)
             parent.orderId = self._ib.client.getReqId()
             parent.orderRef = f"bot-{parent.orderId}-parent"

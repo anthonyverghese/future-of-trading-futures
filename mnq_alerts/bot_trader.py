@@ -378,6 +378,9 @@ class BotTrader:
                         target_pts=target_pts,
                         stop_pts=stop_pts,
                         entry_limit_buffer=entry_limit_buffer,
+                        range_30m=range_30m,
+                        tick_rate=tick_rate,
+                        session_move_pct=session_move_pct,
                     )
                     if result.success:
                         self._level_trade_counts[bz.name] = level_trades + 1

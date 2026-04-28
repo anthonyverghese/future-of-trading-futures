@@ -245,12 +245,16 @@ def _ensure_alerts_schema(conn: sqlite3.Connection) -> None:
             parent_order_id INTEGER
         )
     """)
-    # Migrate older bot_trades schemas that may be missing the new columns.
+    # Migrate older bot_trades schemas that may be missing new columns.
     for col in [
         "score INTEGER",
         "trend_60m REAL",
         "entry_count INTEGER",
         "parent_order_id INTEGER",
+        "range_30m REAL",
+        "tick_rate REAL",
+        "session_move_pct REAL",
+        "entry_limit REAL",
     ]:
         try:
             conn.execute(f"ALTER TABLE bot_trades ADD COLUMN {col}")
@@ -468,24 +472,21 @@ def log_bot_trade_entry(
     trend_60m: float | None = None,
     entry_count: int | None = None,
     parent_order_id: int | None = None,
+    range_30m: float | None = None,
+    tick_rate: float | None = None,
+    session_move_pct: float | None = None,
+    entry_limit: float | None = None,
 ) -> int:
-    """Log a bot trade entry. Returns the row id for later update on exit.
-
-    score: bot entry score that passed the BOT_MIN_SCORE filter.
-    trend_60m: 60-minute price trend at entry (positive = up).
-    entry_count: which retest of this level (1=first, 2=second, etc.).
-    parent_order_id: IBKR client-side orderId of the parent (market) order.
-        Stored so a subsequent restart can look this row up when adopting
-        an open position via orderRef on the live bracket children.
-    """
+    """Log a bot trade entry. Returns the row id for later update on exit."""
     with sqlite3.connect(ALERTS_LOG_PATH) as conn:
         _ensure_alerts_schema(conn)
         cur = conn.execute(
             """INSERT INTO bot_trades
                (date, entry_time, level_name, direction, line_price,
                 entry_price, target_price, stop_price, outcome,
-                score, trend_60m, entry_count, parent_order_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)""",
+                score, trend_60m, entry_count, parent_order_id,
+                range_30m, tick_rate, session_move_pct, entry_limit)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 date_str,
                 entry_time,
@@ -499,6 +500,10 @@ def log_bot_trade_entry(
                 trend_60m,
                 entry_count,
                 parent_order_id,
+                range_30m,
+                tick_rate,
+                session_move_pct,
+                entry_limit,
             ),
         )
         return cur.lastrowid
