@@ -388,19 +388,61 @@ class IBKRBroker:
             for pos in mnq_positions:
                 qty = int(pos.position)
                 action = "BUY" if qty < 0 else "SELL"
+                direction = "up" if qty > 0 else "down"
+                try:
+                    multiplier = float(pos.contract.multiplier or MNQ_MULTIPLIER)
+                except (TypeError, ValueError):
+                    multiplier = float(MNQ_MULTIPLIER)
+                entry_price = pos.avgCost / multiplier if multiplier else 0.0
                 print(
                     f"[broker] Startup: flattening leftover {pos.contract.localSymbol} "
-                    f"qty={qty} @ market"
+                    f"qty={qty} entry~{entry_price:.2f} @ market"
                 )
                 try:
                     contract = self._contract or pos.contract
                     order = MarketOrder(action, abs(qty))
                     trade = self._ib.placeOrder(contract, order)
                     self._ib.sleep(2.0)
+                    fill_price = trade.orderStatus.avgFillPrice or 0.0
+                    status = trade.orderStatus.status
                     print(
                         f"[broker] Startup flatten: {action} {abs(qty)} "
-                        f"{pos.contract.localSymbol} status={trade.orderStatus.status}"
+                        f"{pos.contract.localSymbol} fill={fill_price:.2f} "
+                        f"status={status}"
                     )
+                    # Record P&L from the flatten.
+                    if status == "Filled" and fill_price > 0 and entry_price > 0:
+                        if direction == "up":
+                            pnl_pts = fill_price - entry_price
+                        else:
+                            pnl_pts = entry_price - fill_price
+                        pnl_usd = pnl_pts * MNQ_POINT_VALUE - 1.24
+                        self._daily_pnl_usd += pnl_usd
+                        self._trades_today += 1
+                        if pnl_usd >= 0:
+                            self._wins_today += 1
+                        else:
+                            self._losses_today += 1
+                            self._consecutive_losses += 1
+                        print(
+                            f"[broker] Startup flatten P&L: ${pnl_usd:+.2f} "
+                            f"(entry~{entry_price:.2f} exit={fill_price:.2f}) | "
+                            f"{self.daily_stats}"
+                        )
+                        # Try to update the matching DB row.
+                        try:
+                            now = datetime.datetime.now(
+                                datetime.timezone.utc
+                            ).astimezone()
+                            today = now.strftime("%Y-%m-%d")
+                            updated = mark_open_bot_trades_orphaned(today)
+                            if updated:
+                                print(
+                                    f"[broker] Marked {updated} open bot_trades "
+                                    f"row(s) as orphaned"
+                                )
+                        except Exception as exc:
+                            print(f"[broker] Startup DB update error: {exc}")
                 except Exception as exc:
                     print(f"[broker] Startup flatten error: {exc}")
             # Verify.
