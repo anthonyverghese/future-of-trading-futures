@@ -45,11 +45,10 @@ _ET = pytz.timezone("America/New_York")
 class BotZone:
     """Zone tracker for a single level.
 
-    Zone lifecycle = trade lifecycle:
+    Zone lifecycle:
     - Zone enters when price within BOT_ENTRY_THRESHOLD (1 pt) of level
-    - Zone stays active while a trade is open on this level
-    - Zone resets when the trade closes (via reset() call from BotTrader)
-    - No fixed exit threshold — the zone only resets on trade close
+    - Zone stays in_zone (won't re-fire) until price leaves 1pt or
+      reset() is called (trade close resets ALL zones)
     """
 
     def __init__(self, name: str, price: float, drifts: bool = False) -> None:

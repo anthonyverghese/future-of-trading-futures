@@ -421,6 +421,7 @@ class IBKRBroker:
                         self._trades_today += 1
                         if pnl_usd >= 0:
                             self._wins_today += 1
+                            self._consecutive_losses = 0
                         else:
                             self._losses_today += 1
                             self._consecutive_losses += 1

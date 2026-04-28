@@ -144,22 +144,22 @@ class TestBotZone:
         bz.update(19998.5)  # move beyond 1pt below
         assert bz.in_zone is False
 
-    def test_rapid_reset_reenter_cycle(self):
-        """Simulates the blocked-trade scenario: enter, reset, re-enter
-        while price stays in zone, then price leaves."""
+    def test_blocked_zone_no_spam(self):
+        """When trade is blocked, zone stays in_zone and doesn't re-fire
+        on subsequent ticks within threshold."""
         bz = BotZone("IBL", 20000.0)
-        # Tick 1: enter (trade blocked)
+        # Tick 1: enter (trade blocked — zone stays in_zone)
         assert bz.update(20000.0) is True
-        bz.reset()  # trade was blocked
-        # Tick 2: still in zone, re-enter (trade blocked again)
-        assert bz.update(20000.25) is True
-        bz.reset()
+        assert bz.entry_count == 1
+        # Tick 2: still within 1pt — no re-fire
+        assert bz.update(20000.25) is False
+        assert bz.entry_count == 1  # NOT incremented
         # Tick 3: price leaves zone
         bz.update(20005.0)
         assert bz.in_zone is False
-        # Tick 4: price comes back — should fire
+        # Tick 4: price comes back — fresh entry
         assert bz.update(20000.0) is True
-        assert bz.entry_count == 3
+        assert bz.entry_count == 2
 
     def test_vwap_zone_with_drifting_price(self):
         """VWAP zone auto-exit uses current price, which drifts."""
@@ -226,61 +226,87 @@ class TestZoneResetAndOnePosition:
         assert bz.update(20000.5) is True
         assert bz.entry_count == 2
 
-    def test_two_zones_cannot_both_be_active_with_trade(self):
-        """Simulates the BotTrader flow: if one zone has an active trade,
-        the broker blocks the second via can_trade()."""
+    def test_position_open_blocks_without_reset(self):
+        """When position is already open, zone stays in_zone (no reset).
+        Zone won't re-fire until price leaves 1pt or trade closes."""
+        bz = BotZone("IBL", 20000.0)
+        assert bz.update(20000.0) is True
+        # Broker blocks: "position already open". Zone stays in_zone.
+        assert bz.in_zone is True
+        # Next tick within 1pt — no re-fire.
+        assert bz.update(20000.5) is False
+        assert bz.in_zone is True
+
+    def test_position_open_clears_when_price_leaves(self):
+        """Zone blocked by position-open clears when price moves beyond 1pt."""
+        bz = BotZone("IBL", 20000.0)
+        bz.update(20000.0)  # enter, blocked
+        assert bz.in_zone is True
+        bz.update(20005.0)  # price leaves
+        assert bz.in_zone is False
+        # Can re-fire on next approach.
+        assert bz.update(20000.0) is True
+
+    def test_trade_close_resets_all_zones(self):
+        """When a trade closes, ALL zones reset — not just the active level."""
         bz1 = BotZone("IBH", 20100.0)
         bz2 = BotZone("IBL", 20000.0)
 
-        # First zone triggers.
+        # Both zones enter.
         assert bz1.update(20100.0) is True
+        assert bz2.update(20000.0) is True
         assert bz1.in_zone is True
-
-        # Second zone triggers — update() returns True (zone-level it's valid),
-        # but the broker's can_trade() would block it. If blocked, reset().
-        assert bz2.update(20000.0) is True
-        # Simulate broker blocking: reset zone since we can't trade.
-        bz2.reset()
-        assert bz2.in_zone is False
-
-        # First trade closes — reset first zone.
-        bz1.reset()
-        assert bz1.in_zone is False
-
-        # Now second zone can enter.
-        assert bz2.update(20000.0) is True
         assert bz2.in_zone is True
 
-    def test_skipped_entry_resets_zone(self):
-        """If an entry is skipped (score, vol, max), zone must reset
-        so the level isn't permanently locked."""
+        # Trade closes on bz1 — simulate BotTrader resetting ALL zones.
+        for z in [bz1, bz2]:
+            z.reset()
+        assert bz1.in_zone is False
+        assert bz2.in_zone is False
+
+        # Both can re-enter.
+        assert bz1.update(20100.0) is True
+        assert bz2.update(20000.0) is True
+
+    def test_skipped_entry_stays_in_zone(self):
+        """If an entry is skipped (vol, score), zone stays in_zone.
+        It clears when price leaves 1pt threshold."""
         bz = BotZone("IBH", 20100.0)
         assert bz.update(20100.0) is True
         assert bz.in_zone is True
-        # Simulate scoring skip — must reset.
-        bz.reset()
+        # Skipped — zone stays in_zone (no reset).
+        assert bz.in_zone is True
+        # Next tick within 1pt — still blocked.
+        assert bz.update(20100.5) is False
+        # Price leaves threshold.
+        bz.update(20105.0)
         assert bz.in_zone is False
-        # Can re-enter later.
+        # Can re-enter on next approach.
         assert bz.update(20100.0) is True
 
-    def test_active_trade_level_tracks_correctly(self):
-        """_active_trade_level is set on trade open, cleared on close."""
+    def test_active_trade_level_resets_all_zones(self):
+        """_active_trade_level triggers reset of ALL zones on trade close."""
         from bot_trader import BotTrader
         bt = BotTrader.__new__(BotTrader)
-        bt._active_trade_level = None
-        bt._zones = {"IBL": BotZone("IBL", 20000.0)}
-
-        # Simulate trade open.
         bt._active_trade_level = "IBL"
-        assert bt._active_trade_level == "IBL"
+        bt._zones = {
+            "IBL": BotZone("IBL", 20000.0),
+            "IBH": BotZone("IBH", 20100.0),
+        }
+        # Both zones are in_zone.
+        bt._zones["IBL"].update(20000.0)
+        bt._zones["IBH"].update(20100.0)
+        assert bt._zones["IBL"].in_zone is True
+        assert bt._zones["IBH"].in_zone is True
 
-        # Simulate trade close (broker._position_open goes False).
-        # The on_tick check would do:
-        if bt._active_trade_level is not None:
-            bt._zones[bt._active_trade_level].reset()
-            bt._active_trade_level = None
+        # Simulate trade close: reset ALL zones.
+        for z in bt._zones.values():
+            z.reset()
+        bt._active_trade_level = None
+
         assert bt._active_trade_level is None
         assert bt._zones["IBL"].in_zone is False
+        assert bt._zones["IBH"].in_zone is False
 
     def test_multiple_resets_are_idempotent(self):
         """Calling reset() multiple times is safe."""
@@ -312,14 +338,19 @@ class TestZoneResetAndOnePosition:
         assert bz.update(20000.0) is True  # entry_count = 2
         assert bz.entry_count == 2
 
-    def test_failed_trade_resets_zone(self):
-        """If submit_bracket fails, zone should reset so it's not stuck."""
+    def test_failed_trade_stays_in_zone(self):
+        """If submit_bracket fails, zone stays in_zone.
+        Clears when price leaves 1pt threshold."""
         bz = BotZone("IBL", 20000.0)
         assert bz.update(20000.0) is True
-        # Trade failed.
-        bz.reset()
+        # Trade failed — zone stays in_zone.
+        assert bz.in_zone is True
+        # Price stays near — no re-fire.
+        assert bz.update(20000.5) is False
+        # Price leaves — zone clears.
+        bz.update(20005.0)
         assert bz.in_zone is False
-        # Can try again.
+        # Can try again on next approach.
         assert bz.update(20000.5) is True
 
 
@@ -455,3 +486,21 @@ class TestInteriorFibs:
         from levels import calculate_interior_fibs
         fibs = calculate_interior_fibs(27100.0, 26900.0)
         assert "FIB_0.382" not in fibs
+
+    def test_fib_0764_matches_standard_retracement(self):
+        """FIB_0.764 should equal IBH - 0.236 * range (standard 0.236 retracement)."""
+        from levels import calculate_interior_fibs
+        ibh, ibl = 27429.75, 27298.00
+        fibs = calculate_interior_fibs(ibh, ibl)
+        ib_range = ibh - ibl
+        # Standard 0.236 retracement from top = IBH - 0.236 * range
+        standard_236 = ibh - 0.236 * ib_range
+        # Our FIB_0.764 = IBL + 0.764 * range = IBH - 0.236 * range
+        assert abs(fibs["FIB_0.764"] - standard_236) < 0.01
+
+    def test_fib_0764_not_0786(self):
+        """FIB_0.786 should NOT exist — replaced by FIB_0.764."""
+        from levels import calculate_interior_fibs
+        fibs = calculate_interior_fibs(27100.0, 26900.0)
+        assert "FIB_0.786" not in fibs
+        assert "FIB_0.764" in fibs
