@@ -421,8 +421,8 @@ class TestPerLevelTS:
         """Every deployed bot level must have a T/S entry."""
         from config import BOT_PER_LEVEL_TS
         expected_levels = [
-            "IBH", "FIB_EXT_HI_1.272", "FIB_EXT_LO_1.272",
-            "FIB_0.236", "FIB_0.5", "FIB_0.618", "FIB_0.764",
+            "FIB_EXT_HI_1.272", "FIB_EXT_LO_1.272",
+            "FIB_0.236", "FIB_0.618", "FIB_0.764",
         ]
         for level in expected_levels:
             assert level in BOT_PER_LEVEL_TS, f"Missing T/S for {level}"
@@ -438,15 +438,37 @@ class TestPerLevelTS:
     def test_interior_fibs_have_bigger_targets(self):
         """Interior fibs should have T >= 8 (bigger bounces inside IB range)."""
         from config import BOT_PER_LEVEL_TS
-        interior = ["FIB_0.236", "FIB_0.5", "FIB_0.618", "FIB_0.764"]
+        interior = ["FIB_0.236", "FIB_0.618", "FIB_0.764"]
         for level in interior:
             tgt, _ = BOT_PER_LEVEL_TS[level]
             assert tgt >= 8, f"{level}: interior fib target {tgt} < 8"
 
-    def test_extension_levels_have_smaller_targets(self):
-        """Extension/IBH levels should have T <= 8 (quick small bounces)."""
+    def test_excluded_levels_not_in_per_level_ts(self):
+        """IBH and FIB_0.5 should not be in BOT_PER_LEVEL_TS."""
         from config import BOT_PER_LEVEL_TS
-        extensions = ["IBH", "FIB_EXT_HI_1.272", "FIB_EXT_LO_1.272"]
+        assert "IBH" not in BOT_PER_LEVEL_TS
+        assert "FIB_0.5" not in BOT_PER_LEVEL_TS
+
+    def test_per_level_max_entries_covers_all_levels(self):
+        """Every deployed level should have a per-level max entry cap."""
+        from config import BOT_PER_LEVEL_MAX_ENTRIES, BOT_PER_LEVEL_TS
+        for level in BOT_PER_LEVEL_TS:
+            assert level in BOT_PER_LEVEL_MAX_ENTRIES, f"Missing max entries for {level}"
+
+    def test_ibh_excluded(self):
+        """BOT_INCLUDE_IBH should be False."""
+        from config import BOT_INCLUDE_IBH
+        assert BOT_INCLUDE_IBH is False
+
+    def test_fib_05_excluded(self):
+        """FIB_0.5 should be in BOT_EXCLUDE_LEVELS."""
+        from config import BOT_EXCLUDE_LEVELS
+        assert "FIB_0.5" in BOT_EXCLUDE_LEVELS
+
+    def test_extension_levels_have_smaller_targets(self):
+        """Extension levels should have T <= 8 (quick small bounces)."""
+        from config import BOT_PER_LEVEL_TS
+        extensions = ["FIB_EXT_HI_1.272", "FIB_EXT_LO_1.272"]
         for level in extensions:
             tgt, _ = BOT_PER_LEVEL_TS[level]
             assert tgt <= 8, f"{level}: extension target {tgt} > 8"

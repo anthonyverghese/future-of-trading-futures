@@ -1,17 +1,18 @@
 """
 bot_trader.py — Bot trading logic, separate from human alert system.
 
-Manages its own zone tracking (1pt entry, 15pt exit) and delegates
-order execution to IBKRBroker. Main.py calls into this module without
-needing to know bot internals.
+Manages its own zone tracking (1pt entry) and delegates order execution
+to IBKRBroker. Main.py calls into this module without needing to know
+bot internals.
 
-Bot parameters (walk-forward validated 2026-04-17 over 319 days):
+Bot parameters (validated 2026-04-27 over 332 days):
   - Entry: price within 1 pt of level (vs 7 pt for human alerts)
-  - Exit zone reset: 15 pts away (vs 20 pt for human alerts)
-  - Target/Stop: IB-range-normalized (7%/20% of IB range)
+  - Zone: stays in_zone after entry until price leaves 1pt or trade closes
+  - Target/Stop: per-level (MFE-based)
   - Risk: $100/day loss limit, 1 position at a time, 13:30-14:00 ET suppressed
-  - Levels: IBH, FIB_EXT_HI, FIB_EXT_LO, FIB_0.236, FIB_0.5, FIB_0.618, FIB_0.764
-    (IBL and VWAP excluded — weak OOS performance)
+  - Levels: FIB_EXT_HI, FIB_EXT_LO, FIB_0.236, FIB_0.618, FIB_0.764
+    (IBH, IBL, VWAP, FIB_0.5 excluded — weak or deteriorating edge)
+  - Per-level entry caps: data-driven from WR-by-entry-count analysis
   - Scoring: unscored (scoring hurts OOS, validated 2026-04-26)
 """
 
@@ -26,11 +27,14 @@ from broker import IBKRBroker
 from cache import load_bot_daily_level_counts
 from config import (
     BOT_ENTRY_THRESHOLD,
+    BOT_EXCLUDE_LEVELS,
+    BOT_INCLUDE_IBH,
     BOT_INCLUDE_IBL,
     BOT_INCLUDE_INTERIOR_FIBS,
     BOT_INCLUDE_VWAP,
     BOT_MAX_ENTRIES_PER_LEVEL,
     BOT_MIN_SCORE,
+    BOT_PER_LEVEL_MAX_ENTRIES,
     BOT_PER_LEVEL_TS,
     BOT_STOP_POINTS,
     BOT_TARGET_POINTS,
@@ -238,7 +242,9 @@ class BotTrader:
         vwap: float | None = None,
     ) -> None:
         """Bulk update levels. Updates price on existing zones without resetting state."""
-        levels = {"IBH": ibh}
+        levels = {}
+        if BOT_INCLUDE_IBH:
+            levels["IBH"] = ibh
         if BOT_INCLUDE_IBL:
             levels["IBL"] = ibl
         if BOT_INCLUDE_VWAP:
@@ -253,6 +259,8 @@ class BotTrader:
     def update_fib_levels(self, fib_levels: dict[str, float]) -> None:
         """Register fib levels for bot zone tracking."""
         for name, price in fib_levels.items():
+            if name in BOT_EXCLUDE_LEVELS:
+                continue
             if name not in self._zones:
                 self._zones[name] = BotZone(name, price)
 
@@ -322,11 +330,14 @@ class BotTrader:
                         # Zone stays in_zone — clears when price leaves 1pt
                         continue
 
-                # Per-level daily trade cap.
+                # Per-level daily trade cap (uses per-level map, falls back to default).
                 level_trades = self._level_trade_counts.get(bz.name, 0)
-                if level_trades >= BOT_MAX_ENTRIES_PER_LEVEL:
+                level_cap = BOT_PER_LEVEL_MAX_ENTRIES.get(
+                    bz.name, BOT_MAX_ENTRIES_PER_LEVEL
+                )
+                if level_trades >= level_cap:
                     print(
-                        f"[bot] Skipped {bz.name} (max {BOT_MAX_ENTRIES_PER_LEVEL} "
+                        f"[bot] Skipped {bz.name} (max {level_cap} "
                         f"trades/level/day reached)"
                     )
                     # Zone stays in_zone — clears when price leaves 1pt

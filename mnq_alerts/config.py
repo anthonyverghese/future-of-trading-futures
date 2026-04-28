@@ -60,23 +60,32 @@ BOT_ENTRY_THRESHOLD = (
 BOT_TARGET_POINTS = 8.0  # Default target (used if level not in PER_LEVEL_TS)
 BOT_STOP_POINTS = 20.0  # Default stop
 # Per-level target/stop: MFE-based, trained on first 200 days, validated on 131 held-out.
-# Interior fibs have bigger bounces (T10-T12), extensions/IBH have smaller (T6).
+# Interior fibs have bigger bounces (T10-T12), extensions have smaller (T6).
 BOT_PER_LEVEL_TS = {
-    "IBH": (6, 20),
     "FIB_EXT_HI_1.272": (6, 20),
     "FIB_EXT_LO_1.272": (6, 20),
     "FIB_0.236": (8, 25),
-    "FIB_0.5": (10, 25),
     "FIB_0.618": (12, 20),
     "FIB_0.764": (10, 25),
 }
+# Per-level max entries per day (data-driven from WR-by-entry-count analysis, 2026-04-27).
+# Levels are capped where WR degrades at higher entry counts.
+BOT_PER_LEVEL_MAX_ENTRIES = {
+    "FIB_0.236": 12,  # gets stronger with more tests
+    "FIB_0.618": 3,   # collapses at test #4 (57.5% WR)
+    "FIB_0.764": 5,   # degrades after #5
+    "FIB_EXT_HI_1.272": 6,  # weakening in recent quarters, cap for safety
+    "FIB_EXT_LO_1.272": 6,  # weak at #7-9
+}
 BOT_INCLUDE_VWAP = False  # VWAP excluded: drags in weak regimes (66% WR)
 BOT_INCLUDE_IBL = False  # IBL excluded: -$1.5/day, 72.2% WR (weakest level)
-BOT_INCLUDE_INTERIOR_FIBS = True  # Interior fib retracements (0.236, 0.5, 0.618, 0.786)
+BOT_INCLUDE_IBH = False  # IBH excluded: edge eroded Q1→Q4 (+$1.69→-$1.20/trade)
+BOT_INCLUDE_INTERIOR_FIBS = True  # Interior fib retracements (0.236, 0.618, 0.764)
+BOT_EXCLUDE_LEVELS = {"FIB_0.5"}  # FIB_0.5: test #1 is negative, no consistent edge
 BOT_MIN_SCORE = -99  # Unscored: scoring hurts OOS (validated 2026-04-26)
 BOT_TREND_LOOKBACK_MIN = 60  # Minutes to look back for trend calculation
 BOT_VOL_FILTER_MIN_RANGE_PCT = 0.0015  # Skip entry when 30m range < 0.15% of price
-BOT_MAX_ENTRIES_PER_LEVEL = 12  # Max trades per level per day
+BOT_MAX_ENTRIES_PER_LEVEL = 12  # Default max (overridden by BOT_PER_LEVEL_MAX_ENTRIES)
 DAILY_LOSS_LIMIT_USD = 100.0  # Stop trading for the day after losing this much
 BOT_TIMEOUT_SECS = (
     15 * 60

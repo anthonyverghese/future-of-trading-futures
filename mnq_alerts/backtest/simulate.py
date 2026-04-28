@@ -55,11 +55,27 @@ def simulate_day(
     max_consec: int = 999,
     timeout_secs: int = 900,
     stop_fn=None,
+    include_ibl: bool = True,
+    include_vwap: bool = True,
+    extra_suppressed: list[tuple[int, int]] | None = None,
+    level_cooldown_secs: int = 0,
+    no_repeat_loss_combo: bool = False,
+    max_wins_per_level: int = 999,
+    max_approach_speed: float = 0.0,
+    max_per_level_map: dict[str, int] | None = None,
+    exclude_levels: set[str] | None = None,
 ) -> tuple[list[TradeRecord], tuple[int, int]]:
     """Simulate one day. Returns (trades, (cw, cl)).
 
     stop_pts: fixed stop for all levels (legacy).
     stop_fn: callable(level_name) -> stop_pts (per-level, takes priority).
+    include_ibl: whether to include IBL level (live bot: False).
+    include_vwap: whether to include VWAP level (live bot: False).
+    extra_suppressed: additional (start_et_mins, end_et_mins) windows to suppress.
+    level_cooldown_secs: after a trade on level X, skip X for this many seconds.
+    no_repeat_loss_combo: if True, skip level+direction combo that just lost.
+    max_wins_per_level: stop trading a level after this many wins (anticipate breakout).
+    max_approach_speed: skip entries where approach_speed > this value (0=disabled).
     """
     prices = dc.post_ib_prices
     n = len(prices)
@@ -72,7 +88,6 @@ def simulate_day(
     ib_range = dc.ibh - dc.ibl
     fixed_levels = [
         ("IBH", dc.ibh, False),
-        ("IBL", dc.ibl, False),
         ("FIB_EXT_HI_1.272", dc.fib_hi, False),
         ("FIB_EXT_LO_1.272", dc.fib_lo, False),
         ("FIB_0.236", dc.ibl + 0.236 * ib_range, False),
@@ -80,11 +95,17 @@ def simulate_day(
         ("FIB_0.618", dc.ibl + 0.618 * ib_range, False),
         ("FIB_0.764", dc.ibl + 0.764 * ib_range, False),
     ]
-    has_vwap = hasattr(dc, "post_ib_vwaps") and dc.post_ib_vwaps is not None
+    if include_ibl:
+        fixed_levels.append(("IBL", dc.ibl, False))
+    has_vwap = include_vwap and hasattr(dc, "post_ib_vwaps") and dc.post_ib_vwaps is not None
 
-    # Create zones.
-    zones = {name: zone_factory(name, price, drifts) for name, price, drifts in fixed_levels}
-    if has_vwap:
+    # Create zones (skip excluded levels).
+    zones = {
+        name: zone_factory(name, price, drifts)
+        for name, price, drifts in fixed_levels
+        if not exclude_levels or name not in exclude_levels
+    }
+    if has_vwap and (not exclude_levels or "VWAP" not in exclude_levels):
         zones["VWAP"] = zone_factory("VWAP", float(dc.post_ib_vwaps[0]), True)
     ec = {name: 0 for name in zones}
 
@@ -94,9 +115,15 @@ def simulate_day(
     dpnl = 0.0
     dcons = 0
     stopped = False
+    # Per-level cooldown: track last trade exit timestamp (ns) per level.
+    level_last_exit_ns: dict[str, int] = {}
+    # Per-level win count (for max_wins_per_level).
+    level_wins: dict[str, int] = {}
+    # Lost combos: set of (level, direction) that just lost.
+    lost_combos: set[tuple[str, str]] = set()
 
-    # Precompute fixed level prices for fast distance check.
-    fixed_prices = np.array([lv for _, lv, _ in fixed_levels])
+    # Precompute fixed level prices for fast distance check (only active levels).
+    fixed_prices = np.array([lv for name, lv, _ in fixed_levels if name in zones])
 
     for j in range(n):
         gi = start + j
@@ -122,7 +149,8 @@ def simulate_day(
 
         # Check each level for entry.
         for name, zone in zones.items():
-            if zone.in_zone or ec[name] >= max_per_level:
+            level_cap = (max_per_level_map or {}).get(name, max_per_level)
+            if zone.in_zone or ec[name] >= level_cap:
                 continue
             if not zone.update(pj):
                 continue
@@ -132,7 +160,10 @@ def simulate_day(
             range_30m = float(arrays.range_30m_pts[gi])
 
             # Suppress entries during weak time windows (13:30-14:00 ET).
-            if 810 <= et_mins < 840:
+            suppressed = 810 <= et_mins < 840
+            if not suppressed and extra_suppressed:
+                suppressed = any(ws <= et_mins < we for ws, we in extra_suppressed)
+            if suppressed:
                 zone.reset()
                 continue
 
@@ -141,8 +172,35 @@ def simulate_day(
                 zone.reset()
                 continue
 
+            # Same-level cooldown: skip if we traded this level recently.
+            if level_cooldown_secs > 0 and name in level_last_exit_ns:
+                cooldown_ns = np.int64(level_cooldown_secs) * 1_000_000_000
+                if ens - level_last_exit_ns[name] < cooldown_ns:
+                    zone.reset()
+                    continue
+
+            # Max wins per level: stop trading a level likely to break.
+            # Reset win count if no trade on this level for 30+ minutes.
+            if name in level_last_exit_ns:
+                gap_ns = ens - level_last_exit_ns[name]
+                if gap_ns > 1_800_000_000_000:  # 30 minutes
+                    level_wins[name] = 0
+            if level_wins.get(name, 0) >= max_wins_per_level:
+                zone.reset()
+                continue
+
             # Zone entry fired. Compute factors and score.
             d = "up" if pj > zone.price else "down"
+
+            # Post-loss direction filter: skip if this combo just lost.
+            if no_repeat_loss_combo and (name, d) in lost_combos:
+                zone.reset()
+                continue
+
+            # Approach speed filter: skip fast approaches (momentum through level).
+            if max_approach_speed > 0 and float(arrays.approach_speed[gi]) > max_approach_speed:
+                zone.reset()
+                continue
             fac = EntryFactors(
                 level=name, direction=d, entry_count=ec[name] + 1,
                 et_mins=et_mins,
@@ -179,10 +237,14 @@ def simulate_day(
             pos_exit_idx = exit_idx
             zone.reset()
             dpnl += pnl_usd
+            level_last_exit_ns[name] = int(ft[exit_idx])
             if pnl_usd >= 0:
                 cw += 1; cl = 0; dcons = 0
+                level_wins[name] = level_wins.get(name, 0) + 1
             else:
                 cw = 0; cl += 1; dcons += 1
+                lost_combos.add((name, d))
+                level_wins[name] = 0  # reset consecutive wins on loss
             if dpnl <= -daily_loss:
                 stopped = True
             if dcons >= max_consec:
