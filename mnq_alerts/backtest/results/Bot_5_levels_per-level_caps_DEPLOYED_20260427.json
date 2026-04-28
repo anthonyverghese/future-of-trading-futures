@@ -58,7 +58,11 @@
     "wr": 79.3,
     "pnl_per_day": 31.0,
     "winning_days_pct": 66,
-    "days_below_neg100": 50
+    "days_below_neg100": 50,
+    "max_dd": 585,
+    "max_dd_period": "2025-11-24 to 2026-01-14 (34 days, 42 to recover)",
+    "max_dd_pct_of_total_pnl": 5.7,
+    "total_pnl": 10287
   },
   "quarterly": {
     "Q1_oldest": {"days": 83, "pnl_per_day": 43.4, "wr_approx": 80.6},
