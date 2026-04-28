@@ -303,11 +303,12 @@ class BotTrader:
             range_30m / price * 100 if range_30m is not None and price > 0 else None
         )
 
+        # Skip all zone updates while a position is open — no new
+        # trades can happen anyway. All zones reset when trade closes.
+        if self._broker._position_open:
+            return
+
         for bz in self._zones.values():
-            # Skip the active trade level — its zone is managed by
-            # trade-close reset, not price-based auto-exit.
-            if bz.name == self._active_trade_level:
-                continue
             if bz.update(price):
                 direction = "up" if price > bz.price else "down"
 
