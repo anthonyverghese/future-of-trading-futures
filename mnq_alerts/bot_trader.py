@@ -79,7 +79,8 @@ class BotZone:
             return False
         if abs(current_price - self.price) <= BOT_ENTRY_THRESHOLD:
             self.in_zone = True
-            self.entry_count += 1
+            # entry_count is incremented in on_tick after filters pass,
+            # not here — prevents inflation from oscillation noise.
             return True
         return False
 
@@ -312,6 +313,30 @@ class BotTrader:
             if bz.update(price):
                 direction = "up" if price > bz.price else "down"
 
+                # Suppress entries during weak time windows.
+                if now_et is not None:
+                    et_mins = now_et.hour * 60 + now_et.minute
+                    if any(ws <= et_mins < we for ws, we in SUPPRESSED_WINDOWS):
+                        continue
+
+                # Per-level daily trade cap (uses per-level map, falls back to default).
+                level_trades = self._level_trade_counts.get(bz.name, 0)
+                level_cap = BOT_PER_LEVEL_MAX_ENTRIES.get(
+                    bz.name, BOT_MAX_ENTRIES_PER_LEVEL
+                )
+                if level_trades >= level_cap:
+                    continue
+
+                # Volatility filter: skip dead markets.
+                if (
+                    range_30m_pct is not None
+                    and range_30m_pct < BOT_VOL_FILTER_MIN_RANGE_PCT * 100
+                ):
+                    continue
+
+                # All filters passed — this is a genuine entry attempt.
+                bz.entry_count += 1
+
                 # Per-level target/stop (falls back to default if not configured).
                 target_pts, stop_pts = BOT_PER_LEVEL_TS.get(
                     bz.name, (BOT_TARGET_POINTS, BOT_STOP_POINTS)
@@ -323,42 +348,6 @@ class BotTrader:
                     f"dist={abs(price - bz.price):.2f}, "
                     f"T{target_pts}/S{stop_pts})"
                 )
-
-                # Suppress entries during weak time windows.
-                if now_et is not None:
-                    et_mins = now_et.hour * 60 + now_et.minute
-                    if any(ws <= et_mins < we for ws, we in SUPPRESSED_WINDOWS):
-                        print(
-                            f"[bot] Skipped {bz.name} (suppressed time window "
-                            f"{now_et.strftime('%H:%M')} ET)"
-                        )
-                        # Zone stays in_zone — clears when price leaves 1pt
-                        continue
-
-                # Per-level daily trade cap (uses per-level map, falls back to default).
-                level_trades = self._level_trade_counts.get(bz.name, 0)
-                level_cap = BOT_PER_LEVEL_MAX_ENTRIES.get(
-                    bz.name, BOT_MAX_ENTRIES_PER_LEVEL
-                )
-                if level_trades >= level_cap:
-                    print(
-                        f"[bot] Skipped {bz.name} (max {level_cap} "
-                        f"trades/level/day reached)"
-                    )
-                    # Zone stays in_zone — clears when price leaves 1pt
-                    continue
-
-                # Volatility filter: skip dead markets.
-                if (
-                    range_30m_pct is not None
-                    and range_30m_pct < BOT_VOL_FILTER_MIN_RANGE_PCT * 100
-                ):
-                    print(
-                        f"[bot] Skipped {bz.name} (low vol: 30m range "
-                        f"{range_30m_pct:.3f}% < {BOT_VOL_FILTER_MIN_RANGE_PCT*100:.2f}%)"
-                    )
-                    # Zone stays in_zone — clears when price leaves 1pt
-                    continue
 
                 score = bot_entry_score(
                     bz.name,
@@ -375,7 +364,6 @@ class BotTrader:
                         f"[bot] Skipped {bz.name} (score {score} < {BOT_MIN_SCORE}) | "
                         f"test #{bz.entry_count}, {direction}, trend={trend_60m:+.0f}"
                     )
-                    # Zone stays in_zone — clears when price leaves 1pt
                     continue
                 allowed, reason = self._broker.can_trade()
                 if allowed:

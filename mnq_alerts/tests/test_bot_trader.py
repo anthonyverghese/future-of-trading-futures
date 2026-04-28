@@ -106,22 +106,18 @@ class TestBotZone:
         """After auto-exit, zone fires again on next approach."""
         bz = BotZone("IBL", 20000.0)
         bz.update(20000.0)  # enter
-        assert bz.entry_count == 1
         bz.update(20005.0)  # leave — auto-exit
         assert bz.in_zone is False
         result = bz.update(20000.5)  # approach again
         assert result is True
-        assert bz.entry_count == 2
 
     def test_reset_allows_reentry(self):
         bz = BotZone("IBL", 20000.0)
         bz.update(20000.0)  # first entry
-        assert bz.entry_count == 1
         bz.reset()  # trade closed
         assert bz.in_zone is False
         result = bz.update(20000.0)  # re-enter
         assert result is True
-        assert bz.entry_count == 2
 
     def test_auto_exit_at_exact_boundary(self):
         """Price at exactly BOT_ENTRY_THRESHOLD stays in zone."""
@@ -150,16 +146,13 @@ class TestBotZone:
         bz = BotZone("IBL", 20000.0)
         # Tick 1: enter (trade blocked — zone stays in_zone)
         assert bz.update(20000.0) is True
-        assert bz.entry_count == 1
         # Tick 2: still within 1pt — no re-fire
         assert bz.update(20000.25) is False
-        assert bz.entry_count == 1  # NOT incremented
         # Tick 3: price leaves zone
         bz.update(20005.0)
         assert bz.in_zone is False
         # Tick 4: price comes back — fresh entry
         assert bz.update(20000.0) is True
-        assert bz.entry_count == 2
 
     def test_vwap_zone_with_drifting_price(self):
         """VWAP zone auto-exit uses current price, which drifts."""
@@ -174,12 +167,14 @@ class TestBotZone:
         # Approach new VWAP
         assert bz.update(20010.0) is True
 
-    def test_entry_count_increments_across_resets(self):
+    def test_entry_count_not_incremented_by_update(self):
+        """entry_count is only incremented in on_tick after filters pass,
+        not in update(). This prevents inflation from oscillation noise."""
         bz = BotZone("IBH", 20000.0)
         for i in range(3):
             bz.update(20000.0)  # enter
             bz.reset()  # trade closed
-        assert bz.entry_count == 3
+        assert bz.entry_count == 0  # not incremented by update()
 
     def test_update_returns_false_after_entry(self):
         bz = BotZone("IBL", 20000.0)
@@ -213,7 +208,6 @@ class TestZoneResetAndOnePosition:
         bz.update(20050.0)  # price leaves — auto-exit
         assert bz.in_zone is False
         assert bz.update(20000.0) is True  # re-entry
-        assert bz.entry_count == 2
 
     def test_zone_reset_then_reentry(self):
         """After reset(), the next approach triggers a new entry."""
@@ -224,7 +218,6 @@ class TestZoneResetAndOnePosition:
         assert bz.in_zone is False
         # Price comes back — new entry.
         assert bz.update(20000.5) is True
-        assert bz.entry_count == 2
 
     def test_position_open_blocks_without_reset(self):
         """When position is already open, zone stays in_zone (no reset).
@@ -335,8 +328,7 @@ class TestZoneResetAndOnePosition:
         bz = BotZone("IBL", 20000.0)
         assert bz.update(20000.0) is True  # entry_count = 1
         bz.reset()  # skipped
-        assert bz.update(20000.0) is True  # entry_count = 2
-        assert bz.entry_count == 2
+        assert bz.update(20000.0) is True  # fires again
 
     def test_failed_trade_stays_in_zone(self):
         """If submit_bracket fails, zone stays in_zone.
