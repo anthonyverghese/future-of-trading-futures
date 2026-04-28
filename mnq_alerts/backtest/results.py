@@ -100,30 +100,115 @@ class BacktestResult:
     recent_max_dd: float
 
 
-def compute_stats(trades: list[TradeRecord], n_days: int) -> dict:
-    """Compute summary stats from a list of trades."""
+def compute_stats(
+    trades: list[TradeRecord],
+    n_days: int,
+    dates: list | None = None,
+) -> dict:
+    """Compute comprehensive stats from a list of trades.
+
+    dates: ordered list of all dates in the period (for daily P&L breakdown).
+    """
     if not trades:
         return {"trades": 0, "trades_per_day": 0, "wr": 0,
                 "pnl_per_day": 0, "max_dd": 0}
-    w = sum(1 for t in trades if t.outcome == "win")
-    l = sum(1 for t in trades if t.outcome == "loss")
-    d = w + l
-    wr = w / d * 100 if d else 0
-    pnl = sum(t.pnl_usd for t in trades)
-    eq = 10000.0
-    peak = eq
-    dd = 0.0
+    w = sum(1 for t in trades if t.pnl_usd >= 0)
+    l = sum(1 for t in trades if t.pnl_usd < 0)
+    total = w + l
+    wr = w / total * 100 if total else 0
+    total_pnl = sum(t.pnl_usd for t in trades)
+
+    # Max drawdown (trade-by-trade equity curve).
+    eq = 0.0
+    peak = 0.0
+    max_dd = 0.0
     for t in trades:
         eq += t.pnl_usd
         peak = max(peak, eq)
-        dd = max(dd, peak - eq)
-    return {
+        max_dd = max(max_dd, peak - eq)
+
+    stats = {
         "trades": len(trades),
-        "trades_per_day": len(trades) / n_days if n_days else 0,
+        "trades_per_day": round(len(trades) / n_days, 1) if n_days else 0,
+        "wins": w,
+        "losses": l,
         "wr": round(wr, 1),
-        "pnl_per_day": round(pnl / n_days, 1) if n_days else 0,
-        "max_dd": round(dd, 0),
+        "total_pnl": round(total_pnl, 2),
+        "pnl_per_day": round(total_pnl / n_days, 2) if n_days else 0,
+        "max_dd": round(max_dd, 0),
     }
+
+    # Daily breakdown if dates provided.
+    if dates:
+        from collections import defaultdict
+        daily_pnl = defaultdict(float)
+        for t in trades:
+            daily_pnl[t.date] += t.pnl_usd
+        day_pnls = [daily_pnl.get(d, 0.0) for d in dates]
+
+        winning_days = sum(1 for p in day_pnls if p >= 0)
+        losing_days = sum(1 for p in day_pnls if p < 0)
+        days_below_neg100 = sum(1 for p in day_pnls if p <= -100)
+
+        stats["winning_days"] = winning_days
+        stats["losing_days"] = losing_days
+        stats["winning_days_pct"] = round(winning_days / len(dates) * 100, 1) if dates else 0
+        stats["days_below_neg100"] = days_below_neg100
+
+        # Recent 60 and 30 days.
+        if len(dates) >= 60:
+            recent_60_dates = set(dates[-60:])
+            r60 = [t for t in trades if t.date in recent_60_dates]
+            r60_pnl = sum(t.pnl_usd for t in r60)
+            r60_w = sum(1 for t in r60 if t.pnl_usd >= 0)
+            r60_total = len(r60)
+            stats["recent_60d_pnl_per_day"] = round(r60_pnl / 60, 2)
+            stats["recent_60d_wr"] = round(r60_w / r60_total * 100, 1) if r60_total else 0
+
+        if len(dates) >= 30:
+            recent_30_dates = set(dates[-30:])
+            r30 = [t for t in trades if t.date in recent_30_dates]
+            r30_pnl = sum(t.pnl_usd for t in r30)
+            r30_w = sum(1 for t in r30 if t.pnl_usd >= 0)
+            r30_total = len(r30)
+            stats["recent_30d_pnl_per_day"] = round(r30_pnl / 30, 2)
+            stats["recent_30d_wr"] = round(r30_w / r30_total * 100, 1) if r30_total else 0
+
+        # Quarterly breakdown.
+        n = len(dates)
+        if n >= 4:
+            q = n // 4
+            quarterly = {}
+            for i, label in enumerate(["Q1_oldest", "Q2", "Q3", "Q4_newest"]):
+                q_dates = set(dates[i*q : (i+1)*q if i < 3 else n])
+                q_trades = [t for t in trades if t.date in q_dates]
+                q_pnl = sum(t.pnl_usd for t in q_trades)
+                q_nd = len(q_dates)
+                quarterly[label] = round(q_pnl / q_nd, 2) if q_nd else 0
+            stats["quarterly_pnl_per_day"] = quarterly
+
+        # Per-level breakdown.
+        from collections import defaultdict as dd2
+        level_stats = dd2(lambda: {"w": 0, "l": 0, "pnl": 0.0})
+        for t in trades:
+            ls = level_stats[t.level]
+            ls["pnl"] += t.pnl_usd
+            if t.pnl_usd >= 0:
+                ls["w"] += 1
+            else:
+                ls["l"] += 1
+        per_level = {}
+        for lv in sorted(level_stats.keys()):
+            s = level_stats[lv]
+            total_lv = s["w"] + s["l"]
+            per_level[lv] = {
+                "trades": total_lv,
+                "wr": round(s["w"] / total_lv * 100, 1) if total_lv else 0,
+                "pnl_per_day": round(s["pnl"] / n_days, 2) if n_days else 0,
+            }
+        stats["per_level"] = per_level
+
+    return stats
 
 
 def save_result(result: BacktestResult) -> str:
@@ -161,6 +246,60 @@ def save_result(result: BacktestResult) -> str:
             "max_dd": result.recent_max_dd,
         },
     }
+
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+    return str(path)
+
+
+def save_trades_data(
+    name: str,
+    trades: list[TradeRecord],
+    daily_context: dict | None = None,
+) -> str:
+    """Save full trade-level data for post-hoc analysis.
+
+    trades: all TradeRecord objects from the backtest.
+    daily_context: optional dict of {date_str: {ibh, ibl, ib_range, ...}}.
+
+    Saved as a separate JSON alongside the summary results.
+    """
+    RESULTS_DIR.mkdir(exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    desc = name.replace(" ", "_").replace("/", "-")[:40]
+    filename = f"{desc}_trades_{ts}.json"
+    path = RESULTS_DIR / filename
+
+    trade_rows = []
+    for t in trades:
+        row = {
+            "date": str(t.date),
+            "level": t.level,
+            "direction": t.direction,
+            "entry_count": t.entry_count,
+            "outcome": t.outcome,
+            "pnl_usd": round(t.pnl_usd, 2),
+            "entry_idx": t.entry_idx,
+            "exit_idx": t.exit_idx,
+            "entry_ns": t.entry_ns,
+        }
+        if t.factors:
+            row["et_mins"] = t.factors.et_mins
+            row["tick_rate"] = round(t.factors.tick_rate, 1)
+            row["session_move"] = round(t.factors.session_move, 2)
+            row["range_30m"] = round(t.factors.range_30m, 2)
+            row["approach_speed"] = round(t.factors.approach_speed, 2)
+            row["tick_density"] = round(t.factors.tick_density, 2)
+        trade_rows.append(row)
+
+    data = {
+        "name": name,
+        "timestamp": ts,
+        "total_trades": len(trades),
+        "trades": trade_rows,
+    }
+    if daily_context:
+        data["daily_context"] = daily_context
 
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
