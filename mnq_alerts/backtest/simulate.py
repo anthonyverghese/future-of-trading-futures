@@ -64,6 +64,7 @@ def simulate_day(
     max_approach_speed: float = 0.0,
     max_per_level_map: dict[str, int] | None = None,
     exclude_levels: set[str] | None = None,
+    vol_filter_pct: float = 0.0015,
 ) -> tuple[list[TradeRecord], tuple[int, int]]:
     """Simulate one day. Returns (trades, (cw, cl)).
 
@@ -168,7 +169,7 @@ def simulate_day(
                 continue
 
             # Vol filter: skip dead markets (matches live bot).
-            if pj > 0 and range_30m / pj < 0.0015:
+            if pj > 0 and range_30m / pj < vol_filter_pct:
                 zone.reset()
                 continue
 

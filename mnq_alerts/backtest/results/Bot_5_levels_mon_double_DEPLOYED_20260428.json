@@ -1,0 +1,66 @@
+{
+  "description": "Bot 5 levels with Monday double caps DEPLOYED",
+  "timestamp": "2026-04-28",
+  "changes_from_previous": {
+    "added": "BOT_MONDAY_DOUBLE_CAPS: double per-level entry caps on Mondays",
+    "reason": "Monday is best day for bounce trading: 77% WR, +$46/day. Doubling caps captures more of this edge.",
+    "backtest_result": "+$2.18/day vs baseline, lower max DD (517 vs 604), best recent 60d ($36.95)"
+  },
+  "params": {
+    "zone_type": "BotZoneTradeReset",
+    "entry_threshold": 1.0,
+    "exit_threshold": "1pt_auto_exit_or_trade_reset",
+    "per_level_targets": {
+      "FIB_EXT_HI_1.272": [6, 20],
+      "FIB_EXT_LO_1.272": [6, 20],
+      "FIB_0.236": [8, 25],
+      "FIB_0.618": [12, 20],
+      "FIB_0.764": [10, 25]
+    },
+    "levels": ["FIB_EXT_HI_1.272", "FIB_EXT_LO_1.272", "FIB_0.236", "FIB_0.618", "FIB_0.764"],
+    "excluded_levels": ["IBH", "IBL", "VWAP", "FIB_0.5"],
+    "per_level_max_entries": {
+      "FIB_0.236": 12, "FIB_0.618": 3, "FIB_0.764": 5,
+      "FIB_EXT_HI_1.272": 6, "FIB_EXT_LO_1.272": 6
+    },
+    "monday_double_caps": true,
+    "vol_filter_pct": 0.0015,
+    "timeout_secs": 900,
+    "daily_loss": 100.0,
+    "data_days": 332,
+    "data_range": "2025-01-02 to 2026-04-27",
+    "suppressed_windows": [[810, 840]]
+  },
+  "full_sample": {
+    "days": 332,
+    "trades": 4309,
+    "trades_per_day": 13.0,
+    "wr": 78.8,
+    "pnl_per_day": 33.17,
+    "total_pnl": 11012.0,
+    "max_dd": 517,
+    "winning_days_pct": 64.8,
+    "days_below_neg100": 51
+  },
+  "quarterly": {
+    "Q4_newest": {"pnl_per_day": 34.83}
+  },
+  "recent_60": {
+    "pnl_per_day": 36.95
+  },
+  "recent_30": {
+    "pnl_per_day": 36.60
+  },
+  "pattern_filters_tested": {
+    "note": "22 variants tested on 332 days. Full results in pattern_filters_20260428_125547.json",
+    "filters_that_beat_baseline": {
+      "mon_double_caps": {"pnl_per_day": 33.17, "diff": "+2.18", "reason": "Monday 77% WR, structural edge from weekend gap"},
+      "vix15_raise_vol": {"pnl_per_day": 31.82, "diff": "+0.83", "reason": "Low VIX = dead market, require more confirmation"}
+    },
+    "filters_that_hurt": [
+      "Gap-based filters (-$5 to -$13/day): gaps too common (193/331 unfilled) to filter",
+      "First-loss filters (-$6 to -$15/day): stops recovery trades",
+      "All defensive combined (-$10/day): over-filtered"
+    ]
+  }
+}

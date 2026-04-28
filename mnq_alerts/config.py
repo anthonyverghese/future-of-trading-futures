@@ -70,6 +70,8 @@ BOT_PER_LEVEL_TS = {
 }
 # Per-level max entries per day (data-driven from WR-by-entry-count analysis, 2026-04-27).
 # Levels are capped where WR degrades at higher entry counts.
+# On Mondays, caps are doubled (BOT_MONDAY_DOUBLE_CAPS). Monday is the best day
+# for bounce trading: 77% WR, +$46/day (validated 2026-04-28 over 332 days).
 BOT_PER_LEVEL_MAX_ENTRIES = {
     "FIB_0.236": 12,  # gets stronger with more tests
     "FIB_0.618": 3,   # collapses at test #4 (57.5% WR)
@@ -77,6 +79,7 @@ BOT_PER_LEVEL_MAX_ENTRIES = {
     "FIB_EXT_HI_1.272": 6,  # weakening in recent quarters, cap for safety
     "FIB_EXT_LO_1.272": 6,  # weak at #7-9
 }
+BOT_MONDAY_DOUBLE_CAPS = True  # Double per-level caps on Mondays (+$2.18/day vs baseline)
 BOT_INCLUDE_VWAP = False  # VWAP excluded: drags in weak regimes (66% WR)
 BOT_INCLUDE_IBL = False  # IBL excluded: -$1.5/day, 72.2% WR (weakest level)
 BOT_INCLUDE_IBH = False  # IBH excluded: edge eroded Q1→Q4 (+$1.69→-$1.20/trade)

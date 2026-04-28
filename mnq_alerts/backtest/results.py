@@ -50,21 +50,21 @@ class BacktestParams:
     approach_features: list[str] | None = None  # e.g. ["duration","velocity","volume","deceleration"]
 
     # Trade management
-    timeout_secs: int           # 900 default
-    time_exit_secs: int | None  # None = disabled, 60 = cut losers after 60s
-    trailing_stop: dict | None  # None or {"activate": 5, "offset": 3}
+    timeout_secs: int = 900
+    time_exit_secs: int | None = None
+    trailing_stop: dict | None = None
 
     # Risk limits
-    daily_loss: float
-    max_consec: int | None
+    daily_loss: float = 100.0
+    max_consec: int | None = None
 
     # Data
-    data_days: int
-    data_range: str             # "2025-01-02 to 2026-04-15"
+    data_days: int = 0
+    data_range: str = ""
 
     # Walk-forward
-    train_days: int
-    step_days: int
+    train_days: int = 60
+    step_days: int = 20
 
     # Meta
     description: str = ""

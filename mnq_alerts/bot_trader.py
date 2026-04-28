@@ -34,6 +34,7 @@ from config import (
     BOT_INCLUDE_VWAP,
     BOT_MAX_ENTRIES_PER_LEVEL,
     BOT_MIN_SCORE,
+    BOT_MONDAY_DOUBLE_CAPS,
     BOT_PER_LEVEL_MAX_ENTRIES,
     BOT_PER_LEVEL_TS,
     BOT_STOP_POINTS,
@@ -320,10 +321,13 @@ class BotTrader:
                         continue
 
                 # Per-level daily trade cap (uses per-level map, falls back to default).
+                # Mondays get doubled caps (best day: 77% WR, +$46/day).
                 level_trades = self._level_trade_counts.get(bz.name, 0)
                 level_cap = BOT_PER_LEVEL_MAX_ENTRIES.get(
                     bz.name, BOT_MAX_ENTRIES_PER_LEVEL
                 )
+                if BOT_MONDAY_DOUBLE_CAPS and now.weekday() == 0:
+                    level_cap *= 2
                 if level_trades >= level_cap:
                     continue
 
