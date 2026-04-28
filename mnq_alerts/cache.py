@@ -597,6 +597,36 @@ def get_bot_daily_summary(date_str: str) -> dict:
     return result
 
 
+def close_open_bot_trades(
+    date_str: str,
+    exit_time: str,
+    exit_price: float,
+    pnl_usd: float,
+    exit_reason: str = "startup_flatten",
+) -> int:
+    """Close any `outcome='open'` bot_trades rows for the given date
+    with actual exit details. Returns the number of rows updated.
+
+    Called from startup flatten so the DB reflects the real P&L.
+    """
+    if not os.path.exists(ALERTS_LOG_PATH):
+        return 0
+    try:
+        outcome = "win" if pnl_usd >= 0 else "loss"
+        with sqlite3.connect(ALERTS_LOG_PATH) as conn:
+            _ensure_alerts_schema(conn)
+            cur = conn.execute(
+                """UPDATE bot_trades
+                   SET exit_time = ?, exit_price = ?, pnl_usd = ?,
+                       outcome = ?, exit_reason = ?
+                   WHERE date = ? AND outcome = 'open'""",
+                (exit_time, exit_price, pnl_usd, outcome, exit_reason, date_str),
+            )
+            return cur.rowcount
+    except Exception:
+        return 0
+
+
 def mark_open_bot_trades_orphaned(date_str: str) -> int:
     """Mark any `outcome='open'` bot_trades rows for the given date as
     `orphaned`. Returns the number of rows updated.

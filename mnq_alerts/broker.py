@@ -35,6 +35,7 @@ if IBKR_TRADING_ENABLED:
     from ib_insync import IB, Contract, LimitOrder, MarketOrder, Order, StopOrder
 
 from cache import (
+    close_open_bot_trades,
     load_bot_daily_risk_state,
     log_bot_trade_entry,
     mark_open_bot_trades_orphaned,
@@ -434,17 +435,23 @@ class IBKRBroker:
                             f"(entry~{entry_price:.2f} exit={fill_price:.2f}) | "
                             f"{self.daily_stats}"
                         )
-                        # Try to update the matching DB row.
+                        # Update the matching DB row with actual exit details.
                         try:
                             now = datetime.datetime.now(
                                 datetime.timezone.utc
                             ).astimezone()
                             today = now.strftime("%Y-%m-%d")
-                            updated = mark_open_bot_trades_orphaned(today)
+                            updated = close_open_bot_trades(
+                                date_str=today,
+                                exit_time=now.strftime("%H:%M:%S %Z"),
+                                exit_price=fill_price,
+                                pnl_usd=pnl_usd,
+                                exit_reason="startup_flatten",
+                            )
                             if updated:
                                 print(
-                                    f"[broker] Marked {updated} open bot_trades "
-                                    f"row(s) as orphaned"
+                                    f"[broker] Updated {updated} open bot_trades "
+                                    f"row(s) with flatten P&L"
                                 )
                         except Exception as exc:
                             print(f"[broker] Startup DB update error: {exc}")
