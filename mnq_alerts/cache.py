@@ -409,13 +409,17 @@ def load_pending_alerts(date_str: str) -> list[dict]:
     results = []
     for row in rows:
         alert_id, line_price, direction, date, time_str, hit_time_str = row
-        # Parse alert_time from date + time columns (e.g. "2026-03-23" + "12:09:03 PDT")
+        # Parse alert_time from date + time columns (e.g. "2026-03-23" + "12:09:03 EDT")
         try:
-            # Strip timezone abbreviation — we know it's local time on the server.
+            # Strip timezone abbreviation — we know it's ET (server local time).
             time_clean = time_str.rsplit(" ", 1)[0] if " " in time_str else time_str
-            alert_dt = datetime.datetime.strptime(
+            alert_dt_naive = datetime.datetime.strptime(
                 f"{date} {time_clean}", "%Y-%m-%d %H:%M:%S"
             )
+            # Localize to ET so it's timezone-aware (matches live feed timestamps).
+            import pytz
+            _et = pytz.timezone("America/New_York")
+            alert_dt = _et.localize(alert_dt_naive)
         except (ValueError, TypeError):
             continue
         hit_dt = None
