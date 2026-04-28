@@ -19,6 +19,7 @@ Bot parameters (validated 2026-04-27 over 332 days):
 from __future__ import annotations
 
 import datetime
+import time
 from collections import deque
 
 import pytz
@@ -190,6 +191,9 @@ class BotTrader:
         self._level_trade_counts: dict[str, int] = {}
         # Track which level has the active trade (for zone reset on close).
         self._active_trade_level: str | None = None
+        # Cooldown after failed entry (unfilled limit cancel).
+        # Maps level name → monotonic timestamp when cooldown expires.
+        self._level_cooldown_until: dict[str, float] = {}
 
     def connect(self) -> bool:
         """Connect to IBKR. Returns True on success."""
@@ -314,6 +318,11 @@ class BotTrader:
             if bz.update(price):
                 direction = "up" if price > bz.price else "down"
 
+                # Cooldown after failed entry (unfilled limit cancel).
+                cooldown = self._level_cooldown_until.get(bz.name, 0)
+                if cooldown > 0 and time.monotonic() < cooldown:
+                    continue
+
                 # Suppress entries during weak time windows.
                 if now_et is not None:
                     et_mins = now_et.hour * 60 + now_et.minute
@@ -391,7 +400,8 @@ class BotTrader:
                         self._active_trade_level = bz.name
                     else:
                         print(f"[broker] Trade failed: {result.error}")
-                        # Zone stays in_zone — clears when price leaves 1pt
+                        # Cooldown: don't retry this level for 60s.
+                        self._level_cooldown_until[bz.name] = time.monotonic() + 60
                 else:
                     print(f"[broker] Skipped {bz.name}: {reason}")
                     # Zone stays in_zone=True — won't re-fire until
@@ -409,6 +419,7 @@ class BotTrader:
         self._price_window.clear()
         self._level_trade_counts.clear()
         self._active_trade_level = None
+        self._level_cooldown_until.clear()
 
     def eod_flatten(self) -> None:
         """Flatten open position a few minutes before market close.
