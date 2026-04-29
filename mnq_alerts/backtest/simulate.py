@@ -69,6 +69,7 @@ def simulate_day(
     global_cooldown_after_loss_secs: int = 0,
     no_reverse_after_loss: bool = False,
     max_tick_rate: float = 0.0,
+    score_fn=None,
 ) -> tuple[list[TradeRecord], tuple[int, int]]:
     """Simulate one day. Returns (trades, (cw, cl)).
 
@@ -245,6 +246,13 @@ def simulate_day(
 
             if weights is not None:
                 sc = score_entry(fac, weights, cw, cl)
+                if sc < min_score:
+                    zone.reset()
+                    continue
+
+            # Custom score function (e.g., bot_entry_score).
+            if score_fn is not None:
+                sc = score_fn(fac)
                 if sc < min_score:
                     zone.reset()
                     continue
