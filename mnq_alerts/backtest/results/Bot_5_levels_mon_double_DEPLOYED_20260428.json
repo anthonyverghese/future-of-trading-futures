@@ -80,6 +80,7 @@
         "no_reverse_after_loss": {"pnl_per_day": 19.79, "diff": -13.38, "reason": "Terrible. Blocks too many valid reversal trades."},
         "tick_rate_lt_2500": {"pnl_per_day": 29.36, "diff": -3.81, "reason": "Fewest bad days (42) but costs too much P&L."},
         "tick_rate_lt_3000": {"pnl_per_day": 29.35, "diff": -3.82, "reason": "Similar to 2500, not worth it."},
+        "tick_rate_sweep": {"note": "Full sweep 2000-4000 in tick_rate_sweep_20260429_114643.json. Every threshold costs P&L. Best MaxDD at <3200 ($423) but -$3.34/day. High tick rate entries are mix of good/bad — can't filter profitably."},
         "all_combos": {"diff": "-$6 to -$17/day", "reason": "Combining filters compounds losses."}
       }
     },
