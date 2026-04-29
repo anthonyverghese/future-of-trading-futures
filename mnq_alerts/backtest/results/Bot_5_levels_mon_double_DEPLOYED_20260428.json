@@ -52,7 +52,7 @@
     "pnl_per_day": 36.60
   },
   "pattern_filters_tested": {
-    "note": "22 pattern variants + 10 VIX variants tested on 332 days. Full results in pattern_filters_20260428_125547.json and vix_filters_20260428_142353.json",
+    "note": "22 pattern + 10 VIX + 20 direction variants tested on 332 days. Full results in pattern_filters_20260428_125547.json, vix_filters_20260428_142353.json, direction_filters_20260429_095137.json",
     "filters_deployed": {
       "mon_double_caps": {"pnl_per_day": 33.17, "diff": "+2.18 vs pre-Monday baseline", "reason": "Monday 77% WR, structural edge from weekend gap"}
     },
@@ -63,7 +63,15 @@
       "gap_based_filters": {"diff": "-$5 to -$13/day", "reason": "Gaps too common (193/331 unfilled) to filter profitably."},
       "first_loss_filters": {"diff": "-$6 to -$15/day", "reason": "Stops recovery trades that make most days profitable."},
       "adr_steep_filters": {"diff": "-$0.32 to -$2.53/day", "reason": "Marginal improvement in bad days but costs more in P&L."},
-      "all_defensive_combined": {"pnl_per_day": 20.64, "diff": -10.35, "reason": "Over-filtered. Only 25 bad days but $10/day cost."}
+      "all_defensive_combined": {"pnl_per_day": 20.64, "diff": -10.35, "reason": "Over-filtered. Only 25 bad days but $10/day cost."},
+      "direction_filters": {
+        "ibh_sell_only": {"pnl_per_day": 37.41, "diff": "+4.24", "reason": "Best P&L but worse MaxDD (622 vs 517), more bad days (60 vs 51), weaker R30d ($33 vs $37). Not deployed."},
+        "ibh_buy_only": {"pnl_per_day": 32.08, "diff": -1.09, "reason": "Breakout continuation above IBH is weak."},
+        "fib_0764_buy_only": {"pnl_per_day": 32.74, "diff": -0.43, "reason": "Lowest MaxDD ($487), fewest bad days (43). SELL is terrible (-$15.92). BUY is the strong direction."},
+        "fib_05_both": {"pnl_per_day": 29.31, "diff": -3.86, "reason": "Bad both directions. Confirms exclusion."},
+        "ibl_both": {"pnl_per_day": 31.55, "diff": -1.62, "reason": "No improvement either direction. Confirms exclusion."},
+        "ibh_sell_plus_0764_buy_combo": {"pnl_per_day": 36.05, "diff": "+2.88", "reason": "1-position constraint causes interaction — R30d drops to $18.71, worse than either individual filter. Not deployed."}
+      }
     },
     "key_insight": "The bot's edge comes from taking every valid setup. Defensive filters consistently hurt more than they help because the same conditions that predict losing days also occur on winning days. Only structural edges (Monday) improve P&L."
   }
