@@ -65,6 +65,7 @@ def simulate_day(
     max_per_level_map: dict[str, int] | None = None,
     exclude_levels: set[str] | None = None,
     vol_filter_pct: float = 0.0015,
+    direction_filter: dict[str, str] | None = None,
 ) -> tuple[list[TradeRecord], tuple[int, int]]:
     """Simulate one day. Returns (trades, (cw, cl)).
 
@@ -192,6 +193,12 @@ def simulate_day(
 
             # Zone entry fired. Compute factors and score.
             d = "up" if pj > zone.price else "down"
+
+            # Per-level direction filter: only allow specified direction.
+            if direction_filter and name in direction_filter:
+                if direction_filter[name] != d:
+                    zone.reset()
+                    continue
 
             # Post-loss direction filter: skip if this combo just lost.
             if no_repeat_loss_combo and (name, d) in lost_combos:
