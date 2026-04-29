@@ -24,6 +24,7 @@
       "FIB_EXT_HI_1.272": 6, "FIB_EXT_LO_1.272": 6
     },
     "monday_double_caps": true,
+    "global_cooldown_after_loss_secs": 30,
     "vol_filter_pct": 0.0015,
     "timeout_secs": 900,
     "daily_loss": 100.0,
@@ -52,9 +53,10 @@
     "pnl_per_day": 36.60
   },
   "pattern_filters_tested": {
-    "note": "22 pattern + 10 VIX + 20 direction variants tested on 332 days. Full results in pattern_filters_20260428_125547.json, vix_filters_20260428_142353.json, direction_filters_20260429_095137.json",
+    "note": "22 pattern + 10 VIX + 20 direction + 13 scoring variants tested on 332 days. Full results in pattern_filters, vix_filters, direction_filters, scoring_filters JSONs.",
     "filters_deployed": {
-      "mon_double_caps": {"pnl_per_day": 33.17, "diff": "+2.18 vs pre-Monday baseline", "reason": "Monday 77% WR, structural edge from weekend gap"}
+      "mon_double_caps": {"pnl_per_day": 33.17, "diff": "+2.18 vs pre-Monday baseline", "reason": "Monday 77% WR, structural edge from weekend gap"},
+      "global_30s_cooldown": {"pnl_per_day": 33.54, "diff": "+0.37", "max_dd": 466, "bad_days": 48, "reason": "After any stop loss, wait 30s before trading any level. Prevents momentum cascade trades."}
     },
     "filters_tested_but_not_deployed": {
       "vix_lt15_raise_vol": {"best_variant": "Open VIX<15 vol 0.25%", "pnl_per_day": 32.87, "diff": -0.30, "reason": "Too small improvement, not worth the complexity. VIX<15 only affects 21 days."},
@@ -71,6 +73,14 @@
         "fib_05_both": {"pnl_per_day": 29.31, "diff": -3.86, "reason": "Bad both directions. Confirms exclusion."},
         "ibl_both": {"pnl_per_day": 31.55, "diff": -1.62, "reason": "No improvement either direction. Confirms exclusion."},
         "ibh_sell_plus_0764_buy_combo": {"pnl_per_day": 36.05, "diff": "+2.88", "reason": "1-position constraint causes interaction — R30d drops to $18.71, worse than either individual filter. Not deployed."}
+      },
+      "scoring_filters": {
+        "global_30s_cooldown": {"pnl_per_day": 33.54, "diff": "+0.37", "reason": "Deployed. Small P&L gain, lower MaxDD (466 vs 517), fewer bad days (48 vs 51)."},
+        "global_60s_cooldown": {"pnl_per_day": 32.24, "diff": -0.93, "reason": "Too long, misses recovery trades."},
+        "no_reverse_after_loss": {"pnl_per_day": 19.79, "diff": -13.38, "reason": "Terrible. Blocks too many valid reversal trades."},
+        "tick_rate_lt_2500": {"pnl_per_day": 29.36, "diff": -3.81, "reason": "Fewest bad days (42) but costs too much P&L."},
+        "tick_rate_lt_3000": {"pnl_per_day": 29.35, "diff": -3.82, "reason": "Similar to 2500, not worth it."},
+        "all_combos": {"diff": "-$6 to -$17/day", "reason": "Combining filters compounds losses."}
       }
     },
     "key_insight": "The bot's edge comes from taking every valid setup. Defensive filters consistently hurt more than they help because the same conditions that predict losing days also occur on winning days. Only structural edges (Monday) improve P&L."

@@ -29,6 +29,7 @@ from cache import load_bot_daily_level_counts
 from config import (
     BOT_ENTRY_THRESHOLD,
     BOT_EXCLUDE_LEVELS,
+    BOT_GLOBAL_COOLDOWN_AFTER_LOSS_SECS,
     BOT_INCLUDE_IBH,
     BOT_INCLUDE_IBL,
     BOT_INCLUDE_INTERIOR_FIBS,
@@ -194,6 +195,8 @@ class BotTrader:
         # Cooldown after failed entry (unfilled limit cancel).
         # Maps level name → monotonic timestamp when cooldown expires.
         self._level_cooldown_until: dict[str, float] = {}
+        # Global cooldown after any stop loss — monotonic timestamp.
+        self._global_cooldown_until: float = 0.0
 
     def connect(self) -> bool:
         """Connect to IBKR. Returns True on success."""
@@ -291,6 +294,14 @@ class BotTrader:
         ):
             for z in self._zones.values():
                 z.reset()
+            # If the trade was a loss, set global cooldown.
+            if (
+                BOT_GLOBAL_COOLDOWN_AFTER_LOSS_SECS > 0
+                and self._broker._consecutive_losses > 0
+            ):
+                self._global_cooldown_until = (
+                    time.monotonic() + BOT_GLOBAL_COOLDOWN_AFTER_LOSS_SECS
+                )
             self._active_trade_level = None
 
         # Update 60-min price window for trend calculation.
@@ -312,6 +323,10 @@ class BotTrader:
         # Skip all zone updates while a position is open — no new
         # trades can happen anyway. All zones reset when trade closes.
         if self._broker._position_open:
+            return
+
+        # Global cooldown after any stop loss — skip all zones.
+        if self._global_cooldown_until > 0 and time.monotonic() < self._global_cooldown_until:
             return
 
         for bz in self._zones.values():
@@ -424,6 +439,7 @@ class BotTrader:
         self._level_trade_counts.clear()
         self._active_trade_level = None
         self._level_cooldown_until.clear()
+        self._global_cooldown_until = 0.0
 
     def eod_flatten(self) -> None:
         """Flatten open position a few minutes before market close.

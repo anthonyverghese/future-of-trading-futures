@@ -66,6 +66,9 @@ def simulate_day(
     exclude_levels: set[str] | None = None,
     vol_filter_pct: float = 0.0015,
     direction_filter: dict[str, str] | None = None,
+    global_cooldown_after_loss_secs: int = 0,
+    no_reverse_after_loss: bool = False,
+    max_tick_rate: float = 0.0,
 ) -> tuple[list[TradeRecord], tuple[int, int]]:
     """Simulate one day. Returns (trades, (cw, cl)).
 
@@ -123,6 +126,10 @@ def simulate_day(
     level_wins: dict[str, int] = {}
     # Lost combos: set of (level, direction) that just lost.
     lost_combos: set[tuple[str, str]] = set()
+    # Global cooldown: ns timestamp when all-level cooldown expires.
+    global_cooldown_until_ns: int = 0
+    # Last loss per level: maps level → direction of last loss (for no-reverse filter).
+    last_loss_direction: dict[str, str] = {}
 
     # Precompute fixed level prices for fast distance check (only active levels).
     fixed_prices = np.array([lv for name, lv, _ in fixed_levels if name in zones])
@@ -200,6 +207,23 @@ def simulate_day(
                     zone.reset()
                     continue
 
+            # Global cooldown: skip all entries for N seconds after any loss.
+            if global_cooldown_after_loss_secs > 0 and ens < global_cooldown_until_ns:
+                zone.reset()
+                continue
+
+            # No reverse after loss: if this level just lost in one direction,
+            # don't trade the opposite direction (level is broken, not bouncing).
+            if no_reverse_after_loss and name in last_loss_direction:
+                if last_loss_direction[name] != d:
+                    zone.reset()
+                    continue
+
+            # Tick rate filter: skip entries in very high tick rate (momentum) markets.
+            if max_tick_rate > 0 and float(arrays.tick_rates[gi]) > max_tick_rate:
+                zone.reset()
+                continue
+
             # Post-loss direction filter: skip if this combo just lost.
             if no_repeat_loss_combo and (name, d) in lost_combos:
                 zone.reset()
@@ -249,10 +273,16 @@ def simulate_day(
             if pnl_usd >= 0:
                 cw += 1; cl = 0; dcons = 0
                 level_wins[name] = level_wins.get(name, 0) + 1
+                # Clear no-reverse block if this level won (level is working).
+                last_loss_direction.pop(name, None)
             else:
                 cw = 0; cl += 1; dcons += 1
                 lost_combos.add((name, d))
                 level_wins[name] = 0  # reset consecutive wins on loss
+                last_loss_direction[name] = d
+                if global_cooldown_after_loss_secs > 0:
+                    global_cooldown_until_ns = int(ft[exit_idx]) + \
+                        global_cooldown_after_loss_secs * 1_000_000_000
             if dpnl <= -daily_loss:
                 stopped = True
             if dcons >= max_consec:
