@@ -142,18 +142,20 @@ def run() -> None:
             print(f"[bot] Error in {method_name}: {e}\n{traceback.format_exc()}")
             return None
 
-    # Wait for RTH before opening the live connection.
-    while True:
-        now = datetime.datetime.now(ET)
-        if is_market_open(now):
-            break
+    # If market is closed, exit immediately. The systemd timer will
+    # start a fresh instance at the next market open with the latest code.
+    # Without this, a restart after market close creates a process stuck
+    # in a sleep loop overnight, blocking the morning timer from starting
+    # a fresh instance.
+    now = datetime.datetime.now(ET)
+    if not is_market_open(now):
         now_pt = now.astimezone(LOCAL_TZ)
         wait_secs = seconds_until_next_open(now)
         print(
             f"[{now_pt.strftime('%H:%M:%S')} {LOCAL_TZ_NAME}] Market closed. "
-            f"Next open in ~{wait_secs / 60:.0f} min."
+            f"Next open in ~{wait_secs / 60:.0f} min. Exiting."
         )
-        time.sleep(min(wait_secs, 300))
+        sys.exit(0)
 
     # Clear stale cache from a previous session before loading.
     clear_if_stale()
