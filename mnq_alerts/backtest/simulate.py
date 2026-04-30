@@ -70,8 +70,23 @@ def simulate_day(
     no_reverse_after_loss: bool = False,
     max_tick_rate: float = 0.0,
     score_fn=None,
+    trend_filter: str | None = None,
+    vwap_filter: str | None = None,
+    confirmation_bounce_pts: float = 0.0,
+    confirm_only_counter_trend: bool = False,
+    split_budget: tuple[float, float] | None = None,
+    split_budget_cutoff_mins: int = 780,
 ) -> tuple[list[TradeRecord], tuple[int, int]]:
     """Simulate one day. Returns (trades, (cw, cl)).
+
+    trend_filter: 'block' (block counter-trend), 'ext_only' (counter-trend
+      only on extensions), 'halve' (halve caps for counter-trend).
+    vwap_filter: same options as trend_filter but based on price vs VWAP.
+    confirmation_bounce_pts: require price to bounce this many pts from
+      level before re-approaching. 0 = disabled.
+    confirm_only_counter_trend: only require confirmation on counter-trend.
+    split_budget: (morning_limit, afternoon_limit) in USD. Replaces daily_loss.
+    split_budget_cutoff_mins: ET minutes for morning/afternoon split (default 780 = 13:00).
 
     stop_pts: fixed stop for all levels (legacy).
     stop_fn: callable(level_name) -> stop_pts (per-level, takes priority).
@@ -131,6 +146,14 @@ def simulate_day(
     global_cooldown_until_ns: int = 0
     # Last loss per level: maps level → direction of last loss (for no-reverse filter).
     last_loss_direction: dict[str, str] = {}
+    # Split budget tracking.
+    morning_pnl = 0.0
+    afternoon_pnl = 0.0
+    morning_stopped = False
+    afternoon_stopped = False
+    # Confirmation bounce: track max distance from level after zone entry.
+    # Maps level name → max distance seen since zone entered.
+    level_bounce_dist: dict[str, float] = {}
 
     # Precompute fixed level prices for fast distance check (only active levels).
     fixed_prices = np.array([lv for name, lv, _ in fixed_levels if name in zones])
@@ -148,14 +171,26 @@ def simulate_day(
         pj = float(prices[j])
 
         # Fast skip: check if price is near ANY fixed level.
-        near_fixed = np.any(np.abs(fixed_prices - pj) <= 1.0)
-        near_vwap = has_vwap and abs(pj - float(dc.post_ib_vwaps[j])) <= 1.0
+        # Widen the distance check if any zone is observing a confirmation bounce.
+        obs_dist = max(
+            (getattr(z, '_bounce_pts', 0) + 1.0
+             for z in zones.values() if getattr(z, '_observing', False)),
+            default=0
+        )
+        skip_dist = max(1.0, obs_dist)
+        near_fixed = np.any(np.abs(fixed_prices - pj) <= skip_dist)
+        near_vwap = has_vwap and abs(pj - float(dc.post_ib_vwaps[j])) <= skip_dist
         if not near_fixed and not near_vwap:
             continue
 
         # Update VWAP zone price.
         if has_vwap:
             zones["VWAP"].price = float(dc.post_ib_vwaps[j])
+
+        # Update any zones that are observing a confirmation bounce.
+        for zone in zones.values():
+            if getattr(zone, '_observing', False):
+                zone.update(pj)
 
         # Check each level for entry.
         for name, zone in zones.items():
@@ -207,6 +242,57 @@ def simulate_day(
                 if direction_filter[name] != d:
                     zone.reset()
                     continue
+
+            # Trend filter: compare trade direction to session move direction.
+            if trend_filter is not None:
+                session_mv = float(arrays.session_move[gi])
+                trend_dir = "down" if session_mv < 0 else "up"
+                is_counter = (d != trend_dir)
+                is_interior = name in ("FIB_0.236", "FIB_0.618", "FIB_0.764")
+                if is_counter:
+                    if trend_filter == "block":
+                        zone.reset()
+                        continue
+                    elif trend_filter == "ext_only" and is_interior:
+                        zone.reset()
+                        continue
+                    elif trend_filter == "halve":
+                        # Halve the cap for counter-trend — check manually.
+                        lv_cap = (max_per_level_map or {}).get(name, max_per_level)
+                        if ec[name] >= max(1, lv_cap // 2):
+                            zone.reset()
+                            continue
+
+            # VWAP filter: compare trade direction to price vs VWAP.
+            if vwap_filter is not None and has_vwap:
+                vwap_val = float(dc.post_ib_vwaps[j])
+                vwap_dir = "up" if pj > vwap_val else "down"
+                is_counter_vwap = (d != vwap_dir)
+                is_interior = name in ("FIB_0.236", "FIB_0.618", "FIB_0.764")
+                if is_counter_vwap:
+                    if vwap_filter == "block":
+                        zone.reset()
+                        continue
+                    elif vwap_filter == "ext_only" and is_interior:
+                        zone.reset()
+                        continue
+                    elif vwap_filter == "halve":
+                        lv_cap = (max_per_level_map or {}).get(name, max_per_level)
+                        if ec[name] >= max(1, lv_cap // 2):
+                            zone.reset()
+                            continue
+
+            # Split budget: separate morning/afternoon loss limits.
+            if split_budget is not None:
+                et_mins_now = int(arrays.et_mins[gi])
+                if et_mins_now < split_budget_cutoff_mins:
+                    if morning_stopped:
+                        zone.reset()
+                        continue
+                else:
+                    if afternoon_stopped:
+                        zone.reset()
+                        continue
 
             # Global cooldown: skip all entries for N seconds after any loss.
             if global_cooldown_after_loss_secs > 0 and ens < global_cooldown_until_ns:
@@ -291,8 +377,22 @@ def simulate_day(
                 if global_cooldown_after_loss_secs > 0:
                     global_cooldown_until_ns = int(ft[exit_idx]) + \
                         global_cooldown_after_loss_secs * 1_000_000_000
-            if dpnl <= -daily_loss:
-                stopped = True
+            # Split budget: track morning/afternoon P&L separately.
+            if split_budget is not None:
+                exit_et_mins = int(arrays.et_mins[exit_idx]) if exit_idx < len(arrays.et_mins) else 960
+                if exit_et_mins < split_budget_cutoff_mins:
+                    morning_pnl += pnl_usd
+                    if morning_pnl <= -split_budget[0]:
+                        morning_stopped = True
+                else:
+                    afternoon_pnl += pnl_usd
+                    if afternoon_pnl <= -split_budget[1]:
+                        afternoon_stopped = True
+                if morning_stopped and afternoon_stopped:
+                    stopped = True
+            else:
+                if dpnl <= -daily_loss:
+                    stopped = True
             if dcons >= max_consec:
                 stopped = True
             break  # 1 position at a time

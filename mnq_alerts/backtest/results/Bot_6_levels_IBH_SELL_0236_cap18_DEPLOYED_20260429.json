@@ -1,0 +1,71 @@
+{
+  "description": "Bot 6 levels: IBH SELL only + FIB_0.236 cap=18 DEPLOYED",
+  "timestamp": "2026-04-29",
+  "changes_from_previous": {
+    "added_ibh_sell": "Re-included IBH with SELL-only direction filter (80.8% WR, +$4.05/day)",
+    "increased_0236_cap": "FIB_0.236 cap 12→18 (WR improves with more tests, 84% at #6-8)",
+    "rationale": "Offensive approach: ADD profitable trades instead of cutting. Combined +$6.97/day vs previous baseline."
+  },
+  "params": {
+    "levels": ["IBH", "FIB_EXT_HI_1.272", "FIB_EXT_LO_1.272", "FIB_0.236", "FIB_0.618", "FIB_0.764"],
+    "direction_filter": {"IBH": "down"},
+    "per_level_targets": {
+      "IBH": [6, 20], "FIB_EXT_HI_1.272": [6, 20], "FIB_EXT_LO_1.272": [6, 20],
+      "FIB_0.236": [8, 25], "FIB_0.618": [12, 20], "FIB_0.764": [10, 25]
+    },
+    "per_level_max_entries": {
+      "FIB_0.236": 18, "FIB_0.618": 3, "FIB_0.764": 5,
+      "FIB_EXT_HI_1.272": 6, "FIB_EXT_LO_1.272": 6, "IBH": 7
+    },
+    "monday_double_caps": true,
+    "global_cooldown_after_loss_secs": 30,
+    "vol_filter_pct": 0.0015,
+    "daily_loss": 100.0,
+    "data_days": 332,
+    "data_range": "2025-01-02 to 2026-04-27"
+  },
+  "full_sample": {
+    "days": 332,
+    "trades": 5600,
+    "trades_per_day": 16.9,
+    "wr": 79.4,
+    "pnl_per_day": 40.51,
+    "max_dd": 553,
+    "per_level": {
+      "FIB_0.236": {"trades": 1827, "wr": 79.6, "pnl_per_day": 10.23},
+      "FIB_0.618": {"trades": 561, "wr": 70.6, "pnl_per_day": 7.16},
+      "FIB_0.764": {"trades": 900, "wr": 78.6, "pnl_per_day": 12.03},
+      "FIB_EXT_HI_1.272": {"trades": 604, "wr": 83.4, "pnl_per_day": 4.87},
+      "FIB_EXT_LO_1.272": {"trades": 605, "wr": 81.5, "pnl_per_day": 2.18},
+      "IBH": {"trades": 1103, "wr": 80.8, "pnl_per_day": 4.05}
+    }
+  },
+  "quarterly": {
+    "Q1_oldest": 53.7, "Q2": 45.1, "Q3": 29.4, "Q4_newest": 33.8
+  },
+  "backtests_run_20260429": {
+    "total_variants_tested": "~50 across 7 experiments",
+    "experiments": [
+      "direction_filters (20 variants): IBH SELL +$4.24/day, FIB_0.764 BUY lowest MaxDD",
+      "scoring_filters (13 variants): 30s global cooldown +$0.37/day, no-reverse/tick-rate hurt",
+      "tick_rate_sweep (10 variants): every threshold costs P&L, high tick rate is mix of good/bad",
+      "bot_scoring (10 variants): scoring with old and fresh weights both hurt P&L at 1pt entry",
+      "walkforward_scoring: trained fresh weights on 200 days, tested 132 held-out — still hurts",
+      "fib618_tuning (9 variants): removing FIB_0.618 doubles MaxDD, cap=3 is optimal",
+      "risk_management (12 variants): trend/VWAP/confirmation/split-budget all hurt P&L",
+      "reactive_risk (9 variants): $75 limit -$2.21/day but cuts bad days 48→21",
+      "confirmation (6+10 variants): level confirmation reduces bad days but costs $1-17/day",
+      "smart_limits (9 variants): $75 conditional limit -$1.37/day, $60 first hour -$1.41/day",
+      "offensive_combos (8 variants): IBH SELL + 0.236 cap=18 = +$6.97/day DEPLOYED"
+    ],
+    "key_insights": [
+      "Scoring does not work at 1pt entry level — WR flat across all factor buckets",
+      "Defensive filters always cost P&L — conditions that predict bad days also occur on good days",
+      "Offensive approach (add trades) works better than defensive (cut trades)",
+      "FIB_0.236 WR improves with more tests (87% at #6-8), higher cap adds P&L",
+      "IBH SELL only is +$4.05/day at 80.8% WR, BUY side drags it down",
+      "After first loss on bad days: 0% recovery. On good days: 86% recovery",
+      "Bad days trade 2x faster (14.3/hr vs 6.4/hr), 72% of losses in first hour"
+    ]
+  }
+}

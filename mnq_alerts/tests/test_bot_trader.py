@@ -436,9 +436,8 @@ class TestPerLevelTS:
             assert tgt >= 8, f"{level}: interior fib target {tgt} < 8"
 
     def test_excluded_levels_not_in_per_level_ts(self):
-        """IBH and FIB_0.5 should not be in BOT_PER_LEVEL_TS."""
+        """FIB_0.5 should not be in BOT_PER_LEVEL_TS."""
         from config import BOT_PER_LEVEL_TS
-        assert "IBH" not in BOT_PER_LEVEL_TS
         assert "FIB_0.5" not in BOT_PER_LEVEL_TS
 
     def test_per_level_max_entries_covers_all_levels(self):
@@ -447,10 +446,11 @@ class TestPerLevelTS:
         for level in BOT_PER_LEVEL_TS:
             assert level in BOT_PER_LEVEL_MAX_ENTRIES, f"Missing max entries for {level}"
 
-    def test_ibh_excluded(self):
-        """BOT_INCLUDE_IBH should be False."""
-        from config import BOT_INCLUDE_IBH
-        assert BOT_INCLUDE_IBH is False
+    def test_ibh_sell_only(self):
+        """IBH should be included but SELL only via direction filter."""
+        from config import BOT_INCLUDE_IBH, BOT_DIRECTION_FILTER
+        assert BOT_INCLUDE_IBH is True
+        assert BOT_DIRECTION_FILTER.get("IBH") == "down"
 
     def test_fib_05_excluded(self):
         """FIB_0.5 should be in BOT_EXCLUDE_LEVELS."""

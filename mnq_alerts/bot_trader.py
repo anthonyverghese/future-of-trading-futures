@@ -10,8 +10,8 @@ Bot parameters (validated 2026-04-27 over 332 days):
   - Zone: stays in_zone after entry until price leaves 1pt or trade closes
   - Target/Stop: per-level (MFE-based)
   - Risk: $100/day loss limit, 1 position at a time, 13:30-14:00 ET suppressed
-  - Levels: FIB_EXT_HI, FIB_EXT_LO, FIB_0.236, FIB_0.618, FIB_0.764
-    (IBH, IBL, VWAP, FIB_0.5 excluded — weak or deteriorating edge)
+  - Levels: IBH (SELL only), FIB_EXT_HI, FIB_EXT_LO, FIB_0.236, FIB_0.618, FIB_0.764
+    (IBL, VWAP, FIB_0.5 excluded — weak or deteriorating edge)
   - Per-level entry caps: data-driven from WR-by-entry-count analysis
   - Scoring: unscored (scoring hurts OOS, validated 2026-04-26)
 """
@@ -27,6 +27,7 @@ import pytz
 from broker import IBKRBroker
 from cache import load_bot_daily_level_counts
 from config import (
+    BOT_DIRECTION_FILTER,
     BOT_ENTRY_THRESHOLD,
     BOT_EXCLUDE_LEVELS,
     BOT_GLOBAL_COOLDOWN_AFTER_LOSS_SECS,
@@ -339,6 +340,11 @@ class BotTrader:
 
             if bz.update(price):
                 direction = "up" if price > bz.price else "down"
+
+                # Per-level direction filter (e.g., IBH SELL only).
+                allowed_dir = BOT_DIRECTION_FILTER.get(bz.name)
+                if allowed_dir and allowed_dir != direction:
+                    continue
 
                 # Suppress entries during weak time windows.
                 if now_et is not None:

@@ -67,24 +67,25 @@ BOT_PER_LEVEL_TS = {
     "FIB_0.236": (8, 25),
     "FIB_0.618": (12, 20),
     "FIB_0.764": (10, 25),
+    "IBH": (6, 20),
 }
-# Per-level max entries per day (data-driven from WR-by-entry-count analysis, 2026-04-27).
-# Levels are capped where WR degrades at higher entry counts.
-# On Mondays, caps are doubled (BOT_MONDAY_DOUBLE_CAPS). Monday is the best day
-# for bounce trading: 77% WR, +$46/day (validated 2026-04-28 over 332 days).
+# Per-level max entries per day (data-driven from WR-by-entry-count analysis).
+# On Mondays, caps are doubled (BOT_MONDAY_DOUBLE_CAPS).
 BOT_PER_LEVEL_MAX_ENTRIES = {
-    "FIB_0.236": 12,  # gets stronger with more tests
+    "FIB_0.236": 18,  # gets stronger with more tests, increased from 12 (validated 2026-04-29)
     "FIB_0.618": 3,   # collapses at test #4 (57.5% WR)
     "FIB_0.764": 5,   # degrades after #5
     "FIB_EXT_HI_1.272": 6,  # weakening in recent quarters, cap for safety
     "FIB_EXT_LO_1.272": 6,  # weak at #7-9
+    "IBH": 7,
 }
 BOT_MONDAY_DOUBLE_CAPS = True  # Double per-level caps on Mondays (+$2.18/day vs baseline)
 BOT_INCLUDE_VWAP = False  # VWAP excluded: drags in weak regimes (66% WR)
 BOT_INCLUDE_IBL = False  # IBL excluded: -$1.5/day, 72.2% WR (weakest level)
-BOT_INCLUDE_IBH = False  # IBH excluded: edge eroded Q1→Q4 (+$1.69→-$1.20/trade)
+BOT_INCLUDE_IBH = True  # IBH re-included: SELL only (+$4.05/day, 80.8% WR). BUY blocked via BOT_DIRECTION_FILTER.
 BOT_INCLUDE_INTERIOR_FIBS = True  # Interior fib retracements (0.236, 0.618, 0.764)
 BOT_EXCLUDE_LEVELS = {"FIB_0.5"}  # FIB_0.5: test #1 is negative, no consistent edge
+BOT_DIRECTION_FILTER = {"IBH": "down"}  # IBH: SELL only (80.8% WR, BUY drags it down)
 BOT_MIN_SCORE = -99  # Unscored: scoring hurts OOS (validated 2026-04-26)
 BOT_TREND_LOOKBACK_MIN = 60  # Minutes to look back for trend calculation
 BOT_VOL_FILTER_MIN_RANGE_PCT = 0.0015  # Skip entry when 30m range < 0.15% of price
