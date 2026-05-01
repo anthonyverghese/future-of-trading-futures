@@ -954,7 +954,10 @@ class TestHeartbeat:
 
 class TestEntryCancelRace:
     def test_fill_during_cancel_with_children_alive(self):
-        """If entry fills during cancel and children are alive, returns success."""
+        """If entry fills during cancel, always close at market and return
+        failure — even if children appear alive (they may be cancelled by
+        IBKR moments later, leaving position unprotected). Fixed after
+        2026-05-01 incident where trusting children caused stuck position."""
         b = _make_broker()
         b._connected = True
         b._contract = SimpleNamespace(symbol=MNQ_SYMBOL, secType="FUT")
@@ -973,6 +976,7 @@ class TestEntryCancelRace:
             order=SimpleNamespace(orderId=51, parentId=50, orderRef="bot-50-target"),
         )
         mock_ib.openTrades.return_value = [child]
+        mock_ib.positions.return_value = []
 
         def fake_sleep(secs):
             b._pending_entry_fill = 20001.50
@@ -985,12 +989,13 @@ class TestEntryCancelRace:
         ):
             result = b.submit_bracket("up", 20002.0, 20000.0, "IBL")
 
-        assert result.success is True
-        assert result.entry_price == 20001.50
-        assert b._position_open is True
+        # Always returns failure and clears position state
+        assert result.success is False
+        assert "cancel" in result.error.lower()
+        assert b._position_open is False
 
     def test_fill_during_cancel_without_children_flattens(self):
-        """If entry fills during cancel but children are cancelled, flattens."""
+        """If entry fills during cancel and children are gone, close at market."""
         b = _make_broker()
         b._connected = True
         b._contract = SimpleNamespace(symbol=MNQ_SYMBOL, secType="FUT")
@@ -1018,7 +1023,8 @@ class TestEntryCancelRace:
             result = b.submit_bracket("up", 20002.0, 20000.0, "IBL")
 
         assert result.success is False
-        assert "bracket lost" in result.error
+        assert "cancel" in result.error.lower()
+        assert b._position_open is False
 
     def test_true_cancel_clears_state_and_sweeps_children(self):
         """If entry truly cancelled, position state cleared and children swept."""
@@ -1083,9 +1089,10 @@ class TestEntryCancelRace:
         ):
             result = b.submit_bracket("up", 20002.0, 20000.0, "IBL")
 
-        # children_alive stays False due to exception → flatten
+        # children_alive stays False due to exception → close at market
         assert result.success is False
-        assert "bracket lost" in result.error
+        assert "cancel" in result.error.lower()
+        assert b._position_open is False
 
 
 # ---------------------------------------------------------------------------
