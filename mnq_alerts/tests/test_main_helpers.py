@@ -139,3 +139,170 @@ class TestSecondsUntilNextOpen:
         now = _et(2026, 3, 26, 0, 0)
         expected = 9.5 * 3600
         assert seconds_until_next_open(now) == expected
+
+
+# ── Incremental range tracking (30-min window) ─────────────────────────────
+
+
+class TestIncrementalRange:
+    """Tests for the incremental high/low tracking used in main.py's
+    30-min volatility window. Tests the logic pattern, not main.py itself."""
+
+    def _compute_range(self, prices_with_times):
+        """Simulate the incremental range logic from main.py."""
+        from collections import deque
+        window = deque()
+        high = 0.0
+        low = 999999.0
+        results = []
+        window_size = datetime.timedelta(minutes=30)
+
+        for ts, price in prices_with_times:
+            window.append((ts, price))
+            if price > high:
+                high = price
+            if price < low:
+                low = price
+
+            cutoff = ts - window_size
+            recalc = False
+            while window and window[0][0] < cutoff:
+                evicted = window.popleft()[1]
+                if evicted >= high or evicted <= low:
+                    recalc = True
+
+            if recalc:
+                if len(window) >= 1:
+                    high = max(p for _, p in window)
+                    low = min(p for _, p in window)
+                else:
+                    high = price
+                    low = price
+
+            if len(window) >= 2:
+                results.append(high - low)
+            else:
+                results.append(None)
+
+        return results, high, low
+
+    def test_basic_range(self):
+        """Two ticks should produce correct range."""
+        t0 = _et(2026, 5, 1, 11, 0, 0)
+        prices = [
+            (t0, 27800.0),
+            (t0 + datetime.timedelta(seconds=1), 27810.0),
+        ]
+        results, high, low = self._compute_range(prices)
+        assert results[0] is None  # only 1 tick
+        assert results[1] == 10.0  # 27810 - 27800
+        assert high == 27810.0
+        assert low == 27800.0
+
+    def test_new_high_updates(self):
+        """New high should update incrementally."""
+        t0 = _et(2026, 5, 1, 11, 0, 0)
+        prices = [
+            (t0, 27800.0),
+            (t0 + datetime.timedelta(seconds=1), 27810.0),
+            (t0 + datetime.timedelta(seconds=2), 27820.0),
+        ]
+        results, high, low = self._compute_range(prices)
+        assert results[2] == 20.0  # 27820 - 27800
+        assert high == 27820.0
+
+    def test_eviction_triggers_recalc(self):
+        """When the high is evicted, recalc should find the new high."""
+        t0 = _et(2026, 5, 1, 11, 0, 0)
+        prices = [
+            (t0, 27850.0),  # this will be the high
+            (t0 + datetime.timedelta(minutes=15), 27800.0),  # stays in window
+            # Jump 31 min from t0 — evicts only t0
+            (t0 + datetime.timedelta(minutes=31), 27810.0),
+        ]
+        results, high, low = self._compute_range(prices)
+        # After eviction of 27850, new high should be 27810
+        assert high == 27810.0
+        assert low == 27800.0
+        assert results[2] == 10.0
+
+    def test_eviction_of_low(self):
+        """When the low is evicted, recalc should find the new low."""
+        t0 = _et(2026, 5, 1, 11, 0, 0)
+        prices = [
+            (t0, 27750.0),  # this will be the low
+            (t0 + datetime.timedelta(minutes=15), 27800.0),  # stays in window
+            (t0 + datetime.timedelta(minutes=31), 27810.0),
+        ]
+        results, high, low = self._compute_range(prices)
+        assert low == 27800.0  # 27750 evicted, new low is 27800
+        assert high == 27810.0
+
+    def test_gap_resets_correctly(self):
+        """After all ticks evicted (gap), high/low should reset."""
+        t0 = _et(2026, 5, 1, 11, 0, 0)
+        prices = [
+            (t0, 27850.0),
+            (t0 + datetime.timedelta(seconds=1), 27800.0),
+            # 35 min gap — both old ticks evicted
+            (t0 + datetime.timedelta(minutes=35), 27900.0),
+            (t0 + datetime.timedelta(minutes=35, seconds=1), 27905.0),
+        ]
+        results, high, low = self._compute_range(prices)
+        # After gap, only 27900 and 27905 in window
+        assert high == 27905.0
+        assert low == 27900.0
+        assert results[3] == 5.0
+
+    def test_no_stale_high_after_gap(self):
+        """High from before a gap must not persist after eviction."""
+        t0 = _et(2026, 5, 1, 11, 0, 0)
+        prices = [
+            (t0, 27900.0),  # high that will be evicted
+            (t0 + datetime.timedelta(seconds=1), 27850.0),
+            # Gap — both evicted
+            (t0 + datetime.timedelta(minutes=35), 27800.0),
+            (t0 + datetime.timedelta(minutes=35, seconds=1), 27810.0),
+        ]
+        results, high, low = self._compute_range(prices)
+        # 27900 must NOT be the high anymore
+        assert high == 27810.0
+        assert low == 27800.0
+        assert results[3] == 10.0  # not 100
+
+    def test_single_tick_after_eviction(self):
+        """Single tick after full eviction should give range=None."""
+        t0 = _et(2026, 5, 1, 11, 0, 0)
+        prices = [
+            (t0, 27800.0),
+            (t0 + datetime.timedelta(seconds=1), 27810.0),
+            (t0 + datetime.timedelta(minutes=35), 27820.0),  # evicts both
+        ]
+        results, high, low = self._compute_range(prices)
+        # Only 1 tick in window after eviction
+        assert results[2] is None
+
+    def test_matches_naive_implementation(self):
+        """Incremental tracking should match naive max/min scan."""
+        import random
+        random.seed(42)
+        t0 = _et(2026, 5, 1, 11, 0, 0)
+        # Generate 100 ticks over 40 minutes
+        prices = []
+        p = 27800.0
+        for i in range(100):
+            ts = t0 + datetime.timedelta(seconds=i * 24)  # ~24s apart
+            p += random.uniform(-5, 5)
+            prices.append((ts, round(p, 2)))
+
+        results, _, _ = self._compute_range(prices)
+
+        # Naive: for each tick, scan the window
+        window_size = datetime.timedelta(minutes=30)
+        for i, (ts, price) in enumerate(prices):
+            window = [(t, p) for t, p in prices[:i+1]
+                      if t >= ts - window_size]
+            if len(window) >= 2:
+                naive_range = max(p for _, p in window) - min(p for _, p in window)
+                assert abs(results[i] - naive_range) < 0.01, \
+                    f"Tick {i}: incremental={results[i]}, naive={naive_range}"

@@ -529,7 +529,8 @@ def run() -> None:
                 tick_rate = len(tick_times) / 3.0
 
                 # Update 30-min price window for volatility scoring.
-                # Track running high/low to avoid O(n) max/min scan.
+                # Track running high/low to avoid O(n) max/min scan
+                # on every tick. Full recalc only when an extreme is evicted.
                 price_window_30m.append((ts_et, price))
                 if price > range_30m_high:
                     range_30m_high = price
@@ -539,12 +540,15 @@ def run() -> None:
                 recalc_range = False
                 while price_window_30m and price_window_30m[0][0] < vol_window_start:
                     evicted_price = price_window_30m.popleft()[1]
-                    # Only recalc if we evicted the current high or low.
                     if evicted_price >= range_30m_high or evicted_price <= range_30m_low:
                         recalc_range = True
-                if recalc_range and len(price_window_30m) >= 2:
-                    range_30m_high = max(p for _, p in price_window_30m)
-                    range_30m_low = min(p for _, p in price_window_30m)
+                if recalc_range:
+                    if len(price_window_30m) >= 1:
+                        range_30m_high = max(p for _, p in price_window_30m)
+                        range_30m_low = min(p for _, p in price_window_30m)
+                    else:
+                        range_30m_high = price
+                        range_30m_low = price
                 if len(price_window_30m) >= 2:
                     range_30m = range_30m_high - range_30m_low
                 else:
