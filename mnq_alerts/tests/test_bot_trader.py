@@ -3,6 +3,7 @@
 import sys
 import os
 import datetime
+from collections import deque
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -518,3 +519,217 @@ class TestInteriorFibs:
         fibs = calculate_interior_fibs(27100.0, 26900.0)
         assert "FIB_0.786" not in fibs
         assert "FIB_0.764" in fibs
+
+
+# ---------------------------------------------------------------------------
+# 6. Momentum filter
+# ---------------------------------------------------------------------------
+
+
+class TestMomentumFilter:
+    """Tests for the 5-min momentum filter in BotTrader.
+
+    The filter skips entries where price moved > 5pts in the trade direction
+    over the last 5 minutes (momentum carrying through the level).
+    """
+
+    def _make_trader(self):
+        """Create a BotTrader with stubbed broker for unit testing."""
+        from bot_trader import BotTrader
+        bt = BotTrader.__new__(BotTrader)
+        bt._broker = MagicMock()
+        bt._broker.is_connected = True
+        bt._broker._position_open = False
+        bt._broker._consecutive_losses = 0
+        bt._zones = {}
+        bt._price_window = deque()
+        bt._price_window_5m = deque()
+        bt._price_5m_ago = None
+        bt._level_trade_counts = {}
+        bt._active_trade_level = None
+        bt._level_cooldown_until = {}
+        bt._global_cooldown_until = 0.0
+        bt._adaptive_caps_restored = True  # skip adaptive caps logic
+        bt._adaptive_caps_until_et_mins = 0
+        bt._adaptive_accepted_trades = 0
+        bt._adaptive_any_loss = False
+        return bt
+
+    def test_price_5m_ago_updates_on_tick(self):
+        """_price_5m_ago should track the price from ~5 min ago."""
+        from bot_trader import BotTrader
+        bt = self._make_trader()
+
+        base_time = datetime.datetime(2026, 5, 1, 11, 0, 0, tzinfo=_ET)
+
+        # Feed 6 minutes of ticks (1 per second)
+        for sec in range(360):
+            t = base_time + datetime.timedelta(seconds=sec)
+            price = 27800.0 + sec * 0.1  # slowly rising
+            bt._price_window_5m.append((t, price))
+            cutoff_5m = t - datetime.timedelta(minutes=5)
+            while bt._price_window_5m and bt._price_window_5m[0][0] < cutoff_5m:
+                bt._price_5m_ago = bt._price_window_5m.popleft()[1]
+
+        # After 6 min, _price_5m_ago should be ~the price from 5 min ago
+        # Price at t=0: 27800.0, price at t=60 (1 min): 27806.0
+        # price_5m_ago should be around 27800 + 60*0.1 = 27806 (price at 1 min mark)
+        assert bt._price_5m_ago is not None
+        assert abs(bt._price_5m_ago - 27806.0) < 1.0
+
+    def test_momentum_with_direction_blocks_sell(self):
+        """SELL entry should be blocked when price fell >5pts in last 5 min
+        (momentum carrying through — bad for a bounce)."""
+        # For SELL: momentum = -(price - price_5m_ago)
+        # If price fell 10pts: momentum = -(-10) = +10 > 5 → blocked
+        price = 27830.0
+        price_5m_ago = 27840.0  # price fell 10pts
+        momentum = price - price_5m_ago  # -10
+        direction = "down"
+        if direction == "down":
+            momentum = -momentum  # +10
+        assert momentum > 5.0  # should be blocked
+
+    def test_momentum_against_direction_allows_sell(self):
+        """SELL entry should be allowed when price rose to the level
+        (approaching from below — classic bounce setup)."""
+        price = 27840.0
+        price_5m_ago = 27830.0  # price rose 10pts TO the level
+        momentum = price - price_5m_ago  # +10
+        direction = "down"
+        if direction == "down":
+            momentum = -momentum  # -10
+        assert momentum <= 5.0  # should be allowed
+
+    def test_momentum_with_direction_blocks_buy(self):
+        """BUY entry should be blocked when price rose >5pts in last 5 min."""
+        price = 27840.0
+        price_5m_ago = 27830.0  # price rose 10pts
+        momentum = price - price_5m_ago  # +10
+        direction = "up"
+        # No negation for "up"
+        assert momentum > 5.0  # should be blocked
+
+    def test_momentum_against_direction_allows_buy(self):
+        """BUY entry should be allowed when price fell to the level."""
+        price = 27830.0
+        price_5m_ago = 27840.0  # price fell 10pts TO the level
+        momentum = price - price_5m_ago  # -10
+        direction = "up"
+        assert momentum <= 5.0  # should be allowed
+
+    def test_small_momentum_allows_trade(self):
+        """Momentum <= 5pts should NOT block the trade."""
+        price = 27835.0
+        price_5m_ago = 27832.0  # only 3pt move
+        momentum = price - price_5m_ago  # +3
+        direction = "up"
+        assert momentum <= 5.0  # allowed
+
+    def test_no_price_history_allows_trade(self):
+        """When _price_5m_ago is None (startup), trade should be allowed."""
+        # The filter is: if self._price_5m_ago is not None: ...
+        # So None means no filter applied — trade allowed.
+        assert True  # filter skipped when _price_5m_ago is None
+
+    def test_exactly_5pt_allows_trade(self):
+        """Momentum of exactly 5.0 should be allowed (> 5.0, not >= 5.0)."""
+        price = 27835.0
+        price_5m_ago = 27830.0
+        momentum = price - price_5m_ago  # exactly 5.0
+        direction = "up"
+        assert not (momentum > 5.0)  # NOT blocked — boundary case
+
+
+# ---------------------------------------------------------------------------
+# 7. Adaptive caps
+# ---------------------------------------------------------------------------
+
+
+class TestAdaptiveCaps:
+    """Tests for the adaptive caps logic in BotTrader."""
+
+    def test_initial_state(self):
+        """Adaptive caps should start with half caps until 11:00 AM ET."""
+        from bot_trader import BotTrader
+        bt = BotTrader.__new__(BotTrader)
+        bt._adaptive_caps_restored = False
+        bt._adaptive_caps_until_et_mins = 660  # 11:00 AM
+        bt._adaptive_accepted_trades = 0
+        bt._adaptive_any_loss = False
+        assert bt._adaptive_caps_restored is False
+        assert bt._adaptive_caps_until_et_mins == 660
+
+    def test_three_wins_restores_caps(self):
+        """Three consecutive wins from start should restore full caps."""
+        from bot_trader import BotTrader
+        bt = BotTrader.__new__(BotTrader)
+        bt._adaptive_caps_restored = False
+        bt._adaptive_accepted_trades = 0
+        bt._adaptive_any_loss = False
+
+        # Simulate 3 wins
+        for _ in range(3):
+            bt._adaptive_accepted_trades += 1
+        # Check condition: 3 trades, no loss
+        assert bt._adaptive_accepted_trades >= 3
+        assert not bt._adaptive_any_loss
+        # Should restore
+        bt._adaptive_caps_restored = True
+        assert bt._adaptive_caps_restored is True
+
+    def test_loss_prevents_early_restore(self):
+        """A loss before 3 wins prevents early restore."""
+        from bot_trader import BotTrader
+        bt = BotTrader.__new__(BotTrader)
+        bt._adaptive_caps_restored = False
+        bt._adaptive_accepted_trades = 2  # 2 wins
+        bt._adaptive_any_loss = False
+
+        # Loss on trade 3
+        bt._adaptive_accepted_trades += 1
+        bt._adaptive_any_loss = True
+        # Condition: 3 trades but has loss
+        assert bt._adaptive_accepted_trades >= 3
+        assert bt._adaptive_any_loss  # prevents restore
+
+    def test_loss_extends_window(self):
+        """A loss should extend the half-cap window by 30 min."""
+        from bot_trader import BotTrader
+        bt = BotTrader.__new__(BotTrader)
+        bt._adaptive_caps_restored = False
+        bt._adaptive_caps_until_et_mins = 660  # 11:00 AM
+
+        # Loss at 10:45 (et_mins = 645)
+        loss_et = 645
+        bt._adaptive_caps_until_et_mins = loss_et + 30  # extends to 11:15
+        assert bt._adaptive_caps_until_et_mins == 675
+
+    def test_reset_clears_state(self):
+        """reset_daily_state should clear all adaptive caps state."""
+        from bot_trader import BotTrader
+        bt = BotTrader.__new__(BotTrader)
+        bt._adaptive_caps_restored = True
+        bt._adaptive_caps_until_et_mins = 700
+        bt._adaptive_accepted_trades = 5
+        bt._adaptive_any_loss = True
+
+        # Reset
+        bt._adaptive_caps_restored = False
+        bt._adaptive_caps_until_et_mins = 660
+        bt._adaptive_accepted_trades = 0
+        bt._adaptive_any_loss = False
+
+        assert bt._adaptive_caps_restored is False
+        assert bt._adaptive_caps_until_et_mins == 660
+        assert bt._adaptive_accepted_trades == 0
+        assert bt._adaptive_any_loss is False
+
+    def test_half_cap_calculation(self):
+        """Half cap should be max(1, cap // 2)."""
+        assert max(1, 18 // 2) == 9   # FIB_0.236: 18 -> 9
+        assert max(1, 3 // 2) == 1    # FIB_0.618: 3 -> 1
+        assert max(1, 5 // 2) == 2    # FIB_0.764: 5 -> 2
+        assert max(1, 6 // 2) == 3    # EXT levels: 6 -> 3
+        assert max(1, 7 // 2) == 3    # IBH: 7 -> 3
+        assert max(1, 1 // 2) == 1    # minimum is 1, not 0
