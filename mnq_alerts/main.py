@@ -310,6 +310,14 @@ def run() -> None:
                 f"(lag={trade_lag_secs:.1f}s)"
             )
             live_transition_logged = True
+            # Reset bot zones so replay doesn't "consume" zone entries.
+            # During replay, advance_zones sets in_zone=True but doesn't
+            # trade. Without this reset, the first live approach to a level
+            # is missed because the zone is already in_zone from replay.
+            if bot is not None:
+                for z in bot._zones.values():
+                    z.reset()
+                print("[bot] Zones reset after replay transition")
 
         # Pre-close EOD flatten: close any open bot position a few minutes
         # before 4pm so fills complete before the session ends (avoids
