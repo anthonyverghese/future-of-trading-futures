@@ -56,7 +56,9 @@
       "reactive_risk (9 variants): $75 limit -$2.21/day but cuts bad days 48→21",
       "confirmation (6+10 variants): level confirmation reduces bad days but costs $1-17/day",
       "smart_limits (9 variants): $75 conditional limit -$1.37/day, $60 first hour -$1.41/day",
-      "offensive_combos (8 variants): IBH SELL + 0.236 cap=18 = +$6.97/day DEPLOYED"
+      "offensive_combos (8 variants): IBH SELL + 0.236 cap=18 = +$6.97/day DEPLOYED",
+      "defensive_v2 (10 variants): tested on new deployed config, none beat baseline P&L",
+      "first_hour_v1 (8 variants): adaptive caps deployed — half caps first 30 min, restore on 3 wins, extend on loss"
     ],
     "key_insights": [
       "Scoring does not work at 1pt entry level — WR flat across all factor buckets",
@@ -65,7 +67,16 @@
       "FIB_0.236 WR improves with more tests (87% at #6-8), higher cap adds P&L",
       "IBH SELL only is +$4.05/day at 80.8% WR, BUY side drags it down",
       "After first loss on bad days: 0% recovery. On good days: 86% recovery",
-      "Bad days trade 2x faster (14.3/hr vs 6.4/hr), 72% of losses in first hour"
+      "Bad days trade 2x faster (14.3/hr vs 6.4/hr), 72% of losses in first hour",
+      "Defensive v2: IBH cap=3 best MaxDD ($451) at -$2.47/day; $60 1hr limit halves bad days (57→33) at -$1.56/day",
+      "Defensive v2: all combos cost $6-7/day — stacking filters has diminishing returns",
+      "Decision: keep baseline as-is, defensive filters not worth the P&L cost",
+      "First-hour analysis: bad days lose within 7 min of IB (median), 1.3 wins before first loss vs 4.6 good days",
+      "Adaptive caps deployed: half caps 30 min after IB, restore on 3 wins, extend on loss. $38.79/day, 38 bad days (vs 57)",
+      "Human-vs-bot analysis (2026-05-01): human scoring weights don't transfer to bot. WR flat across all score buckets at 1pt entry.",
+      "Streak filter would HURT: after 2+L, bot WR is 84.5% (+$775). Recovery on good days (95.3%) far outweighs bad-day losses.",
+      "Counter-trend vs with-trend: identical WR (79.5% vs 79.3%). Direction doesn't predict outcomes.",
+      "Bot's 79% WR at 1pt is structural — no scoring factor differentiates winners from losers."
     ]
   }
 }
