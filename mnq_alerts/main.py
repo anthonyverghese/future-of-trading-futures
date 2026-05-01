@@ -15,6 +15,7 @@ import datetime
 import sys
 import time
 import traceback
+from collections import deque
 
 import pytz
 
@@ -49,6 +50,10 @@ from cache import (
 # Databento (throttled reqTickByTickData), so not viable as a replacement.
 # Code kept in ibkr_feed_compare.py for future reference.
 _IBKR_COMPARE_AVAILABLE = False
+
+# Pre-computed timedeltas to avoid allocating on every tick (~200/sec).
+_TICK_RATE_TD = datetime.timedelta(minutes=3)
+_VOL_WINDOW_TD = datetime.timedelta(minutes=30)
 from market_data import (
     get_session_trades,
     load_session_cache,
@@ -276,9 +281,12 @@ def run() -> None:
         )
 
     # Tick rate: count trades in a rolling window for live ticks only.
-    tick_times: list[datetime.datetime] = []
+    tick_times: deque[datetime.datetime] = deque()
     # Rolling 30-min price window for volatility scoring.
-    price_window_30m: list[tuple[datetime.datetime, float]] = []
+    price_window_30m: deque[tuple[datetime.datetime, float]] = deque()
+    # Track running high/low for 30-min range (avoids O(n) max/min scan).
+    range_30m_high: float = 0.0
+    range_30m_low: float = 999999.0
     first_trade_logged = False
     live_transition_logged = False
 
@@ -438,7 +446,10 @@ def run() -> None:
             ib_high = -float("inf")
             ib_low = float("inf")
             ib_has_trades = False
-            tick_times = []
+            tick_times = deque()
+            price_window_30m = deque()
+            range_30m_high = 0.0
+            range_30m_low = 999999.0
             print(f"\n[{now_pt.strftime('%Y-%m-%d')}] New session — state reset.")
 
         # Record opening price for session context scoring.
@@ -510,22 +521,32 @@ def run() -> None:
             # During replay ts_et lags wall time; only notify for live trades.
             trade_lag = (now - ts_et).total_seconds()
             if trade_lag < 60:
-                # Compute tick rate from rolling window (O(1) amortized).
+                # Compute tick rate from rolling 3-min window (O(1) amortized).
                 tick_times.append(ts_et)
-                window_start = ts_et - datetime.timedelta(minutes=3)
-                # Trim old entries from the front.
+                window_start = ts_et - _TICK_RATE_TD
                 while tick_times and tick_times[0] < window_start:
-                    tick_times.pop(0)
+                    tick_times.popleft()
                 tick_rate = len(tick_times) / 3.0
 
                 # Update 30-min price window for volatility scoring.
+                # Track running high/low to avoid O(n) max/min scan.
                 price_window_30m.append((ts_et, price))
-                vol_window_start = ts_et - datetime.timedelta(minutes=30)
+                if price > range_30m_high:
+                    range_30m_high = price
+                if price < range_30m_low:
+                    range_30m_low = price
+                vol_window_start = ts_et - _VOL_WINDOW_TD
+                recalc_range = False
                 while price_window_30m and price_window_30m[0][0] < vol_window_start:
-                    price_window_30m.pop(0)
+                    evicted_price = price_window_30m.popleft()[1]
+                    # Only recalc if we evicted the current high or low.
+                    if evicted_price >= range_30m_high or evicted_price <= range_30m_low:
+                        recalc_range = True
+                if recalc_range and len(price_window_30m) >= 2:
+                    range_30m_high = max(p for _, p in price_window_30m)
+                    range_30m_low = min(p for _, p in price_window_30m)
                 if len(price_window_30m) >= 2:
-                    window_prices = [p for _, p in price_window_30m]
-                    range_30m = max(window_prices) - min(window_prices)
+                    range_30m = range_30m_high - range_30m_low
                 else:
                     range_30m = None
 

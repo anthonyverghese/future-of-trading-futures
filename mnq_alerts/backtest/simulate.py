@@ -76,6 +76,8 @@ def simulate_day(
     confirm_only_counter_trend: bool = False,
     split_budget: tuple[float, float] | None = None,
     split_budget_cutoff_mins: int = 780,
+    momentum_max: float = 0.0,
+    momentum_lookback_ticks: int = 1000,
 ) -> tuple[list[TradeRecord], tuple[int, int]]:
     """Simulate one day. Returns (trades, (cw, cl)).
 
@@ -320,6 +322,21 @@ def simulate_day(
             if max_approach_speed > 0 and float(arrays.approach_speed[gi]) > max_approach_speed:
                 zone.reset()
                 continue
+
+            # Momentum filter: skip entries where price moved > N pts
+            # in the trade direction over the last ~5 min (1000 ticks).
+            # "With momentum" means price is blasting through the level,
+            # not bouncing. 0 = disabled. Only applied when enough
+            # history exists (matches live bot allowing trades at startup).
+            if momentum_max > 0 and gi >= start + momentum_lookback_ticks:
+                prev_idx = gi - momentum_lookback_ticks
+                mom = float(fp[gi]) - float(fp[prev_idx])
+                if d == "down":
+                    mom = -mom
+                if mom > momentum_max:
+                    zone.reset()
+                    continue
+
             fac = EntryFactors(
                 level=name, direction=d, entry_count=ec[name] + 1,
                 et_mins=et_mins,

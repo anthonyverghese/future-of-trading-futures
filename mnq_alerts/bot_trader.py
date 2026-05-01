@@ -48,6 +48,8 @@ from config import (
 from scoring import SUPPRESSED_WINDOWS
 
 _ET = pytz.timezone("America/New_York")
+_TREND_LOOKBACK_TD = datetime.timedelta(minutes=BOT_TREND_LOOKBACK_MIN)
+_MOMENTUM_LOOKBACK_TD = datetime.timedelta(minutes=5)
 
 
 class BotZone:
@@ -336,7 +338,7 @@ class BotTrader:
 
         # Update 60-min price window for trend calculation.
         self._price_window.append((now, price))
-        cutoff = now - datetime.timedelta(minutes=BOT_TREND_LOOKBACK_MIN)
+        cutoff = now - _TREND_LOOKBACK_TD
         while self._price_window and self._price_window[0][0] < cutoff:
             self._price_window.popleft()
         if len(self._price_window) >= 2:
@@ -346,7 +348,7 @@ class BotTrader:
 
         # Update 5-min price for momentum filter (O(1) per tick).
         self._price_window_5m.append((now, price))
-        cutoff_5m = now - datetime.timedelta(minutes=5)
+        cutoff_5m = now - _MOMENTUM_LOOKBACK_TD
         while self._price_window_5m and self._price_window_5m[0][0] < cutoff_5m:
             self._price_5m_ago = self._price_window_5m.popleft()[1]
 
@@ -386,12 +388,11 @@ class BotTrader:
                 if allowed_dir and allowed_dir != direction:
                     continue
 
-                # Momentum filter: skip entries where price is moving
-                # WITH the trade direction (blasting through the level).
-                # Only trade when price approached from the other side
-                # (bounce setup). Skip if 5-min momentum > 5pts with
-                # direction. Validated 2026-05-01: +$1.95/day, MaxDD
-                # $492 vs $553, bad days 47 vs 57.
+                # Momentum filter: skip entries where 5-min price change
+                # is > 5pts in the trade direction. Blocks re-tests after
+                # price passed through a level (level already failed to
+                # hold). Validated 2026-05-01 (v2 proper sim): +$3.67/day,
+                # MaxDD $512 vs $553, bad days 49 vs 57.
                 if self._price_5m_ago is not None:
                     momentum = price - self._price_5m_ago
                     if direction == "down":
