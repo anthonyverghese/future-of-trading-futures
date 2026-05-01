@@ -501,6 +501,18 @@ class BotTrader:
         for bz in self._zones.values():
             bz.update(price)
 
+    def reset_zones_for_live(self) -> None:
+        """Reset all zones after replay catches up to live ticks.
+
+        During replay, advance_zones() sets in_zone=True for levels
+        that price touches, but no trade fires (on_tick not called).
+        Without this reset, the first live approach to each level is
+        missed because the zone is already in_zone from replay.
+        """
+        for bz in self._zones.values():
+            bz.reset()
+        print("[bot] Zones reset after replay transition")
+
     def reset_daily_state(self) -> None:
         """Reset risk counters and clear zones for a new session."""
         self._broker.reset_daily_state()
