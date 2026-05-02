@@ -1,0 +1,458 @@
+[
+  {
+    "trades": 5681,
+    "trades_per_day": 16.9,
+    "wins": 4530,
+    "losses": 1151,
+    "wr": 79.7,
+    "total_pnl": 14656.47,
+    "pnl_per_day": 43.62,
+    "max_dd": 512.0,
+    "winning_days": 220,
+    "losing_days": 116,
+    "winning_days_pct": 65.5,
+    "days_below_neg100": 51,
+    "recent_60d_pnl_per_day": 37.38,
+    "recent_60d_wr": 79.5,
+    "recent_30d_pnl_per_day": 25.64,
+    "recent_30d_wr": 78.4,
+    "quarterly_pnl_per_day": {
+      "Q1_oldest": 61.96,
+      "Q2": 44.73,
+      "Q3": 36.22,
+      "Q4_newest": 31.58
+    },
+    "per_level": {
+      "FIB_0.236": {
+        "trades": 1855,
+        "wr": 79.7,
+        "pnl_per_day": 10.44
+      },
+      "FIB_0.618": {
+        "trades": 580,
+        "wr": 70.5,
+        "pnl_per_day": 7.22
+      },
+      "FIB_0.764": {
+        "trades": 922,
+        "wr": 78.6,
+        "pnl_per_day": 12.18
+      },
+      "FIB_EXT_HI_1.272": {
+        "trades": 609,
+        "wr": 83.9,
+        "pnl_per_day": 5.14
+      },
+      "FIB_EXT_LO_1.272": {
+        "trades": 616,
+        "wr": 82.3,
+        "pnl_per_day": 2.9
+      },
+      "IBH": {
+        "trades": 1099,
+        "wr": 81.8,
+        "pnl_per_day": 5.74
+      }
+    },
+    "name": "Baseline (no profit stop)"
+  },
+  {
+    "trades": 1656,
+    "trades_per_day": 4.9,
+    "wins": 1306,
+    "losses": 350,
+    "wr": 78.9,
+    "total_pnl": 3636.34,
+    "pnl_per_day": 10.82,
+    "max_dd": 527.0,
+    "winning_days": 274,
+    "losing_days": 62,
+    "winning_days_pct": 81.5,
+    "days_below_neg100": 39,
+    "recent_60d_pnl_per_day": 3.51,
+    "recent_60d_wr": 76.4,
+    "recent_30d_pnl_per_day": 0.17,
+    "recent_30d_wr": 74.7,
+    "quarterly_pnl_per_day": {
+      "Q1_oldest": 18.42,
+      "Q2": 19.26,
+      "Q3": 3.26,
+      "Q4_newest": 2.35
+    },
+    "per_level": {
+      "FIB_0.236": {
+        "trades": 424,
+        "wr": 77.4,
+        "pnl_per_day": 0.02
+      },
+      "FIB_0.618": {
+        "trades": 223,
+        "wr": 68.6,
+        "pnl_per_day": 1.81
+      },
+      "FIB_0.764": {
+        "trades": 349,
+        "wr": 79.1,
+        "pnl_per_day": 4.72
+      },
+      "FIB_EXT_HI_1.272": {
+        "trades": 149,
+        "wr": 86.6,
+        "pnl_per_day": 1.74
+      },
+      "FIB_EXT_LO_1.272": {
+        "trades": 170,
+        "wr": 83.5,
+        "pnl_per_day": 1.11
+      },
+      "IBH": {
+        "trades": 341,
+        "wr": 81.5,
+        "pnl_per_day": 1.42
+      }
+    },
+    "name": "Profit stop $25"
+  },
+  {
+    "trades": 2656,
+    "trades_per_day": 7.9,
+    "wins": 2097,
+    "losses": 559,
+    "wr": 79.0,
+    "total_pnl": 6082.58,
+    "pnl_per_day": 18.1,
+    "max_dd": 523.0,
+    "winning_days": 247,
+    "losing_days": 89,
+    "winning_days_pct": 73.5,
+    "days_below_neg100": 45,
+    "recent_60d_pnl_per_day": 10.99,
+    "recent_60d_wr": 77.5,
+    "recent_30d_pnl_per_day": 3.1,
+    "recent_30d_wr": 75.6,
+    "quarterly_pnl_per_day": {
+      "Q1_oldest": 27.44,
+      "Q2": 26.96,
+      "Q3": 10.46,
+      "Q4_newest": 7.55
+    },
+    "per_level": {
+      "FIB_0.236": {
+        "trades": 740,
+        "wr": 78.0,
+        "pnl_per_day": 1.59
+      },
+      "FIB_0.618": {
+        "trades": 346,
+        "wr": 68.5,
+        "pnl_per_day": 3.04
+      },
+      "FIB_0.764": {
+        "trades": 506,
+        "wr": 78.3,
+        "pnl_per_day": 6.14
+      },
+      "FIB_EXT_HI_1.272": {
+        "trades": 231,
+        "wr": 87.0,
+        "pnl_per_day": 2.82
+      },
+      "FIB_EXT_LO_1.272": {
+        "trades": 304,
+        "wr": 81.6,
+        "pnl_per_day": 1.07
+      },
+      "IBH": {
+        "trades": 529,
+        "wr": 82.8,
+        "pnl_per_day": 3.45
+      }
+    },
+    "name": "Profit stop $50"
+  },
+  {
+    "trades": 3399,
+    "trades_per_day": 10.1,
+    "wins": 2699,
+    "losses": 700,
+    "wr": 79.4,
+    "total_pnl": 8562.19,
+    "pnl_per_day": 25.48,
+    "max_dd": 452.0,
+    "winning_days": 234,
+    "losing_days": 102,
+    "winning_days_pct": 69.6,
+    "days_below_neg100": 49,
+    "recent_60d_pnl_per_day": 20.86,
+    "recent_60d_wr": 78.8,
+    "recent_30d_pnl_per_day": 9.51,
+    "recent_30d_wr": 76.6,
+    "quarterly_pnl_per_day": {
+      "Q1_oldest": 35.6,
+      "Q2": 36.27,
+      "Q3": 14.81,
+      "Q4_newest": 15.25
+    },
+    "per_level": {
+      "FIB_0.236": {
+        "trades": 998,
+        "wr": 78.1,
+        "pnl_per_day": 2.47
+      },
+      "FIB_0.618": {
+        "trades": 413,
+        "wr": 69.7,
+        "pnl_per_day": 4.77
+      },
+      "FIB_0.764": {
+        "trades": 621,
+        "wr": 78.7,
+        "pnl_per_day": 8.35
+      },
+      "FIB_EXT_HI_1.272": {
+        "trades": 298,
+        "wr": 86.6,
+        "pnl_per_day": 3.51
+      },
+      "FIB_EXT_LO_1.272": {
+        "trades": 391,
+        "wr": 82.1,
+        "pnl_per_day": 1.69
+      },
+      "IBH": {
+        "trades": 678,
+        "wr": 83.2,
+        "pnl_per_day": 4.71
+      }
+    },
+    "name": "Profit stop $75"
+  },
+  {
+    "trades": 4071,
+    "trades_per_day": 12.1,
+    "wins": 3243,
+    "losses": 828,
+    "wr": 79.7,
+    "total_pnl": 10881.14,
+    "pnl_per_day": 32.38,
+    "max_dd": 409.0,
+    "winning_days": 226,
+    "losing_days": 110,
+    "winning_days_pct": 67.3,
+    "days_below_neg100": 49,
+    "recent_60d_pnl_per_day": 27.86,
+    "recent_60d_wr": 79.3,
+    "recent_30d_pnl_per_day": 15.68,
+    "recent_30d_wr": 77.5,
+    "quarterly_pnl_per_day": {
+      "Q1_oldest": 41.51,
+      "Q2": 43.58,
+      "Q3": 23.49,
+      "Q4_newest": 20.96
+    },
+    "per_level": {
+      "FIB_0.236": {
+        "trades": 1241,
+        "wr": 79.0,
+        "pnl_per_day": 5.22
+      },
+      "FIB_0.618": {
+        "trades": 471,
+        "wr": 70.3,
+        "pnl_per_day": 5.9
+      },
+      "FIB_0.764": {
+        "trades": 744,
+        "wr": 78.6,
+        "pnl_per_day": 9.86
+      },
+      "FIB_EXT_HI_1.272": {
+        "trades": 380,
+        "wr": 84.7,
+        "pnl_per_day": 3.65
+      },
+      "FIB_EXT_LO_1.272": {
+        "trades": 428,
+        "wr": 82.7,
+        "pnl_per_day": 2.25
+      },
+      "IBH": {
+        "trades": 807,
+        "wr": 83.0,
+        "pnl_per_day": 5.51
+      }
+    },
+    "name": "Profit stop $100"
+  },
+  {
+    "trades": 4585,
+    "trades_per_day": 13.6,
+    "wins": 3648,
+    "losses": 937,
+    "wr": 79.6,
+    "total_pnl": 11712.62,
+    "pnl_per_day": 34.86,
+    "max_dd": 516.0,
+    "winning_days": 220,
+    "losing_days": 116,
+    "winning_days_pct": 65.5,
+    "days_below_neg100": 51,
+    "recent_60d_pnl_per_day": 31.01,
+    "recent_60d_wr": 79.4,
+    "recent_30d_pnl_per_day": 14.3,
+    "recent_30d_wr": 77.4,
+    "quarterly_pnl_per_day": {
+      "Q1_oldest": 48.07,
+      "Q2": 41.5,
+      "Q3": 26.84,
+      "Q4_newest": 23.03
+    },
+    "per_level": {
+      "FIB_0.236": {
+        "trades": 1431,
+        "wr": 79.1,
+        "pnl_per_day": 5.94
+      },
+      "FIB_0.618": {
+        "trades": 513,
+        "wr": 70.0,
+        "pnl_per_day": 6.11
+      },
+      "FIB_0.764": {
+        "trades": 817,
+        "wr": 78.3,
+        "pnl_per_day": 10.38
+      },
+      "FIB_EXT_HI_1.272": {
+        "trades": 452,
+        "wr": 85.0,
+        "pnl_per_day": 4.5
+      },
+      "FIB_EXT_LO_1.272": {
+        "trades": 480,
+        "wr": 83.3,
+        "pnl_per_day": 2.99
+      },
+      "IBH": {
+        "trades": 892,
+        "wr": 82.2,
+        "pnl_per_day": 4.94
+      }
+    },
+    "name": "Profit stop $125"
+  },
+  {
+    "trades": 4953,
+    "trades_per_day": 14.7,
+    "wins": 3940,
+    "losses": 1013,
+    "wr": 79.5,
+    "total_pnl": 12477.38,
+    "pnl_per_day": 37.14,
+    "max_dd": 512.0,
+    "winning_days": 220,
+    "losing_days": 116,
+    "winning_days_pct": 65.5,
+    "days_below_neg100": 51,
+    "recent_60d_pnl_per_day": 32.56,
+    "recent_60d_wr": 79.4,
+    "recent_30d_pnl_per_day": 14.9,
+    "recent_30d_wr": 77.4,
+    "quarterly_pnl_per_day": {
+      "Q1_oldest": 50.44,
+      "Q2": 42.11,
+      "Q3": 30.15,
+      "Q4_newest": 25.84
+    },
+    "per_level": {
+      "FIB_0.236": {
+        "trades": 1561,
+        "wr": 78.9,
+        "pnl_per_day": 6.39
+      },
+      "FIB_0.618": {
+        "trades": 533,
+        "wr": 70.0,
+        "pnl_per_day": 6.24
+      },
+      "FIB_0.764": {
+        "trades": 856,
+        "wr": 78.3,
+        "pnl_per_day": 10.92
+      },
+      "FIB_EXT_HI_1.272": {
+        "trades": 504,
+        "wr": 84.7,
+        "pnl_per_day": 4.77
+      },
+      "FIB_EXT_LO_1.272": {
+        "trades": 521,
+        "wr": 83.3,
+        "pnl_per_day": 3.22
+      },
+      "IBH": {
+        "trades": 978,
+        "wr": 82.2,
+        "pnl_per_day": 5.6
+      }
+    },
+    "name": "Profit stop $150"
+  },
+  {
+    "trades": 5330,
+    "trades_per_day": 15.9,
+    "wins": 4249,
+    "losses": 1081,
+    "wr": 79.7,
+    "total_pnl": 13858.64,
+    "pnl_per_day": 41.25,
+    "max_dd": 512.0,
+    "winning_days": 220,
+    "losing_days": 116,
+    "winning_days_pct": 65.5,
+    "days_below_neg100": 51,
+    "recent_60d_pnl_per_day": 37.13,
+    "recent_60d_wr": 79.6,
+    "recent_30d_pnl_per_day": 22.03,
+    "recent_30d_wr": 78.2,
+    "quarterly_pnl_per_day": {
+      "Q1_oldest": 58.75,
+      "Q2": 43.06,
+      "Q3": 33.27,
+      "Q4_newest": 29.9
+    },
+    "per_level": {
+      "FIB_0.236": {
+        "trades": 1715,
+        "wr": 79.5,
+        "pnl_per_day": 8.75
+      },
+      "FIB_0.618": {
+        "trades": 560,
+        "wr": 70.4,
+        "pnl_per_day": 6.88
+      },
+      "FIB_0.764": {
+        "trades": 885,
+        "wr": 78.6,
+        "pnl_per_day": 11.84
+      },
+      "FIB_EXT_HI_1.272": {
+        "trades": 544,
+        "wr": 84.6,
+        "pnl_per_day": 5.12
+      },
+      "FIB_EXT_LO_1.272": {
+        "trades": 579,
+        "wr": 82.6,
+        "pnl_per_day": 2.95
+      },
+      "IBH": {
+        "trades": 1047,
+        "wr": 81.9,
+        "pnl_per_day": 5.7
+      }
+    },
+    "name": "Profit stop $200"
+  }
+]

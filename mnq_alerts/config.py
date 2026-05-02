@@ -92,7 +92,10 @@ BOT_VOL_FILTER_MIN_RANGE_PCT = 0.0015  # Skip entry when 30m range < 0.15% of pr
 BOT_MAX_ENTRIES_PER_LEVEL = 12  # Default max (overridden by BOT_PER_LEVEL_MAX_ENTRIES)
 BOT_GLOBAL_COOLDOWN_AFTER_LOSS_SECS = 30  # After any stop loss, wait 30s before trading
 # any level. Prevents momentum cascade (validated 2026-04-29: +$0.37/day, MaxDD 466 vs 517).
-DAILY_LOSS_LIMIT_USD = 100.0  # Stop trading for the day after losing this much
+DAILY_LOSS_LIMIT_USD = 200.0  # Stop trading for the day after losing this much
+# Increased from $100→$200 (2026-05-02): bot recovers from losses (84.5% WR
+# after 2+L). Higher limit captures recovery trades. +$1.93/day, 27 bad days
+# (vs 51 at $100). MaxDD increases $512→$683.
 BOT_TIMEOUT_SECS = (
     15 * 60
 )  # Close position if neither target nor stop hits in this window

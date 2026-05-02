@@ -78,6 +78,7 @@ def simulate_day(
     split_budget_cutoff_mins: int = 780,
     momentum_max: float = 0.0,
     momentum_lookback_ticks: int = 1000,
+    direction_caps: dict[tuple[str, str], int] | None = None,
 ) -> tuple[list[TradeRecord], tuple[int, int]]:
     """Simulate one day. Returns (trades, (cw, cl)).
 
@@ -131,6 +132,7 @@ def simulate_day(
     if has_vwap and (not exclude_levels or "VWAP" not in exclude_levels):
         zones["VWAP"] = zone_factory("VWAP", float(dc.post_ib_vwaps[0]), True)
     ec = {name: 0 for name in zones}
+    ec_dir: dict[tuple[str, str], int] = {}  # (level, direction) → count
 
     cw, cl = streak_state
     trades = []
@@ -242,6 +244,13 @@ def simulate_day(
             # Per-level direction filter: only allow specified direction.
             if direction_filter and name in direction_filter:
                 if direction_filter[name] != d:
+                    zone.reset()
+                    continue
+
+            # Per-direction cap: limit entries per (level, direction).
+            if direction_caps and (name, d) in direction_caps:
+                dir_count = ec_dir.get((name, d), 0)
+                if dir_count >= direction_caps[(name, d)]:
                     zone.reset()
                     continue
 
@@ -371,6 +380,7 @@ def simulate_day(
 
             # Record trade.
             ec[name] += 1
+            ec_dir[(name, d)] = ec_dir.get((name, d), 0) + 1
             trades.append(TradeRecord(
                 dc.date, name, d, ec[name], out, pnl_usd, fac,
                 entry_idx=gi, exit_idx=exit_idx, entry_ns=ens,
