@@ -4,10 +4,10 @@ broker.py — IBKR order execution with risk management.
 Submits bracket orders (market entry + limit target + stop loss) when alerts fire.
 Disabled by default — set IBKR_TRADING_ENABLED=true in .env to activate.
 
-Risk controls (validated over 214 days in bot_risk_backtest.py):
+Risk controls:
   - One position at a time (no stacking)
-  - Daily loss limit ($150 default — stops trading for the day)
-  - Consecutive loss limit (3 default — stops trading for the day)
+  - Daily loss limit ($200 — stops trading for the day)
+  - 15-min position timeout (close at market if no target/stop hit)
 
 Connection: IB Gateway or TWS must be running with API access enabled.
 Default port 4002 (IB Gateway paper), 4001 (IB Gateway live).

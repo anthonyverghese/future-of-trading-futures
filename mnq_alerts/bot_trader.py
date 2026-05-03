@@ -5,14 +5,16 @@ Manages its own zone tracking (1pt entry) and delegates order execution
 to IBKRBroker. Main.py calls into this module without needing to know
 bot internals.
 
-Bot parameters (validated 2026-04-27 over 332 days):
+Bot parameters (updated 2026-05-02, validated over 336 days):
   - Entry: price within 1 pt of level (vs 7 pt for human alerts)
   - Zone: stays in_zone after entry until price leaves 1pt or trade closes
   - Target/Stop: per-level (MFE-based)
-  - Risk: $100/day loss limit, 1 position at a time, 13:30-14:00 ET suppressed
+  - Risk: $200/day loss limit, 1 position at a time, 15-min timeout
+  - Momentum filter: skip if 5-min price change > 5pts in trade direction
   - Levels: IBH (SELL only), FIB_EXT_HI, FIB_EXT_LO, FIB_0.236, FIB_0.618, FIB_0.764
     (IBL, VWAP, FIB_0.5 excluded — weak or deteriorating edge)
   - Per-level entry caps: data-driven from WR-by-entry-count analysis
+  - Monday double caps
   - Scoring: unscored (scoring hurts OOS, validated 2026-04-26)
 """
 
