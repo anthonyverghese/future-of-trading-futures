@@ -575,6 +575,35 @@ class IBKRBroker:
 
         return cancelled
 
+    def _has_mnq_position(self) -> bool:
+        """Check if any MNQ position exists on IBKR."""
+        try:
+            return any(
+                p.contract.symbol == MNQ_SYMBOL and p.position != 0
+                for p in self._ib.positions()
+            )
+        except Exception:
+            return False
+
+    def _close_mnq_at_market(self, order_ref: str = "bot-close") -> bool:
+        """Submit a market order to close any open MNQ position.
+
+        Returns True if a close order was submitted. Does not wait for fill.
+        """
+        try:
+            for pos in self._ib.positions():
+                if pos.contract.symbol == MNQ_SYMBOL and pos.position != 0:
+                    action = "SELL" if pos.position > 0 else "BUY"
+                    qty = abs(int(pos.position))
+                    contract = self._contract or pos.contract
+                    close_order = MarketOrder(action, qty)
+                    close_order.orderRef = order_ref
+                    self._ib.placeOrder(contract, close_order)
+                    return True
+        except Exception as exc:
+            print(f"[broker] Close at market error: {exc}", flush=True)
+        return False
+
     def _defensive_flatten(self, reason: str) -> None:
         """Cancel all open MNQ orders and market-close any MNQ position.
 
@@ -586,28 +615,13 @@ class IBKRBroker:
         if not self._ib:
             return
         self._cancel_all_mnq(f"Defensive flatten ({reason})")
-        closed = False
-        try:
-            for pos in self._ib.positions():
-                if pos.contract.symbol == MNQ_SYMBOL and pos.position != 0:
-                    action = "SELL" if pos.position > 0 else "BUY"
-                    qty = abs(pos.position)
-                    close_order = MarketOrder(action, qty)
-                    close_order.orderRef = "bot-defensive-flatten"
-                    contract = self._contract or pos.contract
-                    self._ib.placeOrder(contract, close_order)
-                    print(
-                        f"[broker] Defensive flatten ({reason}): "
-                        f"{action} {qty} MNQ @ market"
-                    )
-                    closed = True
-            if not closed:
-                print(
-                    f"[broker] Defensive flatten ({reason}): "
-                    f"no MNQ position found on IBKR"
-                )
-        except Exception as exc:
-            print(f"[broker] Defensive flatten ({reason}) — close error: {exc}")
+        if self._close_mnq_at_market("bot-defensive-flatten"):
+            print(f"[broker] Defensive flatten ({reason}): closing at market")
+        else:
+            print(
+                f"[broker] Defensive flatten ({reason}): "
+                f"no MNQ position found on IBKR"
+            )
 
         # Sweep any 'open' bot_trades rows for today so they don't stay
         # stuck forever — the fill from the flatten is ignored by
