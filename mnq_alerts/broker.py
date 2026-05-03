@@ -1418,159 +1418,123 @@ class IBKRBroker:
                 direction = self._pending_direction
 
             if entry_filled:
-                # Entry filled despite the cancel — bracket children
-                # are unreliable. IBKR can cascade the parent cancel
-                # to children after our snapshot, leaving the position
-                # unprotected and the bot stuck (2026-05-01 incident).
-                # Cancel children and close at market.
-
-                # Cancel any surviving children (no lock needed).
-                try:
-                    all_open = self._ib.openTrades()
-                    children = [
-                        t for t in all_open
-                        if t.contract.symbol == MNQ_SYMBOL
-                        and t.order.parentId == parent_id
-                    ]
-                    if children:
-                        print(
-                            f"[broker] Fill-during-cancel: cancelling "
-                            f"{len(children)} bracket children",
-                            flush=True,
-                        )
-                        for c in children:
-                            try:
-                                self._ib.cancelOrder(c.order)
-                            except Exception:
-                                pass
-                        self._ib.sleep(0.5)
-                except Exception as exc:
-                    print(
-                        f"[broker] Fill-during-cancel: error checking "
-                        f"children: {exc}",
-                        flush=True,
-                    )
-
-                # Check if IBKR still has a position.
-                has_position = False
-                try:
-                    self._ib.sleep(0.5)
-                    has_position = any(
-                        p.contract.symbol == MNQ_SYMBOL
-                        and p.position != 0
-                        for p in self._ib.positions()
-                    )
-                except Exception:
-                    pass
-
-                if has_position:
-                    # Close at market with proper orderRef so
-                    # _on_order_status can record P&L.
-                    print(
-                        f"[broker] WARNING: Entry {parent_id} filled "
-                        f"@ {entry_fill:.2f} during cancel "
-                        f"— closing at market (bracket unreliable)",
-                        flush=True,
-                    )
-                    try:
-                        for pos in self._ib.positions():
-                            if (
-                                pos.contract.symbol == MNQ_SYMBOL
-                                and pos.position != 0
-                            ):
-                                action = (
-                                    "SELL"
-                                    if pos.position > 0
-                                    else "BUY"
-                                )
-                                qty = abs(int(pos.position))
-                                contract = self._contract or pos.contract
-                                close_order = MarketOrder(action, qty)
-                                close_order.orderRef = (
-                                    f"bot-{parent_id}-close"
-                                )
-                                trade_obj = self._ib.placeOrder(
-                                    contract, close_order
-                                )
-                                for _ in range(20):
-                                    self._ib.sleep(0.5)
-                                    if (
-                                        trade_obj.orderStatus.status
-                                        == "Filled"
-                                    ):
-                                        break
-                    except Exception as exc:
-                        print(
-                            f"[broker] Fill-during-cancel close "
-                            f"error: {exc}",
-                            flush=True,
-                        )
-                    # Give _on_order_status time to process the fill
-                    # (it runs during sleep, can acquire lock since
-                    # we're not holding it).
-                    try:
-                        self._ib.sleep(1.0)
-                    except Exception:
-                        pass
-                else:
-                    # Position already closed (target may have filled
-                    # before we cancelled it).
-                    print(
-                        f"[broker] Fill-during-cancel: no IBKR "
-                        f"position — already closed",
-                        flush=True,
-                    )
-
-                # Ensure _position_open is cleared regardless of
-                # whether _on_order_status fired.
-                with self._lock:
-                    if self._position_open:
-                        self._position_open = False
-                        self._position_opened_at = None
-                        print(
-                            f"[broker] Fill-during-cancel: cleared "
-                            f"stuck position state",
-                            flush=True,
-                        )
-
-                return TradeResult(
-                    success=False,
-                    error="Entry filled during cancel — closed",
-                )
+                return self._handle_fill_during_cancel(parent_id, entry_fill)
             else:
-                # Entry truly cancelled. Cancel child orders from
-                # THIS bracket only (not all MNQ orders — a new
-                # bracket may have been submitted already).
-                with self._lock:
-                    self._position_open = False
-                    self._position_opened_at = None
-                    self._pending_entry_fill = None
-                    self._pending_entry_limit = None
-                    self._pending_range_30m = None
-                    self._pending_tick_rate = None
-                    self._pending_session_move_pct = None
-                # Cancel children outside lock to avoid deadlock.
-                try:
-                    for t in self._ib.openTrades():
-                        if (
-                            t.contract.symbol == MNQ_SYMBOL
-                            and t.order.parentId == parent_id
-                        ):
-                            ref = getattr(t.order, "orderRef", "") or ""
-                            print(
-                                f"[broker] Entry cancel cleanup: "
-                                f"cancelling child {t.order.orderId} ({ref})",
-                                flush=True,
-                            )
-                            self._ib.cancelOrder(t.order)
-                except Exception as e:
-                    print(f"[broker] Entry cancel cleanup error: {e}")
-                return TradeResult(
-                    success=False,
-                    error="Entry limit not filled within 2s",
-                )
+                return self._handle_entry_cancelled(parent_id)
 
         return result
+
+    def _handle_fill_during_cancel(
+        self, parent_id: int, entry_fill: float
+    ) -> "TradeResult":
+        """Handle case where entry filled during cancel attempt.
+
+        Cancels bracket children, closes position at market, and clears
+        state. Returns TradeResult(success=False). IBKR can cascade the
+        parent cancel to children, leaving position unprotected — so we
+        always close at market (2026-05-01 incident).
+        """
+        # Cancel any surviving bracket children.
+        try:
+            all_open = self._ib.openTrades()
+            children = [
+                t for t in all_open
+                if t.contract.symbol == MNQ_SYMBOL
+                and t.order.parentId == parent_id
+            ]
+            if children:
+                print(
+                    f"[broker] Fill-during-cancel: cancelling "
+                    f"{len(children)} bracket children",
+                    flush=True,
+                )
+                for c in children:
+                    try:
+                        self._ib.cancelOrder(c.order)
+                    except Exception:
+                        pass
+                self._ib.sleep(0.5)
+        except Exception as exc:
+            print(
+                f"[broker] Fill-during-cancel: error checking "
+                f"children: {exc}",
+                flush=True,
+            )
+
+        # Close position if IBKR still has one.
+        try:
+            self._ib.sleep(0.5)
+        except Exception:
+            pass
+        if self._has_mnq_position():
+            print(
+                f"[broker] WARNING: Entry {parent_id} filled "
+                f"@ {entry_fill:.2f} during cancel "
+                f"— closing at market (bracket unreliable)",
+                flush=True,
+            )
+            self._close_mnq_at_market(f"bot-{parent_id}-close")
+            try:
+                # Give _on_order_status time to process the fill.
+                self._ib.sleep(1.0)
+            except Exception:
+                pass
+        else:
+            print(
+                f"[broker] Fill-during-cancel: no IBKR "
+                f"position — already closed",
+                flush=True,
+            )
+
+        # Ensure _position_open is cleared regardless.
+        with self._lock:
+            if self._position_open:
+                self._position_open = False
+                self._position_opened_at = None
+                print(
+                    f"[broker] Fill-during-cancel: cleared "
+                    f"stuck position state",
+                    flush=True,
+                )
+
+        return TradeResult(
+            success=False,
+            error="Entry filled during cancel — closed",
+        )
+
+    def _handle_entry_cancelled(self, parent_id: int) -> "TradeResult":
+        """Handle case where entry was truly cancelled (no fill).
+
+        Clears position state and cancels orphaned bracket children.
+        """
+        with self._lock:
+            self._position_open = False
+            self._position_opened_at = None
+            self._pending_entry_fill = None
+            self._pending_entry_limit = None
+            self._pending_range_30m = None
+            self._pending_tick_rate = None
+            self._pending_session_move_pct = None
+        # Cancel children outside lock to avoid deadlock.
+        try:
+            for t in self._ib.openTrades():
+                if (
+                    t.contract.symbol == MNQ_SYMBOL
+                    and t.order.parentId == parent_id
+                ):
+                    ref = getattr(t.order, "orderRef", "") or ""
+                    print(
+                        f"[broker] Entry cancel cleanup: "
+                        f"cancelling child {t.order.orderId} ({ref})",
+                        flush=True,
+                    )
+                    self._ib.cancelOrder(t.order)
+        except Exception as e:
+            print(f"[broker] Entry cancel cleanup error: {e}")
+        return TradeResult(
+            success=False,
+            error="Entry limit not filled within 2s",
+        )
 
     def _submit_bracket_locked(
         self,
