@@ -45,7 +45,8 @@ from config import (
     BOT_TREND_LOOKBACK_MIN,
     BOT_VOL_FILTER_MIN_RANGE_PCT,
 )
-from scoring import SUPPRESSED_WINDOWS
+# SUPPRESSED_WINDOWS import removed — bot suppression disabled (2026-05-02).
+# Human app still uses it via alert_manager.py.
 
 _ET = pytz.timezone("America/New_York")
 _TREND_LOOKBACK_TD = datetime.timedelta(minutes=BOT_TREND_LOOKBACK_MIN)
@@ -203,12 +204,9 @@ class BotTrader:
         self._level_cooldown_until: dict[str, float] = {}
         # Global cooldown after any stop loss — monotonic timestamp.
         self._global_cooldown_until: float = 0.0
-        # Adaptive caps: DISABLED (2026-05-02). Hurts P&L -$3.82 to -$6.18/day
-        # across all configurations. Recovery after losses is profitable.
+        # Adaptive caps: DISABLED (2026-05-02). Hurts P&L in all configs.
+        # Fields kept for backtest compatibility (simulate_day uses them).
         self._adaptive_caps_restored: bool = True  # True = disabled
-        self._adaptive_caps_until_et_mins: int = 630 + 30  # 11:00 AM ET
-        self._adaptive_accepted_trades: int = 0
-        self._adaptive_any_loss: bool = False
 
     def connect(self) -> bool:
         """Connect to IBKR. Returns True on success."""
@@ -298,44 +296,56 @@ class BotTrader:
         if not self._broker.is_connected:
             return
 
-        # Compute ET time early — needed by trade-close handler and zone loop.
         now = datetime.datetime.now(_ET)
 
-        # If a trade just closed, reset ALL zones so levels that were
-        # blocked by "position already open" can fire again.
+        # Detect trade close and reset zones.
         if (
             self._active_trade_level is not None
             and not self._broker._position_open
         ):
-            for z in self._zones.values():
-                z.reset()
-            # If the trade was a loss, set global cooldown.
-            was_loss = (
-                BOT_GLOBAL_COOLDOWN_AFTER_LOSS_SECS > 0
-                and self._broker._consecutive_losses > 0
-            )
-            if was_loss:
-                self._global_cooldown_until = (
-                    time.monotonic() + BOT_GLOBAL_COOLDOWN_AFTER_LOSS_SECS
-                )
-            # Adaptive caps: track wins/losses to decide when to restore.
-            if not self._adaptive_caps_restored:
-                self._adaptive_accepted_trades += 1
-                if was_loss:
-                    self._adaptive_any_loss = True
-                    # Extend half-cap window 30 min from now.
-                    loss_et = now.hour * 60 + now.minute
-                    self._adaptive_caps_until_et_mins = loss_et + 30
-                elif (
-                    self._adaptive_accepted_trades >= 3
-                    and not self._adaptive_any_loss
-                ):
-                    # First 3 trades all wins — restore full caps.
-                    self._adaptive_caps_restored = True
-                    print("[bot] Adaptive caps: 3 wins, full caps restored")
-            self._active_trade_level = None
+            self._on_position_closed(now)
 
-        # Update 60-min price window for trend calculation.
+        # Update price windows for trend and momentum (O(1) per tick).
+        trend_60m = self._update_price_windows(now, price)
+
+        # 30m range as % of price (for scoring).
+        range_30m_pct = (
+            range_30m / price * 100 if range_30m is not None and price > 0 else None
+        )
+
+        # Early exits: position open, daily limit hit, or global cooldown.
+        if self._broker._position_open:
+            return
+        allowed, _ = self._broker.can_trade()
+        if not allowed:
+            return
+        if self._global_cooldown_until > 0 and time.monotonic() < self._global_cooldown_until:
+            return
+
+        # Check each zone for entry opportunities.
+        self._process_zone_entries(
+            price, now, trend_60m, tick_rate, session_move_pct,
+            range_30m, range_30m_pct, now_et,
+        )
+
+    def _on_position_closed(self, now: datetime.datetime) -> None:
+        """Handle trade close: reset zones and set cooldown if loss."""
+        for z in self._zones.values():
+            z.reset()
+        if (
+            BOT_GLOBAL_COOLDOWN_AFTER_LOSS_SECS > 0
+            and self._broker._consecutive_losses > 0
+        ):
+            self._global_cooldown_until = (
+                time.monotonic() + BOT_GLOBAL_COOLDOWN_AFTER_LOSS_SECS
+            )
+        self._active_trade_level = None
+
+    def _update_price_windows(
+        self, now: datetime.datetime, price: float
+    ) -> float:
+        """Update 60-min trend and 5-min momentum windows. Returns trend_60m."""
+        # 60-min trend.
         self._price_window.append((now, price))
         cutoff = now - _TREND_LOOKBACK_TD
         while self._price_window and self._price_window[0][0] < cutoff:
@@ -345,157 +355,114 @@ class BotTrader:
         else:
             trend_60m = 0.0
 
-        # Update 5-min price for momentum filter (O(1) per tick).
+        # 5-min momentum.
         self._price_window_5m.append((now, price))
         cutoff_5m = now - _MOMENTUM_LOOKBACK_TD
         while self._price_window_5m and self._price_window_5m[0][0] < cutoff_5m:
             self._price_5m_ago = self._price_window_5m.popleft()[1]
 
-        # 30m range as % of price (for scoring).
-        range_30m_pct = (
-            range_30m / price * 100 if range_30m is not None and price > 0 else None
-        )
+        return trend_60m
 
-        # Skip all zone updates while a position is open — no new
-        # trades can happen anyway. All zones reset when trade closes.
-        if self._broker._position_open:
-            return
-
-        # Skip all zone updates if daily loss limit hit or stopped —
-        # prevents hundreds of spurious zone entries filling logs.
-        allowed, _ = self._broker.can_trade()
-        if not allowed:
-            return
-
-        # Global cooldown after any stop loss — skip all zones.
-        if self._global_cooldown_until > 0 and time.monotonic() < self._global_cooldown_until:
-            return
-
+    def _process_zone_entries(
+        self,
+        price: float,
+        now: datetime.datetime,
+        trend_60m: float,
+        tick_rate: float,
+        session_move_pct: float,
+        range_30m: float | None,
+        range_30m_pct: float | None,
+        now_et: datetime.time | None,
+    ) -> None:
+        """Check all zones for entry and submit orders."""
         for bz in self._zones.values():
-            # Cooldown after failed entry — skip update entirely so
-            # in_zone isn't set. After cooldown expires, the zone can
-            # fire on the next approach (even if price never left).
+            # Per-level cooldown after failed entry.
             cooldown = self._level_cooldown_until.get(bz.name, 0)
             if cooldown > 0 and time.monotonic() < cooldown:
                 continue
 
-            if bz.update(price):
-                direction = "up" if price > bz.price else "down"
+            if not bz.update(price):
+                continue
 
-                # Per-level direction filter (e.g., IBH SELL only).
-                allowed_dir = BOT_DIRECTION_FILTER.get(bz.name)
-                if allowed_dir and allowed_dir != direction:
+            direction = "up" if price > bz.price else "down"
+
+            # Direction filter (e.g., IBH SELL only).
+            allowed_dir = BOT_DIRECTION_FILTER.get(bz.name)
+            if allowed_dir and allowed_dir != direction:
+                continue
+
+            # Momentum filter: skip if 5-min price change > 5pts
+            # in the trade direction.
+            if self._price_5m_ago is not None:
+                momentum = price - self._price_5m_ago
+                if direction == "down":
+                    momentum = -momentum
+                if momentum > 5.0:
                     continue
 
-                # Momentum filter: skip entries where 5-min price change
-                # is > 5pts in the trade direction. Blocks re-tests after
-                # price passed through a level (level already failed to
-                # hold). Validated 2026-05-01 (v2 proper sim): +$3.67/day,
-                # MaxDD $512 vs $553, bad days 49 vs 57.
-                if self._price_5m_ago is not None:
-                    momentum = price - self._price_5m_ago
-                    if direction == "down":
-                        momentum = -momentum
-                    if momentum > 5.0:
-                        continue
+            # Per-level daily trade cap.
+            level_trades = self._level_trade_counts.get(bz.name, 0)
+            level_cap = BOT_PER_LEVEL_MAX_ENTRIES.get(
+                bz.name, BOT_MAX_ENTRIES_PER_LEVEL
+            )
+            if BOT_MONDAY_DOUBLE_CAPS and now.weekday() == 0:
+                level_cap *= 2
+            if level_trades >= level_cap:
+                continue
 
-                # Suppress entries during weak time windows.
-                # Disabled for bot (2026-05-02): removing suppression
-                # improves P&L at $200 limit. Human app still suppresses.
-                # if now_et is not None:
-                #     et_mins = now_et.hour * 60 + now_et.minute
-                #     if any(ws <= et_mins < we for ws, we in SUPPRESSED_WINDOWS):
-                #         continue
+            # Volatility filter: skip dead markets.
+            if (
+                range_30m_pct is not None
+                and range_30m_pct < BOT_VOL_FILTER_MIN_RANGE_PCT * 100
+            ):
+                continue
 
-                # Per-level daily trade cap (uses per-level map, falls back to default).
-                # Mondays get doubled caps (best day: 77% WR, +$46/day).
-                level_trades = self._level_trade_counts.get(bz.name, 0)
-                level_cap = BOT_PER_LEVEL_MAX_ENTRIES.get(
-                    bz.name, BOT_MAX_ENTRIES_PER_LEVEL
-                )
-                if BOT_MONDAY_DOUBLE_CAPS and now.weekday() == 0:
-                    level_cap *= 2
-                # Adaptive caps: halve caps in first 30 min after IB.
-                # Restore early if first 3 trades are all wins.
-                # Extend 30 min on any loss.
-                if not self._adaptive_caps_restored:
-                    if now_et is not None:
-                        et_mins = now_et.hour * 60 + now_et.minute
-                        if et_mins < self._adaptive_caps_until_et_mins:
-                            level_cap = max(1, level_cap // 2)
-                        else:
-                            self._adaptive_caps_restored = True
-                if level_trades >= level_cap:
-                    continue
+            # All filters passed — attempt entry.
+            bz.entry_count += 1
+            target_pts, stop_pts = BOT_PER_LEVEL_TS.get(
+                bz.name, (BOT_TARGET_POINTS, BOT_STOP_POINTS)
+            )
+            entry_limit_buffer = round(target_pts / 2 * 4) / 4
+            print(
+                f"[bot] Zone entry: {bz.name} test #{bz.entry_count} "
+                f"{direction} @ {price:.2f} (line {bz.price:.2f}, "
+                f"dist={abs(price - bz.price):.2f}, "
+                f"T{target_pts}/S{stop_pts})"
+            )
 
-                # Volatility filter: skip dead markets.
-                if (
-                    range_30m_pct is not None
-                    and range_30m_pct < BOT_VOL_FILTER_MIN_RANGE_PCT * 100
-                ):
-                    continue
-
-                # All filters passed — this is a genuine entry attempt.
-                bz.entry_count += 1
-
-                # Per-level target/stop (falls back to default if not configured).
-                target_pts, stop_pts = BOT_PER_LEVEL_TS.get(
-                    bz.name, (BOT_TARGET_POINTS, BOT_STOP_POINTS)
-                )
-                entry_limit_buffer = round(target_pts / 2 * 4) / 4
+            score = bot_entry_score(
+                bz.name, direction, bz.entry_count, trend_60m,
+                tick_rate=tick_rate, session_move_pct=session_move_pct,
+                range_30m_pct=range_30m_pct, now_et=now_et,
+            )
+            if score < BOT_MIN_SCORE:
                 print(
-                    f"[bot] Zone entry: {bz.name} test #{bz.entry_count} "
-                    f"{direction} @ {price:.2f} (line {bz.price:.2f}, "
-                    f"dist={abs(price - bz.price):.2f}, "
-                    f"T{target_pts}/S{stop_pts})"
+                    f"[bot] Skipped {bz.name} (score {score} < {BOT_MIN_SCORE}) | "
+                    f"test #{bz.entry_count}, {direction}, trend={trend_60m:+.0f}"
                 )
+                continue
 
-                score = bot_entry_score(
-                    bz.name,
-                    direction,
-                    bz.entry_count,
-                    trend_60m,
-                    tick_rate=tick_rate,
+            allowed, reason = self._broker.can_trade()
+            if allowed:
+                result = self._broker.submit_bracket(
+                    direction=direction, current_price=price,
+                    line_price=bz.price, level_name=bz.name,
+                    score=score, trend_60m=trend_60m,
+                    entry_count=bz.entry_count,
+                    target_pts=target_pts, stop_pts=stop_pts,
+                    entry_limit_buffer=entry_limit_buffer,
+                    range_30m=range_30m, tick_rate=tick_rate,
                     session_move_pct=session_move_pct,
-                    range_30m_pct=range_30m_pct,
-                    now_et=now_et,
                 )
-                if score < BOT_MIN_SCORE:
-                    print(
-                        f"[bot] Skipped {bz.name} (score {score} < {BOT_MIN_SCORE}) | "
-                        f"test #{bz.entry_count}, {direction}, trend={trend_60m:+.0f}"
-                    )
-                    continue
-                allowed, reason = self._broker.can_trade()
-                if allowed:
-                    result = self._broker.submit_bracket(
-                        direction=direction,
-                        current_price=price,
-                        line_price=bz.price,
-                        level_name=bz.name,
-                        score=score,
-                        trend_60m=trend_60m,
-                        entry_count=bz.entry_count,
-                        target_pts=target_pts,
-                        stop_pts=stop_pts,
-                        entry_limit_buffer=entry_limit_buffer,
-                        range_30m=range_30m,
-                        tick_rate=tick_rate,
-                        session_move_pct=session_move_pct,
-                    )
-                    if result.success:
-                        self._level_trade_counts[bz.name] = level_trades + 1
-                        self._active_trade_level = bz.name
-                    else:
-                        print(f"[broker] Trade failed: {result.error}")
-                        # Cooldown: don't retry this level for 60s.
-                        # Reset zone so it can fire fresh after cooldown.
-                        self._level_cooldown_until[bz.name] = time.monotonic() + 60
-                        bz.reset()
+                if result.success:
+                    self._level_trade_counts[bz.name] = level_trades + 1
+                    self._active_trade_level = bz.name
                 else:
-                    print(f"[broker] Skipped {bz.name}: {reason}")
-                    # Zone stays in_zone=True — won't re-fire until
-                    # trade closes (which resets all zones)
+                    print(f"[broker] Trade failed: {result.error}")
+                    self._level_cooldown_until[bz.name] = time.monotonic() + 60
+                    bz.reset()
+            else:
+                print(f"[broker] Skipped {bz.name}: {reason}")
 
     def advance_zones(self, price: float) -> None:
         """Update zone state without trading (used during replay)."""
@@ -525,10 +492,7 @@ class BotTrader:
         self._active_trade_level = None
         self._level_cooldown_until.clear()
         self._global_cooldown_until = 0.0
-        self._adaptive_caps_restored = False
-        self._adaptive_caps_until_et_mins = 630 + 30  # 11:00 AM ET
-        self._adaptive_accepted_trades = 0
-        self._adaptive_any_loss = False
+        self._adaptive_caps_restored = True  # disabled
 
     def eod_flatten(self) -> None:
         """Flatten open position a few minutes before market close.
