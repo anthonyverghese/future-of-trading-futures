@@ -822,40 +822,7 @@ class IBKRBroker:
             if not self._position_open:
                 return  # Already processed or spurious
 
-            self._position_open = False
-            self._position_opened_at = None
-            self._trades_today += 1
-
-            # Compute P&L from actual entry fill → exit fill.
             exit_price = trade.orderStatus.avgFillPrice
-            entry_price = self._pending_entry_fill or self._pending_line_price
-            if self._pending_direction and entry_price is not None:
-                if self._pending_direction == "up":
-                    pnl_pts = exit_price - entry_price
-                else:
-                    pnl_pts = entry_price - exit_price
-                pnl_usd = (
-                    pnl_pts * MNQ_POINT_VALUE - 1.24
-                )  # subtract round-trip commission
-            else:
-                # Fallback: infer from order type.
-                if order.orderType == "LMT":
-                    pnl_pts = self._pending_target_pts
-                    pnl_usd = pnl_pts * MNQ_POINT_VALUE - 1.24
-                else:
-                    pnl_pts = -self._pending_stop_pts
-                    pnl_usd = pnl_pts * MNQ_POINT_VALUE - 1.24
-
-            self._daily_pnl_usd += pnl_usd
-
-            if pnl_usd >= 0:
-                self._wins_today += 1
-                self._consecutive_losses = 0
-                outcome = "WIN"
-            else:
-                self._losses_today += 1
-                self._consecutive_losses += 1
-                outcome = "LOSS"
 
             # Determine exit reason: use explicit reason if set (timeout/eod),
             # otherwise infer from order type.
@@ -869,29 +836,7 @@ class IBKRBroker:
             else:
                 exit_reason = "market"
 
-            print(
-                f"[broker] Trade closed: {outcome} ${pnl_usd:+.2f} | "
-                f"Day: {self.daily_stats} | "
-                f"Consec losses: {self._consecutive_losses}"
-            )
-
-            # Persist exit to database.
-            if self._pending_db_trade_id is not None:
-                try:
-                    now = datetime.datetime.now(datetime.timezone.utc).astimezone()
-                    update_bot_trade_exit(
-                        trade_id=self._pending_db_trade_id,
-                        exit_time=now.strftime("%H:%M:%S %Z"),
-                        exit_price=exit_price,
-                        pnl_usd=pnl_usd,
-                        outcome=outcome.lower(),
-                        exit_reason=exit_reason,
-                    )
-                except Exception as e:
-                    print(f"[broker] Error logging trade exit to DB: {e}")
-                self._pending_db_trade_id = None
-
-            # Check if we should stop for the day.
+            self._record_trade_close(exit_price, exit_reason)
             self.can_trade()  # updates _stopped_for_day if limits hit
 
             # Cancel any stale sibling orders from THIS bracket only.
@@ -915,6 +860,61 @@ class IBKRBroker:
                 except Exception as e:
                     print(f"[broker] Post-close cleanup error: {e}")
 
+    def _record_trade_close(
+        self, exit_price: float, exit_reason: str
+    ) -> float:
+        """Record P&L and update state for a closed position.
+
+        Must be called with self._lock held. Returns pnl_usd.
+        Used by _on_order_status and _verify_and_failsafe_close.
+        """
+        self._position_open = False
+        self._position_opened_at = None
+        self._trades_today += 1
+
+        entry = self._pending_entry_fill or self._pending_line_price
+        if self._pending_direction and entry is not None:
+            if self._pending_direction == "up":
+                pnl_pts = exit_price - entry
+            else:
+                pnl_pts = entry - exit_price
+            pnl_usd = pnl_pts * MNQ_POINT_VALUE - 1.24
+        else:
+            pnl_usd = 0.0
+
+        self._daily_pnl_usd += pnl_usd
+
+        if pnl_usd >= 0:
+            self._wins_today += 1
+            self._consecutive_losses = 0
+        else:
+            self._losses_today += 1
+            self._consecutive_losses += 1
+
+        print(
+            f"[broker] Trade closed: "
+            f"{'WIN' if pnl_usd >= 0 else 'LOSS'} ${pnl_usd:+.2f} | "
+            f"Day: {self.daily_stats} | "
+            f"Consec losses: {self._consecutive_losses}"
+        )
+
+        if self._pending_db_trade_id is not None:
+            try:
+                now = datetime.datetime.now(datetime.timezone.utc).astimezone()
+                update_bot_trade_exit(
+                    trade_id=self._pending_db_trade_id,
+                    exit_time=now.strftime("%H:%M:%S %Z"),
+                    exit_price=exit_price,
+                    pnl_usd=pnl_usd,
+                    outcome="win" if pnl_usd >= 0 else "loss",
+                    exit_reason=exit_reason,
+                )
+            except Exception as e:
+                print(f"[broker] Error logging trade exit to DB: {e}")
+            self._pending_db_trade_id = None
+
+        return pnl_usd
+
     def _verify_and_failsafe_close(self, reason: str) -> None:
         """After submitting a close order, verify the position actually closed.
 
@@ -933,34 +933,21 @@ class IBKRBroker:
             return
 
         # Quick check: if IBKR already has no MNQ position, we're done.
-        # This avoids a 10s wait when called preventively (e.g. when
-        # _position_open was False but we're checking anyway).
         try:
             self._ib.sleep(0.5)  # brief pump to process pending events
-            if not any(
-                p.contract.symbol == MNQ_SYMBOL and p.position != 0
-                for p in self._ib.positions()
-            ):
-                return  # Confirmed: no position on IBKR side
+            if not self._has_mnq_position():
+                return
         except Exception:
-            pass  # can't confirm — proceed with the full wait
+            pass
 
-        # Wait up to 10s for the normal close (via _on_order_status) to
-        # clear _position_open and close the IBKR position.
+        # Wait up to 10s for the normal close (via _on_order_status).
         for _ in range(5):
             try:
                 self._ib.sleep(2.0)
             except Exception:
                 pass
-            try:
-                has_position = any(
-                    p.contract.symbol == MNQ_SYMBOL and p.position != 0
-                    for p in self._ib.positions()
-                )
-            except Exception:
-                continue
-            if not has_position:
-                return  # Position confirmed closed
+            if not self._has_mnq_position():
+                return
 
         # Position still open after 10s — the primary close order failed
         # or was rejected. Cancel any stray orders and try a direct close.
@@ -989,62 +976,10 @@ class IBKRBroker:
                                 f"{fill_price:.2f}",
                                 flush=True,
                             )
-                            # Best-effort P&L and state update
                             with self._lock:
-                                entry = (
-                                    self._pending_entry_fill
-                                    or self._pending_line_price
+                                self._record_trade_close(
+                                    fill_price, f"failsafe_{reason}"
                                 )
-                                if self._pending_direction and entry:
-                                    if self._pending_direction == "up":
-                                        pnl_pts = fill_price - entry
-                                    else:
-                                        pnl_pts = entry - fill_price
-                                    pnl_usd = (
-                                        pnl_pts * MNQ_POINT_VALUE - 1.24
-                                    )
-                                else:
-                                    pnl_usd = 0.0
-                                self._position_open = False
-                                self._position_opened_at = None
-                                self._daily_pnl_usd += pnl_usd
-                                self._trades_today += 1
-                                if pnl_usd >= 0:
-                                    self._wins_today += 1
-                                    self._consecutive_losses = 0
-                                else:
-                                    self._losses_today += 1
-                                    self._consecutive_losses += 1
-                                print(
-                                    f"[broker] Failsafe P&L: "
-                                    f"${pnl_usd:+.2f} | {self.daily_stats}",
-                                    flush=True,
-                                )
-                            # Update DB
-                            if self._pending_db_trade_id is not None:
-                                try:
-                                    now = datetime.datetime.now(
-                                        datetime.timezone.utc
-                                    ).astimezone()
-                                    update_bot_trade_exit(
-                                        trade_id=self._pending_db_trade_id,
-                                        exit_time=now.strftime(
-                                            "%H:%M:%S %Z"
-                                        ),
-                                        exit_price=fill_price,
-                                        pnl_usd=pnl_usd,
-                                        outcome=(
-                                            "win" if pnl_usd >= 0
-                                            else "loss"
-                                        ),
-                                        exit_reason=f"failsafe_{reason}",
-                                    )
-                                except Exception as e:
-                                    print(
-                                        f"[broker] Failsafe DB update "
-                                        f"error: {e}"
-                                    )
-                                self._pending_db_trade_id = None
                             return
                     print(
                         "[broker] WARNING: Failsafe close order not "
