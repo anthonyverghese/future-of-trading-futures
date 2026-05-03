@@ -586,10 +586,12 @@ class IBKRBroker:
             return False
 
     def _close_mnq_at_market(self, order_ref: str = "bot-close") -> bool:
-        """Submit a market order to close any open MNQ position.
+        """Submit market order(s) to close all open MNQ positions.
 
-        Returns True if a close order was submitted. Does not wait for fill.
+        Returns True if at least one close order was submitted.
+        Does not wait for fill.
         """
+        closed = False
         try:
             for pos in self._ib.positions():
                 if pos.contract.symbol == MNQ_SYMBOL and pos.position != 0:
@@ -599,10 +601,10 @@ class IBKRBroker:
                     close_order = MarketOrder(action, qty)
                     close_order.orderRef = order_ref
                     self._ib.placeOrder(contract, close_order)
-                    return True
+                    closed = True
         except Exception as exc:
             print(f"[broker] Close at market error: {exc}", flush=True)
-        return False
+        return closed
 
     def _defensive_flatten(self, reason: str) -> None:
         """Cancel all open MNQ orders and market-close any MNQ position.
@@ -616,7 +618,11 @@ class IBKRBroker:
             return
         self._cancel_all_mnq(f"Defensive flatten ({reason})")
         if self._close_mnq_at_market("bot-defensive-flatten"):
-            print(f"[broker] Defensive flatten ({reason}): closing at market")
+            print(
+                f"[broker] Defensive flatten ({reason}): "
+                f"closing MNQ position at market",
+                flush=True,
+            )
         else:
             print(
                 f"[broker] Defensive flatten ({reason}): "

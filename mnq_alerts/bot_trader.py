@@ -303,7 +303,7 @@ class BotTrader:
             self._active_trade_level is not None
             and not self._broker._position_open
         ):
-            self._on_position_closed(now)
+            self._on_position_closed()
 
         # Update price windows for trend and momentum (O(1) per tick).
         trend_60m = self._update_price_windows(now, price)
@@ -328,7 +328,7 @@ class BotTrader:
             range_30m, range_30m_pct, now_et,
         )
 
-    def _on_position_closed(self, now: datetime.datetime) -> None:
+    def _on_position_closed(self) -> None:
         """Handle trade close: reset zones and set cooldown if loss."""
         for z in self._zones.values():
             z.reset()
