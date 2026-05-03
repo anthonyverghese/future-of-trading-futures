@@ -880,7 +880,13 @@ class IBKRBroker:
                 pnl_pts = entry - exit_price
             pnl_usd = pnl_pts * MNQ_POINT_VALUE - 1.24
         else:
-            pnl_usd = 0.0
+            # Fallback: estimate from target/stop pts if entry unknown.
+            if exit_reason == "target":
+                pnl_usd = self._pending_target_pts * MNQ_POINT_VALUE - 1.24
+            elif exit_reason == "stop":
+                pnl_usd = -(self._pending_stop_pts * MNQ_POINT_VALUE + 1.24)
+            else:
+                pnl_usd = 0.0
 
         self._daily_pnl_usd += pnl_usd
 
