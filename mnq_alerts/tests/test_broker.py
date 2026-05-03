@@ -120,7 +120,7 @@ class TestCanTrade:
         assert reason == "test stop"
 
     def test_blocks_at_daily_loss_limit(self):
-        b = _make_broker(daily_pnl_usd=-150.0)
+        b = _make_broker(daily_pnl_usd=-250.0)
         allowed, reason = b.can_trade()
         assert allowed is False
         assert "Daily loss limit" in reason
@@ -145,7 +145,7 @@ class TestCanTrade:
 class TestResetDailyState:
     def test_clears_all_counters(self):
         b = _make_broker(
-            daily_pnl_usd=-100.0,
+            daily_pnl_usd=-200.0,
             consecutive_losses=2,
             trades_today=5,
             wins_today=3,
@@ -320,7 +320,7 @@ class TestOnOrderStatus:
             position_open=True,
             pending_direction="up",
             pending_entry_fill=20000.0,
-            daily_pnl_usd=-100.0,  # already down $100
+            daily_pnl_usd=-200.0,  # already down $100
         )
         # Loss of $50.54 → total -$150.54, exceeds $150 limit
         trade = _fake_trade(MNQ_SYMBOL, "Filled", parent_id=100, fill_price=19975.0)
@@ -867,7 +867,7 @@ class TestRestoreDailyState:
     @patch("broker.load_bot_daily_risk_state")
     def test_sets_stopped_when_loss_limit_hit(self, mock_load):
         mock_load.return_value = {
-            "pnl_usd": -160.0,
+            "pnl_usd": -250.0,
             "trades": 4,
             "wins": 1,
             "losses": 3,
