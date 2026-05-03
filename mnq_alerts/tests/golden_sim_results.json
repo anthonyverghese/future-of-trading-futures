@@ -1,0 +1,412 @@
+{
+  "2026-01-06": {
+    "trades": 9,
+    "wins": 5,
+    "losses": 4,
+    "pnl": -99.16,
+    "trade_details": [
+      {
+        "level": "FIB_0.764",
+        "direction": "up",
+        "entry_count": 1,
+        "outcome": "win",
+        "pnl_usd": 18.76,
+        "entry_idx": 198096,
+        "exit_idx": 201092
+      },
+      {
+        "level": "FIB_0.764",
+        "direction": "up",
+        "entry_count": 2,
+        "outcome": "win",
+        "pnl_usd": 18.76,
+        "entry_idx": 205721,
+        "exit_idx": 206415
+      },
+      {
+        "level": "FIB_0.764",
+        "direction": "up",
+        "entry_count": 3,
+        "outcome": "loss",
+        "pnl_usd": -51.24,
+        "entry_idx": 207119,
+        "exit_idx": 218268
+      },
+      {
+        "level": "FIB_0.618",
+        "direction": "down",
+        "entry_count": 1,
+        "outcome": "loss",
+        "pnl_usd": -41.24,
+        "entry_idx": 218268,
+        "exit_idx": 227647
+      },
+      {
+        "level": "FIB_0.618",
+        "direction": "up",
+        "entry_count": 2,
+        "outcome": "loss",
+        "pnl_usd": -41.24,
+        "entry_idx": 231709,
+        "exit_idx": 234885
+      },
+      {
+        "level": "FIB_0.236",
+        "direction": "up",
+        "entry_count": 1,
+        "outcome": "win",
+        "pnl_usd": 14.76,
+        "entry_idx": 269216,
+        "exit_idx": 275203
+      },
+      {
+        "level": "FIB_0.618",
+        "direction": "down",
+        "entry_count": 3,
+        "outcome": "win",
+        "pnl_usd": 22.76,
+        "entry_idx": 361670,
+        "exit_idx": 364429
+      },
+      {
+        "level": "FIB_0.764",
+        "direction": "down",
+        "entry_count": 4,
+        "outcome": "loss",
+        "pnl_usd": -51.24,
+        "entry_idx": 378834,
+        "exit_idx": 390297
+      },
+      {
+        "level": "IBH",
+        "direction": "down",
+        "entry_count": 1,
+        "outcome": "win",
+        "pnl_usd": 10.76,
+        "entry_idx": 393546,
+        "exit_idx": 396721
+      }
+    ]
+  },
+  "2026-02-12": {
+    "trades": 7,
+    "wins": 5,
+    "losses": 2,
+    "pnl": -38.68,
+    "trade_details": [
+      {
+        "level": "FIB_0.236",
+        "direction": "up",
+        "entry_count": 1,
+        "outcome": "loss",
+        "pnl_usd": -51.24,
+        "entry_idx": 259196,
+        "exit_idx": 262544
+      },
+      {
+        "level": "FIB_EXT_LO_1.272",
+        "direction": "up",
+        "entry_count": 1,
+        "outcome": "win",
+        "pnl_usd": 10.76,
+        "entry_idx": 293533,
+        "exit_idx": 294011
+      },
+      {
+        "level": "FIB_EXT_LO_1.272",
+        "direction": "up",
+        "entry_count": 2,
+        "outcome": "loss",
+        "pnl_usd": -41.24,
+        "entry_idx": 294764,
+        "exit_idx": 297954
+      },
+      {
+        "level": "FIB_EXT_LO_1.272",
+        "direction": "down",
+        "entry_count": 3,
+        "outcome": "win",
+        "pnl_usd": 10.76,
+        "entry_idx": 302260,
+        "exit_idx": 303155
+      },
+      {
+        "level": "FIB_EXT_LO_1.272",
+        "direction": "down",
+        "entry_count": 4,
+        "outcome": "win",
+        "pnl_usd": 10.76,
+        "entry_idx": 312062,
+        "exit_idx": 313656
+      },
+      {
+        "level": "FIB_EXT_LO_1.272",
+        "direction": "down",
+        "entry_count": 5,
+        "outcome": "win",
+        "pnl_usd": 10.76,
+        "entry_idx": 313830,
+        "exit_idx": 314051
+      },
+      {
+        "level": "FIB_EXT_LO_1.272",
+        "direction": "down",
+        "entry_count": 6,
+        "outcome": "win",
+        "pnl_usd": 10.76,
+        "entry_idx": 316847,
+        "exit_idx": 317009
+      }
+    ]
+  },
+  "2026-04-28": {
+    "trades": 17,
+    "wins": 15,
+    "losses": 2,
+    "pnl": 157.09,
+    "trade_details": [
+      {
+        "level": "FIB_0.618",
+        "direction": "down",
+        "entry_count": 1,
+        "outcome": "win",
+        "pnl_usd": 22.76,
+        "entry_idx": 213144,
+        "exit_idx": 213368
+      },
+      {
+        "level": "FIB_0.236",
+        "direction": "up",
+        "entry_count": 1,
+        "outcome": "win",
+        "pnl_usd": 14.76,
+        "entry_idx": 226712,
+        "exit_idx": 232795
+      },
+      {
+        "level": "FIB_0.236",
+        "direction": "up",
+        "entry_count": 2,
+        "outcome": "loss",
+        "pnl_usd": -51.24,
+        "entry_idx": 233138,
+        "exit_idx": 236492
+      },
+      {
+        "level": "FIB_0.236",
+        "direction": "down",
+        "entry_count": 3,
+        "outcome": "win",
+        "pnl_usd": 14.76,
+        "entry_idx": 267331,
+        "exit_idx": 268158
+      },
+      {
+        "level": "FIB_EXT_LO_1.272",
+        "direction": "up",
+        "entry_count": 1,
+        "outcome": "win",
+        "pnl_usd": 10.76,
+        "entry_idx": 289697,
+        "exit_idx": 291243
+      },
+      {
+        "level": "FIB_EXT_LO_1.272",
+        "direction": "up",
+        "entry_count": 2,
+        "outcome": "win",
+        "pnl_usd": 10.76,
+        "entry_idx": 291620,
+        "exit_idx": 291700
+      },
+      {
+        "level": "FIB_EXT_LO_1.272",
+        "direction": "up",
+        "entry_count": 3,
+        "outcome": "win",
+        "pnl_usd": 10.76,
+        "entry_idx": 300483,
+        "exit_idx": 300846
+      },
+      {
+        "level": "FIB_EXT_LO_1.272",
+        "direction": "up",
+        "entry_count": 4,
+        "outcome": "win",
+        "pnl_usd": 10.76,
+        "entry_idx": 300889,
+        "exit_idx": 301393
+      },
+      {
+        "level": "FIB_EXT_LO_1.272",
+        "direction": "up",
+        "entry_count": 5,
+        "outcome": "win",
+        "pnl_usd": 10.76,
+        "entry_idx": 303286,
+        "exit_idx": 304788
+      },
+      {
+        "level": "FIB_0.236",
+        "direction": "down",
+        "entry_count": 4,
+        "outcome": "win",
+        "pnl_usd": 14.76,
+        "entry_idx": 327824,
+        "exit_idx": 329870
+      },
+      {
+        "level": "FIB_0.236",
+        "direction": "down",
+        "entry_count": 5,
+        "outcome": "win",
+        "pnl_usd": 14.76,
+        "entry_idx": 330097,
+        "exit_idx": 330458
+      },
+      {
+        "level": "FIB_EXT_LO_1.272",
+        "direction": "up",
+        "entry_count": 6,
+        "outcome": "win",
+        "pnl_usd": 10.76,
+        "entry_idx": 398545,
+        "exit_idx": 400311
+      },
+      {
+        "level": "FIB_0.236",
+        "direction": "down",
+        "entry_count": 6,
+        "outcome": "timeout",
+        "pnl_usd": -17.07,
+        "entry_idx": 544115,
+        "exit_idx": 557849
+      },
+      {
+        "level": "FIB_0.236",
+        "direction": "up",
+        "entry_count": 7,
+        "outcome": "win",
+        "pnl_usd": 14.76,
+        "entry_idx": 558195,
+        "exit_idx": 558747
+      },
+      {
+        "level": "FIB_0.618",
+        "direction": "down",
+        "entry_count": 2,
+        "outcome": "win",
+        "pnl_usd": 22.76,
+        "entry_idx": 587343,
+        "exit_idx": 587893
+      },
+      {
+        "level": "FIB_0.618",
+        "direction": "down",
+        "entry_count": 3,
+        "outcome": "win",
+        "pnl_usd": 22.76,
+        "entry_idx": 588255,
+        "exit_idx": 588658
+      },
+      {
+        "level": "FIB_0.764",
+        "direction": "down",
+        "entry_count": 1,
+        "outcome": "win",
+        "pnl_usd": 18.76,
+        "entry_idx": 620476,
+        "exit_idx": 632428
+      }
+    ]
+  },
+  "2026-05-01": {
+    "trades": 9,
+    "wins": 7,
+    "losses": 2,
+    "pnl": 38.84,
+    "trade_details": [
+      {
+        "level": "FIB_0.764",
+        "direction": "up",
+        "entry_count": 1,
+        "outcome": "win",
+        "pnl_usd": 18.76,
+        "entry_idx": 192134,
+        "exit_idx": 195770
+      },
+      {
+        "level": "FIB_0.764",
+        "direction": "up",
+        "entry_count": 2,
+        "outcome": "win",
+        "pnl_usd": 18.76,
+        "entry_idx": 197095,
+        "exit_idx": 201966
+      },
+      {
+        "level": "FIB_0.764",
+        "direction": "up",
+        "entry_count": 3,
+        "outcome": "loss",
+        "pnl_usd": -51.24,
+        "entry_idx": 202408,
+        "exit_idx": 204635
+      },
+      {
+        "level": "FIB_0.618",
+        "direction": "up",
+        "entry_count": 1,
+        "outcome": "loss",
+        "pnl_usd": -41.24,
+        "entry_idx": 211781,
+        "exit_idx": 215148
+      },
+      {
+        "level": "FIB_0.618",
+        "direction": "down",
+        "entry_count": 2,
+        "outcome": "win",
+        "pnl_usd": 22.76,
+        "entry_idx": 228422,
+        "exit_idx": 232153
+      },
+      {
+        "level": "FIB_0.618",
+        "direction": "down",
+        "entry_count": 3,
+        "outcome": "win",
+        "pnl_usd": 22.76,
+        "entry_idx": 233491,
+        "exit_idx": 236762
+      },
+      {
+        "level": "FIB_0.764",
+        "direction": "down",
+        "entry_count": 4,
+        "outcome": "win",
+        "pnl_usd": 18.76,
+        "entry_idx": 270513,
+        "exit_idx": 273154
+      },
+      {
+        "level": "FIB_0.764",
+        "direction": "down",
+        "entry_count": 5,
+        "outcome": "win",
+        "pnl_usd": 18.76,
+        "entry_idx": 312179,
+        "exit_idx": 316323
+      },
+      {
+        "level": "IBH",
+        "direction": "down",
+        "entry_count": 1,
+        "outcome": "win",
+        "pnl_usd": 10.76,
+        "entry_idx": 356230,
+        "exit_idx": 360872
+      }
+    ]
+  }
+}
