@@ -79,6 +79,10 @@ def simulate_day(
     momentum_max: float = 0.0,
     momentum_lookback_ticks: int = 1000,
     direction_caps: dict[tuple[str, str], int] | None = None,
+    suppress_1330: bool = True,
+    adaptive_caps: bool = False,
+    adaptive_caps_duration_mins: int = 30,
+    adaptive_caps_restore_wins: int = 3,
 ) -> tuple[list[TradeRecord], tuple[int, int]]:
     """Simulate one day. Returns (trades, (cw, cl)).
 
@@ -153,6 +157,12 @@ def simulate_day(
     # Split budget tracking.
     morning_pnl = 0.0
     afternoon_pnl = 0.0
+    # Adaptive caps: halve caps for first N min after IB, restore on
+    # consecutive wins from start, extend on loss.
+    ac_restored = not adaptive_caps  # True = full caps (disabled or restored)
+    ac_until_et = 630 + adaptive_caps_duration_mins  # ET mins when half-caps expire
+    ac_accepted = 0
+    ac_any_loss = False
     morning_stopped = False
     afternoon_stopped = False
     # Confirmation bounce: track max distance from level after zone entry.
@@ -199,6 +209,13 @@ def simulate_day(
         # Check each level for entry.
         for name, zone in zones.items():
             level_cap = (max_per_level_map or {}).get(name, max_per_level)
+            # Adaptive caps: halve caps until restored.
+            if not ac_restored:
+                et_now = int(arrays.et_mins[gi]) if gi < len(arrays.et_mins) else 960
+                if et_now < ac_until_et:
+                    level_cap = max(1, level_cap // 2)
+                else:
+                    ac_restored = True
             if zone.in_zone or ec[name] >= level_cap:
                 continue
             if not zone.update(pj):
@@ -209,7 +226,7 @@ def simulate_day(
             range_30m = float(arrays.range_30m_pts[gi])
 
             # Suppress entries during weak time windows (13:30-14:00 ET).
-            suppressed = 810 <= et_mins < 840
+            suppressed = suppress_1330 and 810 <= et_mins < 840
             if not suppressed and extra_suppressed:
                 suppressed = any(ws <= et_mins < we for ws, we in extra_suppressed)
             if suppressed:
@@ -396,10 +413,21 @@ def simulate_day(
                 level_wins[name] = level_wins.get(name, 0) + 1
                 # Clear no-reverse block if this level won (level is working).
                 last_loss_direction.pop(name, None)
+                # Adaptive caps: restore on N consecutive wins from start.
+                if not ac_restored:
+                    ac_accepted += 1
+                    if ac_accepted >= adaptive_caps_restore_wins and not ac_any_loss:
+                        ac_restored = True
             else:
                 cw = 0; cl += 1; dcons += 1
                 lost_combos.add((name, d))
                 level_wins[name] = 0  # reset consecutive wins on loss
+                # Adaptive caps: extend window on loss.
+                if not ac_restored:
+                    ac_any_loss = True
+                    ac_accepted += 1
+                    loss_et = int(arrays.et_mins[exit_idx]) if exit_idx < len(arrays.et_mins) else 960
+                    ac_until_et = loss_et + adaptive_caps_duration_mins
                 last_loss_direction[name] = d
                 if global_cooldown_after_loss_secs > 0:
                     global_cooldown_until_ns = int(ft[exit_idx]) + \

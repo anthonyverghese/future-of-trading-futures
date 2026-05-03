@@ -203,10 +203,9 @@ class BotTrader:
         self._level_cooldown_until: dict[str, float] = {}
         # Global cooldown after any stop loss — monotonic timestamp.
         self._global_cooldown_until: float = 0.0
-        # Adaptive caps: half caps for first 30 min after IB, restore on
-        # 3 consecutive wins from start, extend 30 min on any loss.
-        # Reduces bad days 57→38 at -$1.72/day cost (validated 2026-04-30).
-        self._adaptive_caps_restored: bool = False
+        # Adaptive caps: DISABLED (2026-05-02). Hurts P&L -$3.82 to -$6.18/day
+        # across all configurations. Recovery after losses is profitable.
+        self._adaptive_caps_restored: bool = True  # True = disabled
         self._adaptive_caps_until_et_mins: int = 630 + 30  # 11:00 AM ET
         self._adaptive_accepted_trades: int = 0
         self._adaptive_any_loss: bool = False
@@ -401,10 +400,12 @@ class BotTrader:
                         continue
 
                 # Suppress entries during weak time windows.
-                if now_et is not None:
-                    et_mins = now_et.hour * 60 + now_et.minute
-                    if any(ws <= et_mins < we for ws, we in SUPPRESSED_WINDOWS):
-                        continue
+                # Disabled for bot (2026-05-02): removing suppression
+                # improves P&L at $200 limit. Human app still suppresses.
+                # if now_et is not None:
+                #     et_mins = now_et.hour * 60 + now_et.minute
+                #     if any(ws <= et_mins < we for ws, we in SUPPRESSED_WINDOWS):
+                #         continue
 
                 # Per-level daily trade cap (uses per-level map, falls back to default).
                 # Mondays get doubled caps (best day: 77% WR, +$46/day).

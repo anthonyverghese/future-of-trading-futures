@@ -1,0 +1,743 @@
+[
+  {
+    "trades": 5681,
+    "trades_per_day": 16.9,
+    "wins": 4530,
+    "losses": 1151,
+    "wr": 79.7,
+    "total_pnl": 14656.47,
+    "pnl_per_day": 43.62,
+    "max_dd": 512.0,
+    "winning_days": 220,
+    "losing_days": 116,
+    "winning_days_pct": 65.5,
+    "days_below_neg100": 51,
+    "recent_60d_pnl_per_day": 37.38,
+    "recent_60d_wr": 79.5,
+    "recent_30d_pnl_per_day": 25.64,
+    "recent_30d_wr": 78.4,
+    "quarterly_pnl_per_day": {
+      "Q1_oldest": 61.96,
+      "Q2": 44.73,
+      "Q3": 36.22,
+      "Q4_newest": 31.58
+    },
+    "per_level": {
+      "FIB_0.236": {
+        "trades": 1855,
+        "wr": 79.7,
+        "pnl_per_day": 10.44
+      },
+      "FIB_0.618": {
+        "trades": 580,
+        "wr": 70.5,
+        "pnl_per_day": 7.22
+      },
+      "FIB_0.764": {
+        "trades": 922,
+        "wr": 78.6,
+        "pnl_per_day": 12.18
+      },
+      "FIB_EXT_HI_1.272": {
+        "trades": 609,
+        "wr": 83.9,
+        "pnl_per_day": 5.14
+      },
+      "FIB_EXT_LO_1.272": {
+        "trades": 616,
+        "wr": 82.3,
+        "pnl_per_day": 2.9
+      },
+      "IBH": {
+        "trades": 1099,
+        "wr": 81.8,
+        "pnl_per_day": 5.74
+      }
+    },
+    "name": "$100 limit (old baseline)"
+  },
+  {
+    "trades": 6236,
+    "trades_per_day": 18.6,
+    "wins": 4961,
+    "losses": 1275,
+    "wr": 79.6,
+    "total_pnl": 15304.48,
+    "pnl_per_day": 45.55,
+    "max_dd": 683.0,
+    "winning_days": 226,
+    "losing_days": 110,
+    "winning_days_pct": 67.3,
+    "days_below_neg100": 27,
+    "recent_60d_pnl_per_day": 41.3,
+    "recent_60d_wr": 79.4,
+    "recent_30d_pnl_per_day": 29.84,
+    "recent_30d_wr": 78.4,
+    "quarterly_pnl_per_day": {
+      "Q1_oldest": 67.23,
+      "Q2": 46.38,
+      "Q3": 36.4,
+      "Q4_newest": 32.18
+    },
+    "per_level": {
+      "FIB_0.236": {
+        "trades": 2051,
+        "wr": 79.5,
+        "pnl_per_day": 10.53
+      },
+      "FIB_0.618": {
+        "trades": 626,
+        "wr": 70.4,
+        "pnl_per_day": 7.82
+      },
+      "FIB_0.764": {
+        "trades": 986,
+        "wr": 78.3,
+        "pnl_per_day": 12.51
+      },
+      "FIB_EXT_HI_1.272": {
+        "trades": 681,
+        "wr": 83.0,
+        "pnl_per_day": 4.74
+      },
+      "FIB_EXT_LO_1.272": {
+        "trades": 694,
+        "wr": 82.4,
+        "pnl_per_day": 3.47
+      },
+      "IBH": {
+        "trades": 1198,
+        "wr": 81.9,
+        "pnl_per_day": 6.47
+      }
+    },
+    "name": "$200 limit (current)"
+  },
+  {
+    "trades": 6285,
+    "trades_per_day": 18.7,
+    "wins": 4997,
+    "losses": 1288,
+    "wr": 79.5,
+    "total_pnl": 15251.9,
+    "pnl_per_day": 45.39,
+    "max_dd": 704.0,
+    "winning_days": 226,
+    "losing_days": 110,
+    "winning_days_pct": 67.3,
+    "days_below_neg100": 26,
+    "recent_60d_pnl_per_day": 40.96,
+    "recent_60d_wr": 79.4,
+    "recent_30d_pnl_per_day": 29.15,
+    "recent_30d_wr": 78.4,
+    "quarterly_pnl_per_day": {
+      "Q1_oldest": 67.23,
+      "Q2": 45.76,
+      "Q3": 35.39,
+      "Q4_newest": 33.19
+    },
+    "per_level": {
+      "FIB_0.236": {
+        "trades": 2077,
+        "wr": 79.4,
+        "pnl_per_day": 10.62
+      },
+      "FIB_0.618": {
+        "trades": 628,
+        "wr": 70.4,
+        "pnl_per_day": 7.77
+      },
+      "FIB_0.764": {
+        "trades": 989,
+        "wr": 78.4,
+        "pnl_per_day": 12.67
+      },
+      "FIB_EXT_HI_1.272": {
+        "trades": 689,
+        "wr": 82.7,
+        "pnl_per_day": 4.53
+      },
+      "FIB_EXT_LO_1.272": {
+        "trades": 694,
+        "wr": 82.4,
+        "pnl_per_day": 3.47
+      },
+      "IBH": {
+        "trades": 1208,
+        "wr": 81.8,
+        "pnl_per_day": 6.33
+      }
+    },
+    "name": "$250 limit"
+  },
+  {
+    "trades": 6317,
+    "trades_per_day": 18.8,
+    "wins": 5022,
+    "losses": 1295,
+    "wr": 79.5,
+    "total_pnl": 15318.07,
+    "pnl_per_day": 45.59,
+    "max_dd": 704.0,
+    "winning_days": 226,
+    "losing_days": 110,
+    "winning_days_pct": 67.3,
+    "days_below_neg100": 26,
+    "recent_60d_pnl_per_day": 40.96,
+    "recent_60d_wr": 79.4,
+    "recent_30d_pnl_per_day": 29.15,
+    "recent_30d_wr": 78.4,
+    "quarterly_pnl_per_day": {
+      "Q1_oldest": 67.23,
+      "Q2": 45.33,
+      "Q3": 36.61,
+      "Q4_newest": 33.19
+    },
+    "per_level": {
+      "FIB_0.236": {
+        "trades": 2090,
+        "wr": 79.4,
+        "pnl_per_day": 10.7
+      },
+      "FIB_0.618": {
+        "trades": 628,
+        "wr": 70.4,
+        "pnl_per_day": 7.77
+      },
+      "FIB_0.764": {
+        "trades": 994,
+        "wr": 78.4,
+        "pnl_per_day": 12.81
+      },
+      "FIB_EXT_HI_1.272": {
+        "trades": 695,
+        "wr": 82.7,
+        "pnl_per_day": 4.57
+      },
+      "FIB_EXT_LO_1.272": {
+        "trades": 695,
+        "wr": 82.3,
+        "pnl_per_day": 3.35
+      },
+      "IBH": {
+        "trades": 1215,
+        "wr": 81.8,
+        "pnl_per_day": 6.4
+      }
+    },
+    "name": "$300 limit"
+  },
+  {
+    "trades": 6321,
+    "trades_per_day": 18.8,
+    "wins": 5024,
+    "losses": 1297,
+    "wr": 79.5,
+    "total_pnl": 15265.11,
+    "pnl_per_day": 45.43,
+    "max_dd": 704.0,
+    "winning_days": 226,
+    "losing_days": 110,
+    "winning_days_pct": 67.3,
+    "days_below_neg100": 26,
+    "recent_60d_pnl_per_day": 40.96,
+    "recent_60d_wr": 79.4,
+    "recent_30d_pnl_per_day": 29.15,
+    "recent_30d_wr": 78.4,
+    "quarterly_pnl_per_day": {
+      "Q1_oldest": 67.23,
+      "Q2": 44.7,
+      "Q3": 36.61,
+      "Q4_newest": 33.19
+    },
+    "per_level": {
+      "FIB_0.236": {
+        "trades": 2092,
+        "wr": 79.4,
+        "pnl_per_day": 10.79
+      },
+      "FIB_0.618": {
+        "trades": 628,
+        "wr": 70.4,
+        "pnl_per_day": 7.77
+      },
+      "FIB_0.764": {
+        "trades": 994,
+        "wr": 78.4,
+        "pnl_per_day": 12.81
+      },
+      "FIB_EXT_HI_1.272": {
+        "trades": 695,
+        "wr": 82.7,
+        "pnl_per_day": 4.57
+      },
+      "FIB_EXT_LO_1.272": {
+        "trades": 697,
+        "wr": 82.1,
+        "pnl_per_day": 3.1
+      },
+      "IBH": {
+        "trades": 1215,
+        "wr": 81.8,
+        "pnl_per_day": 6.4
+      }
+    },
+    "name": "$350 limit"
+  },
+  {
+    "trades": 6386,
+    "trades_per_day": 19.0,
+    "wins": 5083,
+    "losses": 1303,
+    "wr": 79.6,
+    "total_pnl": 15774.31,
+    "pnl_per_day": 46.95,
+    "max_dd": 818.0,
+    "winning_days": 228,
+    "losing_days": 108,
+    "winning_days_pct": 67.9,
+    "days_below_neg100": 26,
+    "recent_60d_pnl_per_day": 40.42,
+    "recent_60d_wr": 79.3,
+    "recent_30d_pnl_per_day": 25.02,
+    "recent_30d_wr": 78.0,
+    "quarterly_pnl_per_day": {
+      "Q1_oldest": 64.52,
+      "Q2": 50.44,
+      "Q3": 39.95,
+      "Q4_newest": 32.88
+    },
+    "per_level": {
+      "FIB_0.236": {
+        "trades": 2108,
+        "wr": 79.6,
+        "pnl_per_day": 11.19
+      },
+      "FIB_0.618": {
+        "trades": 635,
+        "wr": 70.7,
+        "pnl_per_day": 8.17
+      },
+      "FIB_0.764": {
+        "trades": 1005,
+        "wr": 78.6,
+        "pnl_per_day": 13.4
+      },
+      "FIB_EXT_HI_1.272": {
+        "trades": 700,
+        "wr": 82.6,
+        "pnl_per_day": 4.31
+      },
+      "FIB_EXT_LO_1.272": {
+        "trades": 715,
+        "wr": 82.0,
+        "pnl_per_day": 3.06
+      },
+      "IBH": {
+        "trades": 1223,
+        "wr": 82.0,
+        "pnl_per_day": 6.81
+      }
+    },
+    "name": "$250, no cooldown"
+  },
+  {
+    "trades": 6494,
+    "trades_per_day": 19.3,
+    "wins": 5167,
+    "losses": 1327,
+    "wr": 79.6,
+    "total_pnl": 15890.89,
+    "pnl_per_day": 47.29,
+    "max_dd": 751.0,
+    "winning_days": 227,
+    "losing_days": 109,
+    "winning_days_pct": 67.6,
+    "days_below_neg100": 25,
+    "recent_60d_pnl_per_day": 39.58,
+    "recent_60d_wr": 79.1,
+    "recent_30d_pnl_per_day": 29.19,
+    "recent_30d_wr": 78.2,
+    "quarterly_pnl_per_day": {
+      "Q1_oldest": 69.11,
+      "Q2": 51.39,
+      "Q3": 37.04,
+      "Q4_newest": 31.64
+    },
+    "per_level": {
+      "FIB_0.236": {
+        "trades": 2169,
+        "wr": 79.5,
+        "pnl_per_day": 11.51
+      },
+      "FIB_0.618": {
+        "trades": 638,
+        "wr": 70.5,
+        "pnl_per_day": 7.92
+      },
+      "FIB_0.764": {
+        "trades": 1002,
+        "wr": 78.5,
+        "pnl_per_day": 13.27
+      },
+      "FIB_EXT_HI_1.272": {
+        "trades": 710,
+        "wr": 83.1,
+        "pnl_per_day": 5.11
+      },
+      "FIB_EXT_LO_1.272": {
+        "trades": 730,
+        "wr": 81.6,
+        "pnl_per_day": 2.76
+      },
+      "IBH": {
+        "trades": 1245,
+        "wr": 81.9,
+        "pnl_per_day": 6.72
+      }
+    },
+    "name": "$250, no 13:30 suppress"
+  },
+  {
+    "trades": 6591,
+    "trades_per_day": 19.6,
+    "wins": 5251,
+    "losses": 1340,
+    "wr": 79.7,
+    "total_pnl": 16480.95,
+    "pnl_per_day": 49.05,
+    "max_dd": 866.0,
+    "winning_days": 233,
+    "losing_days": 103,
+    "winning_days_pct": 69.3,
+    "days_below_neg100": 24,
+    "recent_60d_pnl_per_day": 39.29,
+    "recent_60d_wr": 79.1,
+    "recent_30d_pnl_per_day": 25.55,
+    "recent_30d_wr": 78.0,
+    "quarterly_pnl_per_day": {
+      "Q1_oldest": 67.23,
+      "Q2": 56.44,
+      "Q3": 41.03,
+      "Q4_newest": 31.51
+    },
+    "per_level": {
+      "FIB_0.236": {
+        "trades": 2202,
+        "wr": 79.6,
+        "pnl_per_day": 12.17
+      },
+      "FIB_0.618": {
+        "trades": 645,
+        "wr": 71.0,
+        "pnl_per_day": 8.51
+      },
+      "FIB_0.764": {
+        "trades": 1016,
+        "wr": 78.7,
+        "pnl_per_day": 13.89
+      },
+      "FIB_EXT_HI_1.272": {
+        "trades": 721,
+        "wr": 83.1,
+        "pnl_per_day": 5.05
+      },
+      "FIB_EXT_LO_1.272": {
+        "trades": 747,
+        "wr": 81.1,
+        "pnl_per_day": 2.23
+      },
+      "IBH": {
+        "trades": 1260,
+        "wr": 82.1,
+        "pnl_per_day": 7.2
+      }
+    },
+    "name": "$250, no cooldown + no suppress"
+  },
+  {
+    "trades": 6395,
+    "trades_per_day": 19.0,
+    "wins": 5089,
+    "losses": 1306,
+    "wr": 79.6,
+    "total_pnl": 15741.98,
+    "pnl_per_day": 46.85,
+    "max_dd": 869.0,
+    "winning_days": 228,
+    "losing_days": 108,
+    "winning_days_pct": 67.9,
+    "days_below_neg100": 26,
+    "recent_60d_pnl_per_day": 39.58,
+    "recent_60d_wr": 79.2,
+    "recent_30d_pnl_per_day": 23.35,
+    "recent_30d_wr": 77.9,
+    "quarterly_pnl_per_day": {
+      "Q1_oldest": 64.52,
+      "Q2": 50.7,
+      "Q3": 39.91,
+      "Q4_newest": 32.28
+    },
+    "per_level": {
+      "FIB_0.236": {
+        "trades": 2110,
+        "wr": 79.5,
+        "pnl_per_day": 11.18
+      },
+      "FIB_0.618": {
+        "trades": 635,
+        "wr": 70.7,
+        "pnl_per_day": 8.17
+      },
+      "FIB_0.764": {
+        "trades": 1005,
+        "wr": 78.6,
+        "pnl_per_day": 13.4
+      },
+      "FIB_EXT_HI_1.272": {
+        "trades": 701,
+        "wr": 82.6,
+        "pnl_per_day": 4.35
+      },
+      "FIB_EXT_LO_1.272": {
+        "trades": 717,
+        "wr": 82.0,
+        "pnl_per_day": 3.12
+      },
+      "IBH": {
+        "trades": 1227,
+        "wr": 81.9,
+        "pnl_per_day": 6.63
+      }
+    },
+    "name": "$300, no cooldown"
+  },
+  {
+    "trades": 6528,
+    "trades_per_day": 19.4,
+    "wins": 5193,
+    "losses": 1335,
+    "wr": 79.5,
+    "total_pnl": 15930.58,
+    "pnl_per_day": 47.41,
+    "max_dd": 751.0,
+    "winning_days": 227,
+    "losing_days": 109,
+    "winning_days_pct": 67.6,
+    "days_below_neg100": 25,
+    "recent_60d_pnl_per_day": 39.58,
+    "recent_60d_wr": 79.1,
+    "recent_30d_pnl_per_day": 29.19,
+    "recent_30d_wr": 78.2,
+    "quarterly_pnl_per_day": {
+      "Q1_oldest": 69.11,
+      "Q2": 50.64,
+      "Q3": 38.26,
+      "Q4_newest": 31.64
+    },
+    "per_level": {
+      "FIB_0.236": {
+        "trades": 2183,
+        "wr": 79.5,
+        "pnl_per_day": 11.63
+      },
+      "FIB_0.618": {
+        "trades": 638,
+        "wr": 70.5,
+        "pnl_per_day": 7.92
+      },
+      "FIB_0.764": {
+        "trades": 1007,
+        "wr": 78.6,
+        "pnl_per_day": 13.41
+      },
+      "FIB_EXT_HI_1.272": {
+        "trades": 716,
+        "wr": 83.1,
+        "pnl_per_day": 5.15
+      },
+      "FIB_EXT_LO_1.272": {
+        "trades": 732,
+        "wr": 81.4,
+        "pnl_per_day": 2.52
+      },
+      "IBH": {
+        "trades": 1252,
+        "wr": 81.9,
+        "pnl_per_day": 6.79
+      }
+    },
+    "name": "$300, no 13:30 suppress"
+  },
+  {
+    "trades": 6598,
+    "trades_per_day": 19.6,
+    "wins": 5255,
+    "losses": 1343,
+    "wr": 79.6,
+    "total_pnl": 16427.09,
+    "pnl_per_day": 48.89,
+    "max_dd": 916.0,
+    "winning_days": 233,
+    "losing_days": 103,
+    "winning_days_pct": 69.3,
+    "days_below_neg100": 24,
+    "recent_60d_pnl_per_day": 38.45,
+    "recent_60d_wr": 79.0,
+    "recent_30d_pnl_per_day": 23.88,
+    "recent_30d_wr": 77.8,
+    "quarterly_pnl_per_day": {
+      "Q1_oldest": 67.23,
+      "Q2": 56.44,
+      "Q3": 40.98,
+      "Q4_newest": 30.91
+    },
+    "per_level": {
+      "FIB_0.236": {
+        "trades": 2204,
+        "wr": 79.6,
+        "pnl_per_day": 12.16
+      },
+      "FIB_0.618": {
+        "trades": 645,
+        "wr": 71.0,
+        "pnl_per_day": 8.51
+      },
+      "FIB_0.764": {
+        "trades": 1016,
+        "wr": 78.7,
+        "pnl_per_day": 13.89
+      },
+      "FIB_EXT_HI_1.272": {
+        "trades": 722,
+        "wr": 83.1,
+        "pnl_per_day": 5.08
+      },
+      "FIB_EXT_LO_1.272": {
+        "trades": 747,
+        "wr": 81.1,
+        "pnl_per_day": 2.23
+      },
+      "IBH": {
+        "trades": 1264,
+        "wr": 82.0,
+        "pnl_per_day": 7.02
+      }
+    },
+    "name": "$300, no cooldown + no suppress"
+  },
+  {
+    "trades": 6346,
+    "trades_per_day": 18.9,
+    "wins": 5020,
+    "losses": 1326,
+    "wr": 79.1,
+    "total_pnl": 14019.16,
+    "pnl_per_day": 41.72,
+    "max_dd": 777.0,
+    "winning_days": 219,
+    "losing_days": 117,
+    "winning_days_pct": 65.2,
+    "days_below_neg100": 30,
+    "recent_60d_pnl_per_day": 42.62,
+    "recent_60d_wr": 79.4,
+    "recent_30d_pnl_per_day": 30.85,
+    "recent_30d_wr": 78.3,
+    "quarterly_pnl_per_day": {
+      "Q1_oldest": 58.49,
+      "Q2": 44.11,
+      "Q3": 31.12,
+      "Q4_newest": 33.18
+    },
+    "per_level": {
+      "FIB_0.236": {
+        "trades": 2094,
+        "wr": 79.1,
+        "pnl_per_day": 9.61
+      },
+      "FIB_0.618": {
+        "trades": 625,
+        "wr": 70.4,
+        "pnl_per_day": 7.76
+      },
+      "FIB_0.764": {
+        "trades": 993,
+        "wr": 78.0,
+        "pnl_per_day": 12.32
+      },
+      "FIB_EXT_HI_1.272": {
+        "trades": 692,
+        "wr": 82.1,
+        "pnl_per_day": 4.0
+      },
+      "FIB_EXT_LO_1.272": {
+        "trades": 696,
+        "wr": 81.8,
+        "pnl_per_day": 2.83
+      },
+      "IBH": {
+        "trades": 1246,
+        "wr": 81.1,
+        "pnl_per_day": 5.21
+      }
+    },
+    "name": "$300, no momentum"
+  },
+  {
+    "trades": 6598,
+    "trades_per_day": 19.6,
+    "wins": 5255,
+    "losses": 1343,
+    "wr": 79.6,
+    "total_pnl": 16427.09,
+    "pnl_per_day": 48.89,
+    "max_dd": 916.0,
+    "winning_days": 233,
+    "losing_days": 103,
+    "winning_days_pct": 69.3,
+    "days_below_neg100": 24,
+    "recent_60d_pnl_per_day": 38.45,
+    "recent_60d_wr": 79.0,
+    "recent_30d_pnl_per_day": 23.88,
+    "recent_30d_wr": 77.8,
+    "quarterly_pnl_per_day": {
+      "Q1_oldest": 67.23,
+      "Q2": 56.44,
+      "Q3": 40.98,
+      "Q4_newest": 30.91
+    },
+    "per_level": {
+      "FIB_0.236": {
+        "trades": 2204,
+        "wr": 79.6,
+        "pnl_per_day": 12.16
+      },
+      "FIB_0.618": {
+        "trades": 645,
+        "wr": 71.0,
+        "pnl_per_day": 8.51
+      },
+      "FIB_0.764": {
+        "trades": 1016,
+        "wr": 78.7,
+        "pnl_per_day": 13.89
+      },
+      "FIB_EXT_HI_1.272": {
+        "trades": 722,
+        "wr": 83.1,
+        "pnl_per_day": 5.08
+      },
+      "FIB_EXT_LO_1.272": {
+        "trades": 747,
+        "wr": 81.1,
+        "pnl_per_day": 2.23
+      },
+      "IBH": {
+        "trades": 1264,
+        "wr": 82.0,
+        "pnl_per_day": 7.02
+      }
+    },
+    "name": "$300, only momentum filter"
+  }
+]

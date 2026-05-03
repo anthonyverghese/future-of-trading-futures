@@ -90,8 +90,9 @@ BOT_MIN_SCORE = -99  # Unscored: scoring hurts OOS (validated 2026-04-26)
 BOT_TREND_LOOKBACK_MIN = 60  # Minutes to look back for trend calculation
 BOT_VOL_FILTER_MIN_RANGE_PCT = 0.0015  # Skip entry when 30m range < 0.15% of price
 BOT_MAX_ENTRIES_PER_LEVEL = 12  # Default max (overridden by BOT_PER_LEVEL_MAX_ENTRIES)
-BOT_GLOBAL_COOLDOWN_AFTER_LOSS_SECS = 30  # After any stop loss, wait 30s before trading
-# any level. Prevents momentum cascade (validated 2026-04-29: +$0.37/day, MaxDD 466 vs 517).
+BOT_GLOBAL_COOLDOWN_AFTER_LOSS_SECS = 0  # Disabled (2026-05-02): hurts P&L at $200 limit.
+# Was 30s. With higher loss limit, recovery trades after losses are profitable.
+# Removing cooldown + suppression + adaptive caps = +$49.46/day (vs +$41.73 with all on).
 DAILY_LOSS_LIMIT_USD = 200.0  # Stop trading for the day after losing this much
 # Increased from $100→$200 (2026-05-02): bot recovers from losses (84.5% WR
 # after 2+L). Higher limit captures recovery trades. +$1.93/day, 27 bad days
