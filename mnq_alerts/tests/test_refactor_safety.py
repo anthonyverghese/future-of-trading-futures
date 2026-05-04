@@ -569,3 +569,120 @@ class TestZoneLifecycle:
         z1.update(27810.0)  # z1 exits
         assert z1.in_zone is False
         assert z2.in_zone is True
+
+
+# ---------------------------------------------------------------------------
+# 9. Time injection for backtesting
+# ---------------------------------------------------------------------------
+
+
+class TestTimeInjection:
+    """Tests that _now_override correctly controls time-dependent behavior.
+
+    BotTrader uses datetime.datetime.now() for momentum windows, trend
+    windows, and Monday double caps. In backtesting, wall clock time
+    doesn't advance between ticks, breaking these features. The
+    _now_override parameter fixes this.
+    """
+
+    def test_now_override_accepted(self):
+        """on_tick should accept _now_override parameter."""
+        bt = _make_bot_trader()
+        bt._zones = {"FIB_0.236": BotZone("FIB_0.236", 27800.0)}
+        bt._broker.can_trade.return_value = (True, "")
+        bt._broker.submit_bracket.return_value = SimpleNamespace(
+            success=True, order_id=1, entry_price=27800.5
+        )
+
+        sim_now = _ET.localize(datetime.datetime(2026, 5, 1, 11, 0, 0))
+        # Should not raise
+        bt.on_tick(27800.5, tick_rate=1500, now_et=datetime.time(11, 0),
+                   _now_override=sim_now)
+
+    def test_momentum_window_uses_injected_time(self):
+        """5-min momentum window should evict based on injected time,
+        not wall clock."""
+        bt = _make_bot_trader()
+        bt._broker.can_trade.return_value = (True, "")
+
+        base = _ET.localize(datetime.datetime(2026, 5, 1, 11, 0, 0))
+
+        # Feed 6 minutes of ticks with injected time
+        for sec in range(360):
+            sim_now = base + datetime.timedelta(seconds=sec)
+            price = 27800.0 + sec * 0.01
+            bt.on_tick(price, tick_rate=1500, now_et=sim_now.time(),
+                       _now_override=sim_now)
+
+        # _price_5m_ago should be set (eviction happened)
+        assert bt._price_5m_ago is not None
+        # Should be approximately the price from 5 min ago
+        assert abs(bt._price_5m_ago - 27800.6) < 1.0
+
+    def test_momentum_window_broken_without_override(self):
+        """Without _now_override, momentum window doesn't evict in tight loop."""
+        bt = _make_bot_trader()
+        bt._broker.can_trade.return_value = (True, "")
+
+        # Feed many ticks WITHOUT time override (uses wall clock)
+        for i in range(500):
+            price = 27800.0 + i * 0.01
+            bt.on_tick(price, tick_rate=1500, now_et=datetime.time(11, 0))
+
+        # _price_5m_ago should still be None — wall clock didn't advance 5 min
+        assert bt._price_5m_ago is None
+
+    def test_monday_caps_use_injected_time(self):
+        """Monday double caps should use the injected date's weekday."""
+        bt = _make_bot_trader()
+        bt._zones = {"FIB_0.618": BotZone("FIB_0.618", 27850.0)}
+        bt._broker.can_trade.return_value = (True, "")
+        bt._broker.submit_bracket.return_value = SimpleNamespace(
+            success=True, order_id=1, entry_price=27850.5
+        )
+        # FIB_0.618 cap is 3, Monday doubles to 6
+        bt._level_trade_counts = {"FIB_0.618": 3}
+
+        # Inject a Monday
+        monday = _ET.localize(datetime.datetime(2026, 5, 4, 11, 0, 0))
+        assert monday.weekday() == 0  # confirm it's Monday
+
+        bt.on_tick(27850.5, tick_rate=1500, now_et=datetime.time(11, 0),
+                   _now_override=monday)
+        # Should trade — 3 < 6 (doubled cap)
+        bt._broker.submit_bracket.assert_called_once()
+
+    def test_monday_caps_blocked_on_tuesday(self):
+        """On Tuesday, cap=3 should block at 3 trades."""
+        bt = _make_bot_trader()
+        bt._zones = {"FIB_0.618": BotZone("FIB_0.618", 27850.0)}
+        bt._broker.can_trade.return_value = (True, "")
+        bt._level_trade_counts = {"FIB_0.618": 3}
+
+        # Inject a Tuesday
+        tuesday = _ET.localize(datetime.datetime(2026, 5, 5, 11, 0, 0))
+        assert tuesday.weekday() == 1  # confirm Tuesday
+
+        bt.on_tick(27850.5, tick_rate=1500, now_et=datetime.time(11, 0),
+                   _now_override=tuesday)
+        # Should NOT trade — 3 >= 3 (no doubling)
+        bt._broker.submit_bracket.assert_not_called()
+
+    def test_trend_window_uses_injected_time(self):
+        """60-min trend window should evict old entries based on
+        injected time."""
+        bt = _make_bot_trader()
+        bt._broker.can_trade.return_value = (True, "")
+
+        base = _ET.localize(datetime.datetime(2026, 5, 1, 10, 30, 0))
+
+        # Feed 90 minutes of ticks
+        for minute in range(90):
+            sim_now = base + datetime.timedelta(minutes=minute)
+            price = 27800.0 + minute
+            bt.on_tick(price, tick_rate=1500, now_et=sim_now.time(),
+                       _now_override=sim_now)
+
+        # Price window should only contain ~60 minutes of data, not 90
+        assert len(bt._price_window) <= 65  # some tolerance
+        assert len(bt._price_window) >= 55

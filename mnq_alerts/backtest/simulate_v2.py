@@ -146,10 +146,14 @@ def simulate_day_v2(
             else:
                 now_et = datetime.time(23, 59)
 
-            # Monday check for double caps
-            is_monday = dc.date.weekday() == 0
+            # Build simulated datetime for time-based logic (momentum
+            # window, trend window, Monday caps). Uses the tick's actual
+            # timestamp so time advances correctly in the backtest.
+            sim_now = datetime.datetime.fromtimestamp(
+                int(ft[gi]) / 1e9, tz=pytz.utc
+            ).astimezone(_ET)
 
-            # Call production on_tick
+            # Call production on_tick with simulated time
             bot.on_tick(
                 price=pj,
                 ib_range=ib_range,
@@ -157,6 +161,7 @@ def simulate_day_v2(
                 session_move_pct=sm_pct,
                 range_30m=range_30m,
                 now_et=now_et,
+                _now_override=sim_now,
             )
 
     finally:

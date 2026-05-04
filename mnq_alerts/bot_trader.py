@@ -293,12 +293,19 @@ class BotTrader:
         session_move_pct: float = 0.0,
         range_30m: float | None = None,
         now_et: datetime.time | None = None,
+        _now_override: datetime.datetime | None = None,
     ) -> None:
-        """Check all bot zones and submit orders on fresh entries."""
+        """Check all bot zones and submit orders on fresh entries.
+
+        _now_override: if provided, use this as the current datetime instead
+        of wall clock. Used by backtesting to inject simulated time so that
+        time-based logic (momentum window, trend window, Monday caps) works
+        correctly. Production callers should never pass this.
+        """
         if not self._broker.is_connected:
             return
 
-        now = datetime.datetime.now(_ET)
+        now = _now_override if _now_override is not None else datetime.datetime.now(_ET)
 
         # Detect trade close and reset zones.
         if (
