@@ -32,6 +32,7 @@ from config import (
     BOT_DIRECTION_FILTER,
     BOT_ENTRY_THRESHOLD,
     BOT_EXCLUDE_LEVELS,
+    BOT_FAILED_FILL_COOLDOWN_SECS,
     BOT_GLOBAL_COOLDOWN_AFTER_LOSS_SECS,
     BOT_INCLUDE_IBH,
     BOT_INCLUDE_IBL,
@@ -39,6 +40,8 @@ from config import (
     BOT_INCLUDE_VWAP,
     BOT_MAX_ENTRIES_PER_LEVEL,
     BOT_MIN_SCORE,
+    BOT_MOMENTUM_LOOKBACK_MIN,
+    BOT_MOMENTUM_THRESHOLD,
     BOT_MONDAY_DOUBLE_CAPS,
     BOT_PER_LEVEL_MAX_ENTRIES,
     BOT_PER_LEVEL_TS,
@@ -52,7 +55,7 @@ from config import (
 
 _ET = pytz.timezone("America/New_York")
 _TREND_LOOKBACK_TD = datetime.timedelta(minutes=BOT_TREND_LOOKBACK_MIN)
-_MOMENTUM_LOOKBACK_TD = datetime.timedelta(minutes=5)
+_MOMENTUM_LOOKBACK_TD = datetime.timedelta(minutes=BOT_MOMENTUM_LOOKBACK_MIN)
 
 
 class BotZone:
@@ -294,6 +297,7 @@ class BotTrader:
         range_30m: float | None = None,
         now_et: datetime.time | None = None,
         _now_override: datetime.datetime | None = None,
+        _momentum_threshold: float | None = None,
     ) -> None:
         """Check all bot zones and submit orders on fresh entries.
 
@@ -301,6 +305,9 @@ class BotTrader:
         of wall clock. Used by backtesting to inject simulated time so that
         time-based logic (momentum window, trend window, Monday caps) works
         correctly. Production callers should never pass this.
+
+        _momentum_threshold: if provided, override the hardcoded 5.0 momentum
+        threshold. Use 0.0 to disable the filter. Production uses 5.0.
         """
         if not self._broker.is_connected:
             return
@@ -334,7 +341,7 @@ class BotTrader:
         # Check each zone for entry opportunities.
         self._process_zone_entries(
             price, now, trend_60m, tick_rate, session_move_pct,
-            range_30m, range_30m_pct, now_et,
+            range_30m, range_30m_pct, now_et, _momentum_threshold,
         )
 
     def _on_position_closed(self) -> None:
@@ -382,6 +389,7 @@ class BotTrader:
         range_30m: float | None,
         range_30m_pct: float | None,
         now_et: datetime.time | None,
+        momentum_threshold: float | None = None,
     ) -> None:
         """Check all zones for entry and submit orders."""
         for bz in self._zones.values():
@@ -400,13 +408,14 @@ class BotTrader:
             if allowed_dir and allowed_dir != direction:
                 continue
 
-            # Momentum filter: skip if 5-min price change > 5pts
-            # in the trade direction.
-            if self._price_5m_ago is not None:
+            # Momentum filter: skip if 5-min price change > threshold
+            # in the trade direction. Default 5.0, overridable for backtesting.
+            mom_thresh = momentum_threshold if momentum_threshold is not None else BOT_MOMENTUM_THRESHOLD
+            if mom_thresh > 0 and self._price_5m_ago is not None:
                 momentum = price - self._price_5m_ago
                 if direction == "down":
                     momentum = -momentum
-                if momentum > 5.0:
+                if momentum > mom_thresh:
                     continue
 
             # Per-level daily trade cap.
@@ -468,7 +477,7 @@ class BotTrader:
                     self._active_trade_level = bz.name
                 else:
                     print(f"[broker] Trade failed: {result.error}")
-                    self._level_cooldown_until[bz.name] = time.monotonic() + 60
+                    self._level_cooldown_until[bz.name] = time.monotonic() + BOT_FAILED_FILL_COOLDOWN_SECS
                     bz.reset()
             else:
                 print(f"[broker] Skipped {bz.name}: {reason}")

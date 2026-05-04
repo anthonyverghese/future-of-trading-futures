@@ -91,6 +91,10 @@ BOT_TREND_LOOKBACK_MIN = 60  # Minutes to look back for trend calculation
 BOT_VOL_FILTER_MIN_RANGE_PCT = 0.0015  # Skip entry when 30m range < 0.15% of price
 BOT_MAX_ENTRIES_PER_LEVEL = 12  # Default max (overridden by BOT_PER_LEVEL_MAX_ENTRIES)
 BOT_GLOBAL_COOLDOWN_AFTER_LOSS_SECS = 0  # Disabled (2026-05-02): hurts P&L at $200 limit.
+BOT_MOMENTUM_THRESHOLD = 0.0  # Disabled (2026-05-04): hurts P&L -$1.74/day with v2 accurate sim.
+# Was 5.0. Momentum filter blocked profitable trades more often than bad ones.
+BOT_MOMENTUM_LOOKBACK_MIN = 5  # Minutes to look back for momentum calculation
+BOT_FAILED_FILL_COOLDOWN_SECS = 60  # Per-level cooldown after limit order not filled
 # Was 30s. With higher loss limit, recovery trades after losses are profitable.
 # Removing cooldown + suppression + adaptive caps = +$49.46/day (vs +$41.73 with all on).
 DAILY_LOSS_LIMIT_USD = 200.0  # Stop trading for the day after losing this much

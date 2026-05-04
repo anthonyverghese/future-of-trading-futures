@@ -103,11 +103,6 @@ def simulate_day_v2(
         interior_fibs = calculate_interior_fibs(dc.ibh, dc.ibl)
         bot.update_fib_levels(interior_fibs)
 
-        # Set momentum threshold
-        # BotTrader reads this from the price_5m_ago check hardcoded at 5.0
-        # We need to handle momentum_max differently if it's not 5.0
-        # For now, the production code hardcodes 5.0, which is our deployed value
-
         # Compute VWAP availability
         has_vwap = include_vwap and hasattr(dc, "post_ib_vwaps") and dc.post_ib_vwaps is not None
 
@@ -162,7 +157,11 @@ def simulate_day_v2(
                 range_30m=range_30m,
                 now_et=now_et,
                 _now_override=sim_now,
+                _momentum_threshold=momentum_max if momentum_max > 0 else 0.0,
             )
+
+        # Close any position still open at EOD
+        broker.eod_flatten()
 
     finally:
         # Restore config

@@ -178,19 +178,24 @@ class TestBotTraderOnTickFlow:
 
         bt._broker.submit_bracket.assert_called_once()
 
-    def test_momentum_filter_blocks_with_momentum(self):
-        """Entry should be blocked when 5-min momentum > 5pts with direction."""
+    def test_momentum_filter_disabled_by_default(self):
+        """With BOT_MOMENTUM_THRESHOLD=0, momentum filter should not block."""
         bt = _make_bot_trader()
         bt._zones = {"FIB_0.236": BotZone("FIB_0.236", 27800.0)}
         bt._broker.can_trade.return_value = (True, "")
+        bt._broker.submit_bracket.return_value = SimpleNamespace(
+            success=True, order_id=1, entry_price=27800.5
+        )
 
         # Set price_5m_ago so momentum = 27800.5 - 27790 = +10.5 for BUY
         bt._price_5m_ago = 27790.0
 
+        wednesday = _ET.localize(datetime.datetime(2026, 5, 6, 11, 0, 0))
         now_et = datetime.time(11, 0)
-        bt.on_tick(27800.5, tick_rate=1500, now_et=now_et)
+        bt.on_tick(27800.5, tick_rate=1500, now_et=now_et, _now_override=wednesday)
 
-        bt._broker.submit_bracket.assert_not_called()
+        # Should trade — momentum filter disabled (threshold=0)
+        bt._broker.submit_bracket.assert_called_once()
 
     def test_momentum_filter_allows_against_momentum(self):
         """Entry should be allowed when momentum is against trade direction."""
@@ -217,8 +222,10 @@ class TestBotTraderOnTickFlow:
         # FIB_0.618 cap is 3
         bt._level_trade_counts = {"FIB_0.618": 3}
 
+        # Use _now_override to ensure non-Monday (caps not doubled)
+        wednesday = _ET.localize(datetime.datetime(2026, 5, 6, 11, 0, 0))
         now_et = datetime.time(11, 0)
-        bt.on_tick(27850.5, tick_rate=1500, now_et=now_et)
+        bt.on_tick(27850.5, tick_rate=1500, now_et=now_et, _now_override=wednesday)
 
         bt._broker.submit_bracket.assert_not_called()
 

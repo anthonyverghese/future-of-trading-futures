@@ -1,9 +1,9 @@
 {
   "2026-01-06": {
     "trades": 9,
-    "wins": 5,
-    "losses": 4,
-    "pnl": -99.16,
+    "wins": 6,
+    "losses": 3,
+    "pnl": -35.16,
     "trade_details": [
       {
         "level": "FIB_0.764",
@@ -34,17 +34,26 @@
       },
       {
         "level": "FIB_0.618",
-        "direction": "down",
+        "direction": "up",
         "entry_count": 1,
-        "outcome": "loss",
-        "pnl_usd": -41.24,
-        "entry_idx": 218268,
-        "exit_idx": 227647
+        "outcome": "win",
+        "pnl_usd": 22.76,
+        "entry_idx": 218670,
+        "exit_idx": 221216
       },
       {
         "level": "FIB_0.618",
         "direction": "up",
         "entry_count": 2,
+        "outcome": "win",
+        "pnl_usd": 22.76,
+        "entry_idx": 223391,
+        "exit_idx": 224701
+      },
+      {
+        "level": "FIB_0.618",
+        "direction": "up",
+        "entry_count": 3,
         "outcome": "loss",
         "pnl_usd": -41.24,
         "entry_idx": 231709,
@@ -58,15 +67,6 @@
         "pnl_usd": 14.76,
         "entry_idx": 269216,
         "exit_idx": 275203
-      },
-      {
-        "level": "FIB_0.618",
-        "direction": "down",
-        "entry_count": 3,
-        "outcome": "win",
-        "pnl_usd": 22.76,
-        "entry_idx": 361670,
-        "exit_idx": 364429
       },
       {
         "level": "FIB_0.764",
@@ -90,9 +90,9 @@
   },
   "2026-02-12": {
     "trades": 7,
-    "wins": 5,
-    "losses": 2,
-    "pnl": -38.68,
+    "wins": 3,
+    "losses": 4,
+    "pnl": -142.68,
     "trade_details": [
       {
         "level": "FIB_0.236",
@@ -123,12 +123,12 @@
       },
       {
         "level": "FIB_EXT_LO_1.272",
-        "direction": "down",
+        "direction": "up",
         "entry_count": 3,
-        "outcome": "win",
-        "pnl_usd": 10.76,
-        "entry_idx": 302260,
-        "exit_idx": 303155
+        "outcome": "loss",
+        "pnl_usd": -41.24,
+        "entry_idx": 302721,
+        "exit_idx": 303907
       },
       {
         "level": "FIB_EXT_LO_1.272",
@@ -141,12 +141,12 @@
       },
       {
         "level": "FIB_EXT_LO_1.272",
-        "direction": "down",
+        "direction": "up",
         "entry_count": 5,
-        "outcome": "win",
-        "pnl_usd": 10.76,
-        "entry_idx": 313830,
-        "exit_idx": 314051
+        "outcome": "loss",
+        "pnl_usd": -41.24,
+        "entry_idx": 313893,
+        "exit_idx": 320321
       },
       {
         "level": "FIB_EXT_LO_1.272",
@@ -154,8 +154,8 @@
         "entry_count": 6,
         "outcome": "win",
         "pnl_usd": 10.76,
-        "entry_idx": 316847,
-        "exit_idx": 317009
+        "entry_idx": 329071,
+        "exit_idx": 331089
       }
     ]
   },
@@ -364,21 +364,21 @@
       },
       {
         "level": "FIB_0.618",
-        "direction": "down",
+        "direction": "up",
         "entry_count": 2,
         "outcome": "win",
         "pnl_usd": 22.76,
-        "entry_idx": 228422,
-        "exit_idx": 232153
+        "entry_idx": 228473,
+        "exit_idx": 230316
       },
       {
         "level": "FIB_0.618",
-        "direction": "down",
+        "direction": "up",
         "entry_count": 3,
         "outcome": "win",
         "pnl_usd": 22.76,
-        "entry_idx": 233491,
-        "exit_idx": 236762
+        "entry_idx": 231040,
+        "exit_idx": 239973
       },
       {
         "level": "FIB_0.764",
