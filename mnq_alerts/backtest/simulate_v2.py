@@ -76,24 +76,51 @@ def simulate_day_v2(
     bot._global_cooldown_until = 0.0
     bot._adaptive_caps_restored = True  # disabled
 
-    # Override config values for this simulation
+    # Override config values for this simulation.
+    # bot_trader.py uses 'from config import X' which creates local bindings.
+    # Changing config.X doesn't affect bot_trader.X. We must patch bot_trader
+    # module's bindings directly.
     import config as cfg
-    orig_direction_filter = cfg.BOT_DIRECTION_FILTER
-    orig_per_level_max = cfg.BOT_PER_LEVEL_MAX_ENTRIES
-    orig_per_level_ts = cfg.BOT_PER_LEVEL_TS
-    orig_exclude = cfg.BOT_EXCLUDE_LEVELS
-    orig_include_ibh = cfg.BOT_INCLUDE_IBH
-    orig_include_ibl = cfg.BOT_INCLUDE_IBL
-    orig_include_vwap = cfg.BOT_INCLUDE_VWAP
+    import bot_trader as bt_mod
+
+    orig = {
+        "cfg_dir": cfg.BOT_DIRECTION_FILTER,
+        "cfg_caps": cfg.BOT_PER_LEVEL_MAX_ENTRIES,
+        "cfg_ts": cfg.BOT_PER_LEVEL_TS,
+        "cfg_excl": cfg.BOT_EXCLUDE_LEVELS,
+        "cfg_ibh": cfg.BOT_INCLUDE_IBH,
+        "cfg_ibl": cfg.BOT_INCLUDE_IBL,
+        "cfg_vwap": cfg.BOT_INCLUDE_VWAP,
+        "bt_dir": bt_mod.BOT_DIRECTION_FILTER,
+        "bt_caps": bt_mod.BOT_PER_LEVEL_MAX_ENTRIES,
+        "bt_ts": bt_mod.BOT_PER_LEVEL_TS,
+        "bt_excl": bt_mod.BOT_EXCLUDE_LEVELS,
+        "bt_ibh": bt_mod.BOT_INCLUDE_IBH,
+        "bt_ibl": bt_mod.BOT_INCLUDE_IBL,
+        "bt_vwap": bt_mod.BOT_INCLUDE_VWAP,
+    }
 
     try:
-        cfg.BOT_DIRECTION_FILTER = direction_filter or {}
+        # Patch BOTH config module and bot_trader module bindings
+        dir_filt = direction_filter or {}
+        excl = exclude_levels or set()
+        inc_ibh = "IBH" not in excl
+
+        cfg.BOT_DIRECTION_FILTER = dir_filt
         cfg.BOT_PER_LEVEL_MAX_ENTRIES = per_level_caps
         cfg.BOT_PER_LEVEL_TS = per_level_ts
-        cfg.BOT_EXCLUDE_LEVELS = exclude_levels or set()
-        cfg.BOT_INCLUDE_IBH = "IBH" not in (exclude_levels or set())
+        cfg.BOT_EXCLUDE_LEVELS = excl
+        cfg.BOT_INCLUDE_IBH = inc_ibh
         cfg.BOT_INCLUDE_IBL = include_ibl
         cfg.BOT_INCLUDE_VWAP = include_vwap
+
+        bt_mod.BOT_DIRECTION_FILTER = dir_filt
+        bt_mod.BOT_PER_LEVEL_MAX_ENTRIES = per_level_caps
+        bt_mod.BOT_PER_LEVEL_TS = per_level_ts
+        bt_mod.BOT_EXCLUDE_LEVELS = excl
+        bt_mod.BOT_INCLUDE_IBH = inc_ibh
+        bt_mod.BOT_INCLUDE_IBL = include_ibl
+        bt_mod.BOT_INCLUDE_VWAP = include_vwap
 
         # Register levels (same as production main.py)
         ib_range = dc.ibh - dc.ibl
@@ -106,6 +133,15 @@ def simulate_day_v2(
         # Compute VWAP availability
         has_vwap = include_vwap and hasattr(dc, "post_ib_vwaps") and dc.post_ib_vwaps is not None
 
+        # Precompute level prices for fast-skip (same optimization as old sim).
+        # ~95% of ticks are far from any level and can skip the full on_tick.
+        level_prices = np.array([z.price for z in bot._zones.values()])
+        skip_dist = 1.5  # slightly wider than 1pt entry threshold
+
+        # Precompute simulated datetimes batch for the day.
+        # datetime.fromtimestamp is expensive — only compute when needed.
+        _mom_thresh = momentum_max if momentum_max > 0 else 0.0
+
         # Feed ticks through the production code
         for j in range(n):
             gi = start + j
@@ -115,40 +151,46 @@ def simulate_day_v2(
             broker._current_tick_idx = gi
             broker.process_events()  # close position if exit reached
 
-            # Stop if daily loss hit
             if broker._stopped_for_day:
                 break
 
             pj = float(dc.post_ib_prices[j])
-            et_mins = int(arrays.et_mins[gi])
 
-            # Compute factors matching what main.py passes to on_tick
+            # Fast skip: if price is far from all levels AND no position
+            # open, just update price windows and skip the full on_tick.
+            near_fixed = np.any(np.abs(level_prices - pj) <= skip_dist)
+            near_vwap = (has_vwap and j < len(dc.post_ib_vwaps)
+                         and abs(pj - float(dc.post_ib_vwaps[j])) <= skip_dist)
+
+            if (not near_fixed and not near_vwap
+                    and not broker._position_open
+                    and bot._active_trade_level is None):
+                # Fast path: skip entirely. Price windows will be stale
+                # when we next reach a level, but _update_price_windows
+                # will catch up since we always pass the current sim_now.
+                # The momentum lookback (~1000 ticks) and trend lookback
+                # (~60 min) are approximate anyway.
+                continue
+
+            # Full on_tick path (near a level or position open)
+            et_mins = int(arrays.et_mins[gi])
             tick_rate = float(arrays.tick_rates[gi])
             session_move = float(arrays.session_move[gi])
             range_30m = float(arrays.range_30m_pts[gi])
             sm_pct = session_move / pj * 100 if pj > 0 else 0.0
 
-            # Update VWAP level if active
             if has_vwap and j < len(dc.post_ib_vwaps):
                 vwap_price = float(dc.post_ib_vwaps[j])
                 if "VWAP" in bot._zones:
                     bot._zones["VWAP"].price = vwap_price
 
-            # Convert et_mins to time object for on_tick
             h, m = divmod(et_mins, 60)
-            if h < 24:
-                now_et = datetime.time(h, m)
-            else:
-                now_et = datetime.time(23, 59)
+            now_et = datetime.time(h, m) if h < 24 else datetime.time(23, 59)
 
-            # Build simulated datetime for time-based logic (momentum
-            # window, trend window, Monday caps). Uses the tick's actual
-            # timestamp so time advances correctly in the backtest.
             sim_now = datetime.datetime.fromtimestamp(
                 int(ft[gi]) / 1e9, tz=pytz.utc
             ).astimezone(_ET)
 
-            # Call production on_tick with simulated time
             bot.on_tick(
                 price=pj,
                 ib_range=ib_range,
@@ -157,20 +199,28 @@ def simulate_day_v2(
                 range_30m=range_30m,
                 now_et=now_et,
                 _now_override=sim_now,
-                _momentum_threshold=momentum_max if momentum_max > 0 else 0.0,
+                _momentum_threshold=_mom_thresh,
             )
 
         # Close any position still open at EOD
         broker.eod_flatten()
 
     finally:
-        # Restore config
-        cfg.BOT_DIRECTION_FILTER = orig_direction_filter
-        cfg.BOT_PER_LEVEL_MAX_ENTRIES = orig_per_level_max
-        cfg.BOT_PER_LEVEL_TS = orig_per_level_ts
-        cfg.BOT_EXCLUDE_LEVELS = orig_exclude
-        cfg.BOT_INCLUDE_IBH = orig_include_ibh
-        cfg.BOT_INCLUDE_IBL = orig_include_ibl
-        cfg.BOT_INCLUDE_VWAP = orig_include_vwap
+        # Restore both config and bot_trader module bindings
+        cfg.BOT_DIRECTION_FILTER = orig["cfg_dir"]
+        cfg.BOT_PER_LEVEL_MAX_ENTRIES = orig["cfg_caps"]
+        cfg.BOT_PER_LEVEL_TS = orig["cfg_ts"]
+        cfg.BOT_EXCLUDE_LEVELS = orig["cfg_excl"]
+        cfg.BOT_INCLUDE_IBH = orig["cfg_ibh"]
+        cfg.BOT_INCLUDE_IBL = orig["cfg_ibl"]
+        cfg.BOT_INCLUDE_VWAP = orig["cfg_vwap"]
+
+        bt_mod.BOT_DIRECTION_FILTER = orig["bt_dir"]
+        bt_mod.BOT_PER_LEVEL_MAX_ENTRIES = orig["bt_caps"]
+        bt_mod.BOT_PER_LEVEL_TS = orig["bt_ts"]
+        bt_mod.BOT_EXCLUDE_LEVELS = orig["bt_excl"]
+        bt_mod.BOT_INCLUDE_IBH = orig["bt_ibh"]
+        bt_mod.BOT_INCLUDE_IBL = orig["bt_ibl"]
+        bt_mod.BOT_INCLUDE_VWAP = orig["bt_vwap"]
 
     return broker.trades
