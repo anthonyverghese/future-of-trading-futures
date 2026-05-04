@@ -95,6 +95,7 @@ BOT_MOMENTUM_THRESHOLD = 0.0  # Disabled (2026-05-04): hurts P&L -$1.74/day with
 # Was 5.0. Momentum filter blocked profitable trades more often than bad ones.
 BOT_MOMENTUM_LOOKBACK_MIN = 5  # Minutes to look back for momentum calculation
 BOT_FAILED_FILL_COOLDOWN_SECS = 60  # Per-level cooldown after limit order not filled
+BOT_FILL_TIMEOUT_SECS = 3.0  # How long to wait for entry limit to fill before cancelling
 # Was 30s. With higher loss limit, recovery trades after losses are profitable.
 # Removing cooldown + suppression + adaptive caps = +$49.46/day (vs +$41.73 with all on).
 DAILY_LOSS_LIMIT_USD = 200.0  # Stop trading for the day after losing this much

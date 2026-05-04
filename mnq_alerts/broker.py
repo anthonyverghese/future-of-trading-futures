@@ -21,6 +21,7 @@ import time
 from dataclasses import dataclass
 
 from config import (
+    BOT_FILL_TIMEOUT_SECS,
     BOT_TIMEOUT_SECS,
     DAILY_LOSS_LIMIT_USD,
     IBKR_ACCOUNT,
@@ -1380,14 +1381,14 @@ class IBKRBroker:
         if not result.success or parent is None:
             return result
 
-        # Wait up to 2s for the entry limit to fill. sleep() pumps the
-        # event loop, which fires callbacks that acquire self._lock —
-        # must NOT hold the lock here (threading.Lock is not reentrant).
-        # 2s gives enough time for EC2 → IB Gateway → IBKR → CME round-trip.
+        # Wait for entry limit to fill. sleep() pumps the event loop,
+        # which fires callbacks that acquire self._lock — must NOT hold
+        # the lock here (threading.Lock is not reentrant).
         parent_id = result.order_id
         filled = False
+        n_checks = int(BOT_FILL_TIMEOUT_SECS / 0.25)
         try:
-            for _ in range(8):
+            for _ in range(n_checks):
                 self._ib.sleep(0.25)
                 if parent_trade.orderStatus.status == "Filled":
                     filled = True
@@ -1397,7 +1398,7 @@ class IBKRBroker:
 
         if not filled:
             print(
-                f"[broker] Entry limit not filled within 2s — "
+                f"[broker] Entry limit not filled — "
                 f"cancelling bracket (order {parent_id})",
                 flush=True,
             )
@@ -1539,7 +1540,7 @@ class IBKRBroker:
             print(f"[broker] Entry cancel cleanup error: {e}")
         return TradeResult(
             success=False,
-            error="Entry limit not filled within 2s",
+            error="Entry limit not filled",
         )
 
     def _submit_bracket_locked(
