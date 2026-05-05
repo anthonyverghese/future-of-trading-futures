@@ -1410,24 +1410,65 @@ class IBKRBroker:
                     f"{parent_id} failed: {exc}",
                     flush=True,
                 )
-            # Give the cancel (or a last-moment fill) time to process.
-            try:
-                self._ib.sleep(0.5)
-            except Exception:
-                pass
-            # Check if entry filled during the cancel window.
-            # Read _pending_entry_fill under lock, then release lock
-            # before doing any IBKR I/O (to avoid deadlocking
-            # _on_order_status callbacks that also acquire the lock).
-            with self._lock:
-                entry_filled = self._pending_entry_fill is not None
-                entry_fill = self._pending_entry_fill
-                direction = self._pending_direction
+            # Wait for IBKR to give us a definitive resolution on the
+            # parent order. After cancelOrder, the order ends up in one
+            # of two terminal states:
+            #   • Cancelled / ApiCancelled / Inactive — clean cancel
+            #   • Filled — race: fill arrived during/before cancel
+            # The previous fixed 0.5s sleep was a guess at IBKR's
+            # async latency. On 2026-05-05 the fill-status notification
+            # arrived ~600ms after cancel was issued — after the 0.5s
+            # window — leaving the bot to incorrectly clear state and
+            # orphan the position. Polling orderStatus.status here is
+            # event-driven on actual IBKR state, with a 3s deadline.
+            final_status: str | None = None
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline:
+                try:
+                    self._ib.sleep(0.1)
+                except Exception:
+                    break
+                status = parent_trade.orderStatus.status
+                if status in (
+                    "Cancelled", "ApiCancelled", "Inactive", "Filled"
+                ):
+                    final_status = status
+                    break
 
-            if entry_filled:
+            if final_status == "Filled":
+                # Read the fill price from the Trade object — this is
+                # IBKR's source of truth, not our async-set
+                # _pending_entry_fill flag (which may not have been
+                # populated by the callback yet, depending on event
+                # ordering inside ib_insync).
+                fill_price = float(
+                    parent_trade.orderStatus.avgFillPrice or 0.0
+                )
+                if fill_price == 0.0 and parent_trade.fills:
+                    fill_price = float(
+                        parent_trade.fills[-1].execution.price
+                    )
+                return self._handle_fill_during_cancel(parent_id, fill_price)
+
+            # Belt-and-suspenders: even if order status reads cancelled
+            # (or never resolved), check IBKR's actual position state
+            # before declaring the trade dead. If a position somehow
+            # exists — e.g., status update reordered ahead of the
+            # position update, or the deadline expired before any
+            # terminal status — treat as fill-during-cancel and
+            # flatten via the same recovery path.
+            if self._has_mnq_position():
+                with self._lock:
+                    entry_fill = self._pending_entry_fill or 0.0
+                print(
+                    f"[broker] WARNING: order {parent_id} "
+                    f"status={final_status} but IBKR has MNQ position "
+                    f"— treating as fill-during-cancel",
+                    flush=True,
+                )
                 return self._handle_fill_during_cancel(parent_id, entry_fill)
-            else:
-                return self._handle_entry_cancelled(parent_id)
+
+            return self._handle_entry_cancelled(parent_id)
 
         return result
 
