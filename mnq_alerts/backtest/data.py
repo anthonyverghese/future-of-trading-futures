@@ -31,11 +31,21 @@ class DayArrays:
     session_move: np.ndarray     # price - first_price (points)
 
 
-def load_all_days() -> tuple[list[datetime.date], dict[datetime.date, DayCache]]:
-    """Load all cached days. Returns (sorted_dates, day_caches)."""
+def load_all_days(
+    *, verbose: bool = True
+) -> tuple[list[datetime.date], dict[datetime.date, DayCache]]:
+    """Load all cached days. Returns (sorted_dates, day_caches).
+
+    Prints progress every ~50 days when `verbose` (default) so a
+    long-running cache load isn't silent for ~3 minutes.
+    """
+    import time as _time
     days = load_cached_days()
     caches = {}
-    for date in days:
+    t0 = _time.time()
+    if verbose:
+        print(f"  loading {len(days)} day caches...", flush=True)
+    for i, date in enumerate(days):
         try:
             df = load_day(date)
             dc = preprocess_day(df, date)
@@ -43,6 +53,15 @@ def load_all_days() -> tuple[list[datetime.date], dict[datetime.date, DayCache]]
                 caches[date] = dc
         except Exception:
             pass
+        if verbose and (i + 1) % 50 == 0:
+            elapsed = _time.time() - t0
+            rate = (i + 1) / elapsed
+            eta = (len(days) - i - 1) / rate
+            print(
+                f"    {i+1}/{len(days)} loaded "
+                f"({elapsed:.0f}s elapsed, ETA {eta:.0f}s)",
+                flush=True,
+            )
     valid = sorted(caches.keys())
     return valid, caches
 

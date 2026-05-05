@@ -22,6 +22,54 @@ from bot_risk_backtest import evaluate_bot_trade, MULTIPLIER, FEE_PTS
 from broker import TradeResult, MNQ_POINT_VALUE
 
 
+def _simulate_limit_fill(
+    full_prices: np.ndarray,
+    full_ts_ns: np.ndarray,
+    fire_idx: int,
+    direction: str,
+    line_price: float,
+    entry_limit_buffer: float,
+    latency_ms: float,
+    timeout_secs: float,
+) -> tuple[int | None, float | None]:
+    """Simulate a limit-order fill from tick data.
+
+    Returns (fill_idx, fill_price). Returns (None, None) if the limit
+    is not satisfied within `timeout_secs` of the fire time.
+
+    The bot's limit price is `line_price - buffer` for SELL ("down")
+    and `line_price + buffer` for BUY ("up"). Order arrives at the
+    matching engine after `latency_ms` of network latency. From there,
+    we walk forward and fill at the first tick where the limit is
+    satisfied (price >= limit for SELL, <= limit for BUY).
+    """
+    if direction == "down":
+        limit = line_price - entry_limit_buffer
+    else:
+        limit = line_price + entry_limit_buffer
+
+    fire_ns = int(full_ts_ns[fire_idx])
+    start_ns = fire_ns + int(latency_ms * 1_000_000)
+    end_ns = fire_ns + int(timeout_secs * 1_000_000_000)
+
+    start_idx = int(np.searchsorted(full_ts_ns, start_ns, side="left"))
+    end_idx = int(np.searchsorted(full_ts_ns, end_ns, side="right"))
+    end_idx = min(end_idx, len(full_prices))
+    if start_idx >= end_idx:
+        return None, None
+
+    seg = full_prices[start_idx:end_idx]
+    if direction == "down":
+        hit = np.where(seg >= limit)[0]
+    else:
+        hit = np.where(seg <= limit)[0]
+    if len(hit) == 0:
+        return None, None
+
+    fill_idx = start_idx + int(hit[0])
+    return fill_idx, float(full_prices[fill_idx])
+
+
 @dataclass
 class BacktestTradeRecord:
     """Record of a completed backtest trade."""
@@ -56,12 +104,24 @@ class BacktestBroker:
         eod_cutoff_ns: int,
         daily_loss: float = 200.0,
         timeout_secs: int = 900,
+        simulate_slippage: bool = False,
+        latency_ms: float = 100.0,
+        fill_timeout_secs: float = 3.0,
     ) -> None:
         self._full_prices = full_prices
         self._full_ts_ns = full_ts_ns
         self._eod_cutoff_ns = eod_cutoff_ns
         self._daily_loss = daily_loss
         self._timeout_secs = timeout_secs
+        # Slippage modeling parameters. When `simulate_slippage` is True,
+        # submit_bracket runs a limit-fill simulation on the tick data
+        # (matching the production limit-order behavior) and computes
+        # P&L from the actual fill price instead of `line_price`. The
+        # default `False` preserves the historical slippage-blind
+        # behavior, so any caller that doesn't opt in is unaffected.
+        self._simulate_slippage = simulate_slippage
+        self._latency_ms = latency_ms
+        self._fill_timeout_secs = fill_timeout_secs
 
         # State matching IBKRBroker's interface
         self._position_open = False
@@ -145,11 +205,52 @@ class BacktestBroker:
         tick_rate: float = 0.0,
         session_move_pct: float = 0.0,
     ) -> TradeResult:
-        """Evaluate trade from tick data and set position state."""
-        entry_idx = self._current_tick_idx
+        """Evaluate trade from tick data and set position state.
 
-        # Evaluate using the same function as the original backtest
-        outcome, exit_idx, pnl_pts = evaluate_bot_trade(
+        With `simulate_slippage=True` the broker runs a limit-fill
+        simulation: the order is exposed at `line_price ± entry_limit_buffer`
+        with `latency_ms` of network latency, and we walk forward up to
+        `fill_timeout_secs` looking for the first tick that satisfies
+        the limit. Trades that don't fill within that window return
+        `TradeResult(success=False)` so the bot can free its cap slot
+        and apply its failed-fill cooldown — matching the live behavior.
+        """
+        fire_idx = self._current_tick_idx
+
+        if self._simulate_slippage and entry_limit_buffer > 0:
+            fill_idx, fill_price = _simulate_limit_fill(
+                self._full_prices, self._full_ts_ns,
+                fire_idx, direction, line_price, entry_limit_buffer,
+                self._latency_ms, self._fill_timeout_secs,
+            )
+            if fill_idx is None:
+                return TradeResult(
+                    success=False,
+                    order_id=fire_idx,
+                    entry_price=current_price,
+                    error="Limit not filled within timeout",
+                )
+            entry_idx = fill_idx
+            # Slippage-aware: compute P&L from the actual limit-fill price.
+            pnl_entry_price = fill_price
+            returned_entry_price = fill_price
+        else:
+            entry_idx = fire_idx
+            # Slippage-blind: compute P&L assuming entry at the line, to
+            # preserve compatibility with the historical backtest behavior
+            # (evaluate_bot_trade returned target_pts - FEE_PTS for wins
+            # and -(stop_pts + FEE_PTS) for losses, both implicitly
+            # entry-at-line). The TradeResult still reports the fire-tick
+            # price to the caller — same as before.
+            pnl_entry_price = line_price
+            returned_entry_price = current_price
+
+        # Walk forward to determine target/stop/timeout outcome. Target
+        # and stop prices are absolute (line ± points), independent of
+        # where we filled, so the outcome is determined by the price
+        # path between the entry tick (fill_idx in slippage mode) and
+        # the trade window's end.
+        outcome, exit_idx, _eval_pnl_pts = evaluate_bot_trade(
             entry_idx,
             line_price,
             direction,
@@ -161,6 +262,26 @@ class BacktestBroker:
             self._eod_cutoff_ns,
         )
 
+        # Compute P&L from the actual entry price. In slippage-blind
+        # mode this equals `_eval_pnl_pts * MULTIPLIER` because the
+        # entry price is the line price. In slippage mode the entry
+        # price is the limit-fill price and the slippage is reflected
+        # in the per-trade P&L.
+        if outcome == "win":
+            target_price = (line_price - target_pts
+                            if direction == "down" else line_price + target_pts)
+            raw_pnl_pts = (pnl_entry_price - target_price
+                           if direction == "down" else target_price - pnl_entry_price)
+        elif outcome == "loss":
+            stop_price = (line_price + stop_pts
+                          if direction == "down" else line_price - stop_pts)
+            raw_pnl_pts = (pnl_entry_price - stop_price
+                           if direction == "down" else stop_price - pnl_entry_price)
+        else:  # timeout
+            exit_price = float(self._full_prices[exit_idx])
+            raw_pnl_pts = (pnl_entry_price - exit_price
+                           if direction == "down" else exit_price - pnl_entry_price)
+        pnl_pts = raw_pnl_pts - FEE_PTS
         pnl_usd = pnl_pts * MULTIPLIER
 
         # Set position as open — BotTrader will skip zones until close
@@ -178,7 +299,7 @@ class BacktestBroker:
         return TradeResult(
             success=True,
             order_id=entry_idx,
-            entry_price=current_price,
+            entry_price=returned_entry_price,
         )
 
     def _close_position(self) -> None:
