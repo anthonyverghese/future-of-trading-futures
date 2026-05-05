@@ -645,25 +645,58 @@ def close_open_bot_trades(
         return 0
 
 
-def mark_open_bot_trades_orphaned(date_str: str) -> int:
+def mark_open_bot_trades_orphaned(
+    date_str: str,
+    exit_time: str | None = None,
+    exit_price: float | None = None,
+) -> int:
     """Mark any `outcome='open'` bot_trades rows for the given date as
     `orphaned`. Returns the number of rows updated.
 
     Called from IBKRBroker._defensive_flatten after a failed reconcile,
     so stale open rows don't silently under-count future daily restores
     (which filter `outcome != 'open'`).
+
+    If `exit_time` and `exit_price` are provided, also populate the
+    `exit_time`, `exit_price`, and `pnl_usd` fields on each marked row,
+    computing P&L from the row's own `entry_price` and `direction`.
+    This attributes the defensive-flatten close fill to the orphaned
+    trade so daily P&L isn't silently incomplete.
+
+    P&L formula matches IBKRBroker._record_trade_close:
+        pnl_usd = pnl_pts * 2.0 - 1.24
+    where pnl_pts is exit-entry for longs and entry-exit for shorts,
+    2.0 is MNQ_POINT_VALUE ($/pt), and 1.24 is the round-trip fee.
     """
     if not os.path.exists(ALERTS_LOG_PATH):
         return 0
     try:
         with sqlite3.connect(ALERTS_LOG_PATH) as conn:
             _ensure_alerts_schema(conn)
-            cur = conn.execute(
-                """UPDATE bot_trades
-                   SET outcome = 'orphaned', exit_reason = 'defensive_flatten'
-                   WHERE date = ? AND outcome = 'open'""",
-                (date_str,),
-            )
+            if exit_time is not None and exit_price is not None:
+                cur = conn.execute(
+                    """UPDATE bot_trades
+                       SET outcome = 'orphaned',
+                           exit_reason = 'defensive_flatten',
+                           exit_time = ?,
+                           exit_price = ?,
+                           pnl_usd = CASE
+                               WHEN direction = 'up' AND entry_price IS NOT NULL
+                                   THEN (? - entry_price) * 2.0 - 1.24
+                               WHEN direction = 'down' AND entry_price IS NOT NULL
+                                   THEN (entry_price - ?) * 2.0 - 1.24
+                               ELSE NULL
+                           END
+                       WHERE date = ? AND outcome = 'open'""",
+                    (exit_time, exit_price, exit_price, exit_price, date_str),
+                )
+            else:
+                cur = conn.execute(
+                    """UPDATE bot_trades
+                       SET outcome = 'orphaned', exit_reason = 'defensive_flatten'
+                       WHERE date = ? AND outcome = 'open'""",
+                    (date_str,),
+                )
             return cur.rowcount
     except Exception:
         return 0

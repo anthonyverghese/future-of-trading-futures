@@ -586,13 +586,19 @@ class IBKRBroker:
         except Exception:
             return False
 
-    def _close_mnq_at_market(self, order_ref: str = "bot-close") -> bool:
+    def _close_mnq_at_market(self, order_ref: str = "bot-close") -> list:
         """Submit market order(s) to close all open MNQ positions.
 
-        Returns True if at least one close order was submitted.
-        Does not wait for fill.
+        Returns the list of submitted close Trade objects (empty list
+        if no open MNQ position was found). Callers that previously
+        treated this as bool can use `if returned_list:` — the truthy
+        semantics are preserved.
+
+        Does not wait for fill — caller is responsible for awaiting
+        the close if it needs the fill price (e.g. _defensive_flatten
+        needs the exit price to attribute P&L to orphaned rows).
         """
-        closed = False
+        closed_trades: list = []
         try:
             for pos in self._ib.positions():
                 if pos.contract.symbol == MNQ_SYMBOL and pos.position != 0:
@@ -601,11 +607,11 @@ class IBKRBroker:
                     contract = self._contract or pos.contract
                     close_order = MarketOrder(action, qty)
                     close_order.orderRef = order_ref
-                    self._ib.placeOrder(contract, close_order)
-                    closed = True
+                    close_trade = self._ib.placeOrder(contract, close_order)
+                    closed_trades.append(close_trade)
         except Exception as exc:
             print(f"[broker] Close at market error: {exc}", flush=True)
-        return closed
+        return closed_trades
 
     def _defensive_flatten(self, reason: str) -> None:
         """Cancel all open MNQ orders and market-close any MNQ position.
@@ -614,11 +620,16 @@ class IBKRBroker:
         position and the bot's record of it. Does NOT set _pending_*
         state — the flatten is intentionally blind and its fill is
         ignored by _on_order_status (because _position_open is False).
+
+        After the close market order fills, attributes the exit price/
+        time/P&L to any orphaned bot_trades rows so the audit trail
+        and daily P&L include the recovery, not just NULLs.
         """
         if not self._ib:
             return
         self._cancel_all_mnq(f"Defensive flatten ({reason})")
-        if self._close_mnq_at_market("bot-defensive-flatten"):
+        close_trades = self._close_mnq_at_market("bot-defensive-flatten")
+        if close_trades:
             print(
                 f"[broker] Defensive flatten ({reason}): "
                 f"closing MNQ position at market",
@@ -630,17 +641,59 @@ class IBKRBroker:
                 f"no MNQ position found on IBKR"
             )
 
+        # Wait for the close market order(s) to fill so we can attribute
+        # the exit price to the orphaned row(s). Market orders typically
+        # fill in <500ms; cap the wait at 5s.
+        exit_price: float | None = None
+        if close_trades:
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                try:
+                    self._ib.sleep(0.1)
+                except Exception:
+                    break
+                if all(
+                    t.orderStatus.status == "Filled" for t in close_trades
+                ):
+                    break
+            # Aggregate the fill price across all close legs (usually 1).
+            # avgFillPrice is the source of truth for market fills.
+            filled = [
+                t for t in close_trades
+                if t.orderStatus.status == "Filled"
+                and t.orderStatus.avgFillPrice
+            ]
+            if filled:
+                exit_price = float(filled[-1].orderStatus.avgFillPrice)
+            else:
+                print(
+                    f"[broker] Defensive flatten ({reason}): close order(s) "
+                    f"did not fill within 5s — orphan row(s) will lack "
+                    f"exit price",
+                    flush=True,
+                )
+
         # Sweep any 'open' bot_trades rows for today so they don't stay
-        # stuck forever — the fill from the flatten is ignored by
-        # _on_order_status (since _position_open is False).
+        # stuck forever. Pass the close fill's exit info if we have it
+        # so P&L is attributed instead of left NULL.
         try:
             now = datetime.datetime.now(datetime.timezone.utc).astimezone()
             today = now.strftime("%Y-%m-%d")
-            updated = mark_open_bot_trades_orphaned(today)
+            exit_time_str = (
+                now.strftime("%H:%M:%S %Z") if exit_price is not None else None
+            )
+            updated = mark_open_bot_trades_orphaned(
+                today, exit_time=exit_time_str, exit_price=exit_price
+            )
             if updated:
+                attribution = (
+                    f"with exit @ {exit_price:.2f}"
+                    if exit_price is not None
+                    else "without exit price (close fill not observed)"
+                )
                 print(
                     f"[broker] Marked {updated} open bot_trades row(s) "
-                    f"as 'orphaned'"
+                    f"as 'orphaned' {attribution}"
                 )
         except Exception as exc:
             print(f"[broker] Orphan sweep error: {exc}")
