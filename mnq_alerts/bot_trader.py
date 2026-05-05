@@ -39,6 +39,7 @@ from config import (
     BOT_INCLUDE_INTERIOR_FIBS,
     BOT_INCLUDE_VWAP,
     BOT_MAX_ENTRIES_PER_LEVEL,
+    BOT_ENTRY_LIMIT_BUFFER_PTS,
     BOT_MIN_SCORE,
     BOT_MOMENTUM_LOOKBACK_MIN,
     BOT_MOMENTUM_THRESHOLD,
@@ -440,7 +441,10 @@ class BotTrader:
             target_pts, stop_pts = BOT_PER_LEVEL_TS.get(
                 bz.name, (BOT_TARGET_POINTS, BOT_STOP_POINTS)
             )
-            entry_limit_buffer = round(target_pts / 2 * 4) / 4
+            # Fixed buffer (was target_pts/2 — caused up to 6pt slippage on
+            # FIB_0.618). 1.0pt is the slippage-vs-fill-rate optimum from
+            # the buffer sweep. See config.py BOT_ENTRY_LIMIT_BUFFER_PTS.
+            entry_limit_buffer = BOT_ENTRY_LIMIT_BUFFER_PTS
             print(
                 f"[bot] Zone entry: {bz.name} test #{bz.entry_count} "
                 f"{direction} @ {price:.2f} (line {bz.price:.2f}, "
