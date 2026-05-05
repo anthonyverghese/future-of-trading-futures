@@ -1,0 +1,90 @@
+{
+  "description": "Bot 5 levels: buffer=1.0pt + drop FIB_EXT_LO_1.272 — first slippage-aware deploy",
+  "timestamp": "2026-05-05",
+  "changes_from_previous": {
+    "buffer_change": "BOT_ENTRY_LIMIT_BUFFER_PTS = 1.0 fixed (was target_pts/2 = 3-6pt). Tighter buffer drops the worst-fill trades (strong-rejection scenarios fill at the limit price, far below line for SELL). Lower fill rate (87.6% vs 99.4%) but better $/trade and notably smaller MaxDD.",
+    "drop_fib_ext_lo": "FIB_EXT_LO_1.272 added to BOT_EXCLUDE_LEVELS. Slippage-aware backtest showed the level is structurally negative under realistic fills (-$0.99/tr at buffer=1.0pt, -$0.76/tr at target/2). 81% WR is above the 76.9% T6/S20 breakeven, but slippage tips it negative.",
+    "rationale": "Selected over D variant (target/2 + drop FIB_EXT_LO at $+16.32/day, $1,544 MaxDD) for the 36% smaller drawdown profile. P&L cost is $0.66/day = ~$165/yr."
+  },
+  "infrastructure_changes": {
+    "slippage_aware_backtest": "Added simulate_slippage=True mode to BacktestBroker. Tick-data limit-fill simulation, configurable latency_ms (default 100) and fill_timeout_secs (default 3.0). Fixed two bugs in the build: (1) cooldown was using time.monotonic() — wall-clock time — which meant failed-fill cooldowns NEVER expired in backtest (sim runs in seconds of wall time). Now uses sim datetime. (2) submit_bracket non-slippage path used current_price for P&L; should use line_price to match historical behavior.",
+    "broker_race_fix": "fill-during-cancel race fix (5639d76): poll parent_trade.orderStatus.status until terminal (Cancelled/ApiCancelled/Inactive/Filled) with 3s deadline, plus _has_mnq_position() backstop. Replaces the fixed 0.5s sleep that lost the race on 2026-05-05 morning.",
+    "broker_recording_fix": "Defensive flatten now waits for close fill (5s deadline), passes exit_time/exit_price to mark_open_bot_trades_orphaned which fills in pnl_usd from the row's entry_price + direction (3903596).",
+    "vol_filter_logging": "Added throttled (60s/level) skip log to the volatility filter. Was silent, made today's missed Elite alert (15:01 ET FIB_EXT_HI) impossible to diagnose without tick-level forensics (5552bee)."
+  },
+  "params": {
+    "levels": ["IBH", "FIB_EXT_HI_1.272", "FIB_0.236", "FIB_0.618", "FIB_0.764"],
+    "excluded_levels": ["FIB_0.5", "FIB_EXT_LO_1.272"],
+    "direction_filter": {"IBH": "down"},
+    "per_level_targets": {
+      "IBH": [6, 20], "FIB_EXT_HI_1.272": [6, 20],
+      "FIB_0.236": [8, 25], "FIB_0.618": [12, 20], "FIB_0.764": [10, 25]
+    },
+    "per_level_max_entries": {
+      "FIB_0.236": 18, "FIB_0.618": 3, "FIB_0.764": 5,
+      "FIB_EXT_HI_1.272": 6, "IBH": 7
+    },
+    "monday_double_caps": true,
+    "entry_limit_buffer_pts": 1.0,
+    "global_cooldown_after_loss_secs": 0,
+    "failed_fill_cooldown_secs": 60,
+    "vol_filter_pct": 0.0015,
+    "momentum_threshold": 0.0,
+    "daily_loss": 200.0,
+    "fill_timeout_secs": 3.0,
+    "position_timeout_min": 15,
+    "data_days": 333,
+    "data_range": "2025-01-02 to 2026-05-01",
+    "simulator": "simulate_v2 with simulate_slippage=True, latency_ms=100, fill_timeout_secs=3.0"
+  },
+  "full_sample": {
+    "days": 333,
+    "trades": 5662,
+    "trades_per_day": 17.0,
+    "outcomes": {"win": 4370, "loss": 1139, "timeout": 153},
+    "pnl_per_day": 15.66,
+    "max_dd": 980,
+    "per_level": {
+      "FIB_0.236":        {"trades": 2021, "wr": 78.1, "ptr": 0.27, "pnl_per_day":  1.64},
+      "FIB_0.618":        {"trades":  663, "wr": 68.5, "ptr": 2.17, "pnl_per_day":  4.29},
+      "FIB_0.764":        {"trades":  983, "wr": 76.5, "ptr": 2.37, "pnl_per_day":  6.93},
+      "FIB_EXT_HI_1.272": {"trades":  732, "wr": 80.5, "ptr": 0.22, "pnl_per_day":  0.47},
+      "IBH":              {"trades": 1263, "wr": 81.2, "ptr": 0.62, "pnl_per_day":  2.34}
+    }
+  },
+  "comparison_table": {
+    "slippage_blind_control":       {"pnl_per_day":  49.16, "max_dd":  586, "trades": 6787, "note": "Old fictional baseline. evaluate_bot_trade ignored fill price."},
+    "A_target_half_all_levels":     {"pnl_per_day":  14.68, "max_dd": 1599, "trades": 6723, "note": "Prior production config under realistic slippage."},
+    "B_buffer1_all_levels":         {"pnl_per_day":  13.29, "max_dd": 1110, "trades": 6379, "note": "Buffer change alone is a small regression."},
+    "C_buffer1_drop_fib_ext_lo":    {"pnl_per_day":  15.66, "max_dd":  980, "trades": 5662, "note": "DEPLOYED. Best risk-adjusted."},
+    "D_target_half_drop_fib_ext_lo":{"pnl_per_day":  16.32, "max_dd": 1544, "trades": 5938, "note": "Higher P&L (+$0.66/day vs C) but 57% larger MaxDD."},
+    "cap_optimization_combined":    {"pnl_per_day":  12.04, "max_dd": 1189, "trades": 6318, "note": "FAILED. Cum-table analysis was biased by selection."},
+    "score_threshold_minus_1":      {"pnl_per_day":  13.70, "max_dd": 1130, "trades": 4796, "note": "Worse than no filter."},
+    "score_threshold_0":            {"pnl_per_day":   6.30, "max_dd": 2140, "trades": 3920, "note": "Much worse."},
+    "score_threshold_plus_1":       {"pnl_per_day":   4.96, "max_dd": 1778, "trades": 2628, "note": "Much worse."},
+    "score_threshold_plus_2":       {"pnl_per_day":   0.55, "max_dd": 1365, "trades": 1528, "note": "Much worse."}
+  },
+  "backtests_run_20260505": {
+    "total_variants_tested": "~10 real-sim variants + 4 post-process analyses",
+    "experiments": [
+      "buffer_sweep_v1 post-process: optimal buffer=1.0pt (+$2.93/day vs target/2 in post-process — REAL re-sim showed -$1.40/day, post-process was optimistic)",
+      "run_slippage_aware_v1: control + A target/2 + B buffer=1 + C buffer=1+drop FIB_EXT_LO",
+      "run_target2_drop_extlo: D variant validated at +$16.32/day MaxDD $1,544",
+      "run_cap_optimal: combined cap optimization (FIB_0.236 18→16, FIB_0.618 3→6, FIB_0.764 5→8, FIB_EXT_HI 6→10) = -$3.62/day vs C. Selection bias in cum-table analysis.",
+      "run_score_sweep: BOT_MIN_SCORE ∈ {-1, 0, 1, 2} all monotonically worse than no filter",
+      "approach_feature_analysis: velocity/duration/retrace/deceleration as filter candidates — best yields +$0.30/day (noise)",
+      "per_level_direction: no negative direction to drop. FIB_0.764 up is structural standout (+$4.65/tr) but can't be exploited via filter.",
+      "per_level_entry_count: cumulative $/tr by EC bucket suggested cap changes; real-sim disproved (selection bias)."
+    ],
+    "key_insights": [
+      "The previous +$49.60/day no-slippage baseline was overstated by ~$35/day. Real performance under slippage modeling is +$15.66/day.",
+      "All parameter-tuning levers under slippage are now exhausted: approach features, direction filter, cap optimization, score thresholds — all confirmed negative or no-signal.",
+      "Drawdowns under slippage are ~2-3x larger than no-slippage estimates (slippage compounds: smaller wins, bigger losses).",
+      "FIB_EXT_LO_1.272 is the only level with structurally negative edge under slippage (-$0.99/tr at buffer=1).",
+      "Cap optimization fails because cum-table analysis on cap-bound data has selection bias — the cap is what made the existing data look strong; raising it surfaces weaker marginal trades.",
+      "Bot at +$15.66/day vs human's +$19.18/day. The ~$3.50/day gap is structural. Closing it requires NEW DATA SOURCES (order book imbalance, tick microstructure) or a different entry mechanism (rejection-pattern recognition, hybrid pre-filter), not parameter tweaks.",
+      "Cooldowns in backtest were broken before today: time.monotonic() instead of sim time meant failed-fill cooldowns never expired during a sim day. Production was correct; only backtest was wrong. Now fixed.",
+      "Volatility filter silently skipped — added throttled logging after a missed Elite alert today couldn't be diagnosed from journals."
+    ]
+  }
+}
