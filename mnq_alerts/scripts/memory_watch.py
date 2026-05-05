@@ -26,8 +26,17 @@ PAGE_SIZE = 4096
 SAMPLE_WINDOW_SEC = 60
 
 # Thresholds
+# AVAILABLE_MB_MIN: page when free memory under sustained load.
+# BOT_RSS_MB_MAX: 300 (was 200, raised 2026-05-05). The bot's steady-state
+#   RSS during a busy session is ~170-200 MB — driven by Python interpreter
+#   + libraries + bounded deques (60-min and 5-min price windows). 200 was
+#   set assuming a much lower steady state and pinged during normal busy
+#   periods; 300 only fires on a genuine anomaly (leak, regime change, or
+#   library bloat) since data structures are time-bounded and the service
+#   restarts daily at 09:30 ET.
+# SWAP_IN_MBPS_MAX: page when actively thrashing pages back from swap.
 AVAILABLE_MB_MIN = 50
-BOT_RSS_MB_MAX = 200
+BOT_RSS_MB_MAX = 300
 SWAP_IN_MBPS_MAX = 10.0
 
 
