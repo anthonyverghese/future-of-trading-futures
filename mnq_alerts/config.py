@@ -84,7 +84,16 @@ BOT_INCLUDE_VWAP = False  # VWAP excluded: drags in weak regimes (66% WR)
 BOT_INCLUDE_IBL = False  # IBL excluded: -$1.5/day, 72.2% WR (weakest level)
 BOT_INCLUDE_IBH = True  # IBH re-included: SELL only (+$4.05/day, 80.8% WR). BUY blocked via BOT_DIRECTION_FILTER.
 BOT_INCLUDE_INTERIOR_FIBS = True  # Interior fib retracements (0.236, 0.618, 0.764)
-BOT_EXCLUDE_LEVELS = {"FIB_0.5"}  # FIB_0.5: test #1 is negative, no consistent edge
+BOT_EXCLUDE_LEVELS = {
+    "FIB_0.5",          # test #1 is negative, no consistent edge
+    "FIB_EXT_LO_1.272", # added 2026-05-05 — slippage-aware backtest at
+                        # buffer=1.0pt: -$0.99/tr (-$0.95/day, MaxDD impact
+                        # significant). At target/2 it was -$0.76/tr. The
+                        # 81% WR on this level is above the 76.9% T6/S20
+                        # breakeven, but slippage tips it negative.
+                        # Dropping it: $/day +$15.66, MaxDD $980 (down
+                        # from $1,110 with this level included).
+}
 BOT_DIRECTION_FILTER = {"IBH": "down"}  # IBH: SELL only (80.8% WR, BUY drags it down)
 BOT_MIN_SCORE = -99  # Unscored: scoring hurts OOS (validated 2026-04-26)
 BOT_TREND_LOOKBACK_MIN = 60  # Minutes to look back for trend calculation
