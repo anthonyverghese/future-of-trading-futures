@@ -43,8 +43,18 @@ def simulate_day_v2(
     daily_loss: float = 200.0,
     timeout_secs: int = 900,
     momentum_max: float = 5.0,
+    simulate_slippage: bool = False,
+    latency_ms: float = 100.0,
+    fill_timeout_secs: float = 3.0,
+    entry_limit_buffer_pts_override: float | None = None,
 ) -> list[BacktestTradeRecord]:
     """Simulate one day using real BotTrader + BacktestBroker.
+
+    When `simulate_slippage=True`, BacktestBroker runs a tick-data
+    limit-fill simulation matching the production limit-order behavior:
+    network latency `latency_ms` then a `fill_timeout_secs` window for
+    the limit to be hit. Trades whose limit isn't satisfied are
+    correctly returned as failed (the bot frees the cap slot).
 
     Returns list of BacktestTradeRecord.
     """
@@ -61,6 +71,9 @@ def simulate_day_v2(
         eod_cutoff_ns=eod,
         daily_loss=daily_loss,
         timeout_secs=timeout_secs,
+        simulate_slippage=simulate_slippage,
+        latency_ms=latency_ms,
+        fill_timeout_secs=fill_timeout_secs,
     )
 
     # Create BotTrader with the backtest broker
@@ -73,7 +86,8 @@ def simulate_day_v2(
     bot._level_trade_counts = {}
     bot._active_trade_level = None
     bot._level_cooldown_until = {}
-    bot._global_cooldown_until = 0.0
+    bot._global_cooldown_until = None
+    bot._vol_filter_last_log = {}
     bot._adaptive_caps_restored = True  # disabled
 
     # Override config values for this simulation.
@@ -91,6 +105,7 @@ def simulate_day_v2(
         "cfg_ibh": cfg.BOT_INCLUDE_IBH,
         "cfg_ibl": cfg.BOT_INCLUDE_IBL,
         "cfg_vwap": cfg.BOT_INCLUDE_VWAP,
+        "cfg_buf": cfg.BOT_ENTRY_LIMIT_BUFFER_PTS,
         "bt_dir": bt_mod.BOT_DIRECTION_FILTER,
         "bt_caps": bt_mod.BOT_PER_LEVEL_MAX_ENTRIES,
         "bt_ts": bt_mod.BOT_PER_LEVEL_TS,
@@ -98,6 +113,7 @@ def simulate_day_v2(
         "bt_ibh": bt_mod.BOT_INCLUDE_IBH,
         "bt_ibl": bt_mod.BOT_INCLUDE_IBL,
         "bt_vwap": bt_mod.BOT_INCLUDE_VWAP,
+        "bt_buf": bt_mod.BOT_ENTRY_LIMIT_BUFFER_PTS,
     }
 
     try:
@@ -113,6 +129,10 @@ def simulate_day_v2(
         cfg.BOT_INCLUDE_IBH = inc_ibh
         cfg.BOT_INCLUDE_IBL = include_ibl
         cfg.BOT_INCLUDE_VWAP = include_vwap
+
+        if entry_limit_buffer_pts_override is not None:
+            cfg.BOT_ENTRY_LIMIT_BUFFER_PTS = entry_limit_buffer_pts_override
+            bt_mod.BOT_ENTRY_LIMIT_BUFFER_PTS = entry_limit_buffer_pts_override
 
         bt_mod.BOT_DIRECTION_FILTER = dir_filt
         bt_mod.BOT_PER_LEVEL_MAX_ENTRIES = per_level_caps
@@ -214,6 +234,7 @@ def simulate_day_v2(
         cfg.BOT_INCLUDE_IBH = orig["cfg_ibh"]
         cfg.BOT_INCLUDE_IBL = orig["cfg_ibl"]
         cfg.BOT_INCLUDE_VWAP = orig["cfg_vwap"]
+        cfg.BOT_ENTRY_LIMIT_BUFFER_PTS = orig["cfg_buf"]
 
         bt_mod.BOT_DIRECTION_FILTER = orig["bt_dir"]
         bt_mod.BOT_PER_LEVEL_MAX_ENTRIES = orig["bt_caps"]
@@ -222,5 +243,6 @@ def simulate_day_v2(
         bt_mod.BOT_INCLUDE_IBH = orig["bt_ibh"]
         bt_mod.BOT_INCLUDE_IBL = orig["bt_ibl"]
         bt_mod.BOT_INCLUDE_VWAP = orig["bt_vwap"]
+        bt_mod.BOT_ENTRY_LIMIT_BUFFER_PTS = orig["bt_buf"]
 
     return broker.trades

@@ -207,12 +207,28 @@ class BotTrader:
         self._active_trade_level: str | None = None
         # Cooldown after failed entry (unfilled limit cancel).
         # Maps level name → monotonic timestamp when cooldown expires.
-        self._level_cooldown_until: dict[str, float] = {}
+        # Cooldown deadlines stored as datetime (sim/real now + delta) so
+        # the comparison works correctly under both live ticks (where
+        # `now` is real wall time) and backtest replay (where `now` is
+        # sim time advancing per-tick). Previously these used
+        # time.monotonic() which is wall-clock seconds — fine in live
+        # but pinned the cooldown effectively forever in backtests
+        # (entire trading session simulates in seconds of wall time, so
+        # `time.monotonic() + 60` is far past every sim tick of the day).
+        self._level_cooldown_until: dict[str, datetime.datetime] = {}
         # Global cooldown after any stop loss — monotonic timestamp.
-        self._global_cooldown_until: float = 0.0
+        self._global_cooldown_until: datetime.datetime | None = None
         # Adaptive caps: DISABLED (2026-05-02). Hurts P&L in all configs.
         # Fields kept for backtest compatibility (simulate_day uses them).
         self._adaptive_caps_restored: bool = True  # True = disabled
+        # Throttled logging for the vol filter — log at most once per
+        # 60s per level. Without throttling, sustained low-vol periods
+        # would log on every fresh zone entry (hundreds per day per level
+        # during chop). Without ANY logging, vol-filter skips were
+        # invisible — we only learned they were happening today
+        # (2026-05-05) by reverse-engineering from tick data after a
+        # missed Elite alert.
+        self._vol_filter_last_log: dict[str, datetime.datetime] = {}
 
     def connect(self) -> bool:
         """Connect to IBKR. Returns True on success."""
@@ -336,7 +352,7 @@ class BotTrader:
         allowed, _ = self._broker.can_trade()
         if not allowed:
             return
-        if self._global_cooldown_until > 0 and time.monotonic() < self._global_cooldown_until:
+        if self._global_cooldown_until is not None and now < self._global_cooldown_until:
             return
 
         # Check each zone for entry opportunities.
@@ -354,7 +370,9 @@ class BotTrader:
             and self._broker._consecutive_losses > 0
         ):
             self._global_cooldown_until = (
-                time.monotonic() + BOT_GLOBAL_COOLDOWN_AFTER_LOSS_SECS
+                now + datetime.timedelta(
+                    seconds=BOT_GLOBAL_COOLDOWN_AFTER_LOSS_SECS
+                )
             )
         self._active_trade_level = None
 
@@ -395,8 +413,8 @@ class BotTrader:
         """Check all zones for entry and submit orders."""
         for bz in self._zones.values():
             # Per-level cooldown after failed entry.
-            cooldown = self._level_cooldown_until.get(bz.name, 0)
-            if cooldown > 0 and time.monotonic() < cooldown:
+            cooldown = self._level_cooldown_until.get(bz.name)
+            if cooldown is not None and now < cooldown:
                 continue
 
             if not bz.update(price):
@@ -434,6 +452,15 @@ class BotTrader:
                 range_30m_pct is not None
                 and range_30m_pct < BOT_VOL_FILTER_MIN_RANGE_PCT * 100
             ):
+                last_log = self._vol_filter_last_log.get(bz.name)
+                if last_log is None or (now - last_log).total_seconds() >= 60:
+                    threshold_pct = BOT_VOL_FILTER_MIN_RANGE_PCT * 100
+                    print(
+                        f"[bot] Skipped {bz.name} (vol filter: "
+                        f"range_30m {range_30m_pct:.3f}% < "
+                        f"{threshold_pct:.2f}%) | dist={abs(price - bz.price):.2f}"
+                    )
+                    self._vol_filter_last_log[bz.name] = now
                 continue
 
             # All filters passed — attempt entry.
@@ -444,7 +471,14 @@ class BotTrader:
             # Fixed buffer (was target_pts/2 — caused up to 6pt slippage on
             # FIB_0.618). 1.0pt is the slippage-vs-fill-rate optimum from
             # the buffer sweep. See config.py BOT_ENTRY_LIMIT_BUFFER_PTS.
-            entry_limit_buffer = BOT_ENTRY_LIMIT_BUFFER_PTS
+            #
+            # Sentinel: BOT_ENTRY_LIMIT_BUFFER_PTS <= 0 means "use the
+            # legacy target_pts/2 formula" — useful for backtest comparisons
+            # against the historical buffer behavior.
+            if BOT_ENTRY_LIMIT_BUFFER_PTS > 0:
+                entry_limit_buffer = BOT_ENTRY_LIMIT_BUFFER_PTS
+            else:
+                entry_limit_buffer = round(target_pts / 2 * 4) / 4
             print(
                 f"[bot] Zone entry: {bz.name} test #{bz.entry_count} "
                 f"{direction} @ {price:.2f} (line {bz.price:.2f}, "
@@ -481,7 +515,11 @@ class BotTrader:
                     self._active_trade_level = bz.name
                 else:
                     print(f"[broker] Trade failed: {result.error}")
-                    self._level_cooldown_until[bz.name] = time.monotonic() + BOT_FAILED_FILL_COOLDOWN_SECS
+                    self._level_cooldown_until[bz.name] = (
+                        now + datetime.timedelta(
+                            seconds=BOT_FAILED_FILL_COOLDOWN_SECS
+                        )
+                    )
                     bz.reset()
             else:
                 print(f"[broker] Skipped {bz.name}: {reason}")
@@ -513,7 +551,8 @@ class BotTrader:
         self._level_trade_counts.clear()
         self._active_trade_level = None
         self._level_cooldown_until.clear()
-        self._global_cooldown_until = 0.0
+        self._global_cooldown_until = None
+        self._vol_filter_last_log.clear()
         self._adaptive_caps_restored = True  # disabled
 
     def eod_flatten(self) -> None:
