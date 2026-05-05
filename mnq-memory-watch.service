@@ -1,0 +1,8 @@
+[Unit]
+Description=MNQ memory pressure watchdog (Pushover-pages on real pressure)
+
+[Service]
+Type=oneshot
+User=ec2-user
+EnvironmentFile=/home/ec2-user/future-of-trading-futures/mnq_alerts/.env
+ExecStart=/home/ec2-user/miniconda3/envs/mnq/bin/python /home/ec2-user/future-of-trading-futures/mnq_alerts/scripts/memory_watch.py

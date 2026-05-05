@@ -1,0 +1,11 @@
+[Unit]
+Description=Run MNQ memory pressure watchdog every 5 minutes during market hours
+
+[Timer]
+# Mon-Fri, every 5 min from 09:30 to 15:55 ET (host TZ assumed America/New_York).
+OnCalendar=Mon..Fri *-*-* 09:30/5
+OnCalendar=Mon..Fri *-*-* 10..15:0/5
+Persistent=false
+
+[Install]
+WantedBy=timers.target
