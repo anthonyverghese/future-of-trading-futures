@@ -1,10 +1,14 @@
 *.pem
 *.pyc
 __pycache__/
+.vscode/
 mnq_alerts/.env
 ib-gateway.env
 mnq_alerts/.session_cache.db
+mnq_alerts/.zone_state.json
 mnq_alerts/alert_model.joblib
+mnq_alerts/alerts_log.db
 mnq_alerts/data_cache/
 mnq_alerts/streak_outcomes.json
 mnq_alerts/backtest/.array_cache/
+mnq_alerts/backtest/results/*.pkl
