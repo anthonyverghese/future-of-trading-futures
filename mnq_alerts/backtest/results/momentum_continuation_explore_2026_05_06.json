@@ -1,0 +1,231 @@
+{
+  "generated_at": "2026-05-06T15:29:29.319646",
+  "n_losing_trades": 1157,
+  "n_days": 294,
+  "sweep_results": {
+    "tol1.0pt_max10min": {
+      "tol_pts": 1.0,
+      "max_secs": 600,
+      "n_retest_attempts": 604,
+      "n_filled": 523,
+      "n_no_retest": 553,
+      "n_unfilled": 81,
+      "wins": 395,
+      "losses": 128,
+      "timeouts": 0,
+      "total_pnl": 862.0,
+      "pnl_per_day": 2.931972789115646,
+      "wr_pct": 75.52581261950286,
+      "walk_forward": {
+        "Q1": -0.821917808219178,
+        "Q2": 1.2602739726027397,
+        "Q3": 4.219178082191781,
+        "Q4": 6.96,
+        "positive_quarters": 3
+      }
+    },
+    "tol1.0pt_max30min": {
+      "tol_pts": 1.0,
+      "max_secs": 1800,
+      "n_retest_attempts": 775,
+      "n_filled": 663,
+      "n_no_retest": 382,
+      "n_unfilled": 112,
+      "wins": 501,
+      "losses": 162,
+      "timeouts": 0,
+      "total_pnl": 1076.0,
+      "pnl_per_day": 3.6598639455782314,
+      "wr_pct": 75.56561085972851,
+      "walk_forward": {
+        "Q1": 0.1095890410958904,
+        "Q2": 1.4794520547945205,
+        "Q3": 6.219178082191781,
+        "Q4": 6.746666666666667,
+        "positive_quarters": 3
+      }
+    },
+    "tol1.0pt_max60min": {
+      "tol_pts": 1.0,
+      "max_secs": 3600,
+      "n_retest_attempts": 875,
+      "n_filled": 746,
+      "n_no_retest": 282,
+      "n_unfilled": 129,
+      "wins": 568,
+      "losses": 178,
+      "timeouts": 0,
+      "total_pnl": 1414.0,
+      "pnl_per_day": 4.809523809523809,
+      "wr_pct": 76.13941018766755,
+      "walk_forward": {
+        "Q1": 2.0547945205479454,
+        "Q2": 3.26027397260274,
+        "Q3": 5.260273972602739,
+        "Q4": 8.56,
+        "positive_quarters": 4
+      }
+    },
+    "tol2.0pt_max10min": {
+      "tol_pts": 2.0,
+      "max_secs": 600,
+      "n_retest_attempts": 624,
+      "n_filled": 407,
+      "n_no_retest": 533,
+      "n_unfilled": 217,
+      "wins": 300,
+      "losses": 107,
+      "timeouts": 0,
+      "total_pnl": 276.0,
+      "pnl_per_day": 0.9387755102040817,
+      "wr_pct": 73.71007371007371,
+      "walk_forward": {
+        "Q1": -4.054794520547945,
+        "Q2": 0.1095890410958904,
+        "Q3": 1.2876712328767124,
+        "Q4": 6.266666666666667,
+        "positive_quarters": 2
+      }
+    },
+    "tol2.0pt_max30min": {
+      "tol_pts": 2.0,
+      "max_secs": 1800,
+      "n_retest_attempts": 793,
+      "n_filled": 491,
+      "n_no_retest": 364,
+      "n_unfilled": 302,
+      "wins": 368,
+      "losses": 123,
+      "timeouts": 0,
+      "total_pnl": 700.0,
+      "pnl_per_day": 2.380952380952381,
+      "wr_pct": 74.949083503055,
+      "walk_forward": {
+        "Q1": -2.410958904109589,
+        "Q2": 1.4246575342465753,
+        "Q3": 3.780821917808219,
+        "Q4": 6.613333333333333,
+        "positive_quarters": 3
+      }
+    },
+    "tol2.0pt_max60min": {
+      "tol_pts": 2.0,
+      "max_secs": 3600,
+      "n_retest_attempts": 893,
+      "n_filled": 548,
+      "n_no_retest": 264,
+      "n_unfilled": 345,
+      "wins": 412,
+      "losses": 136,
+      "timeouts": 0,
+      "total_pnl": 776.0,
+      "pnl_per_day": 2.639455782312925,
+      "wr_pct": 75.18248175182481,
+      "walk_forward": {
+        "Q1": -0.547945205479452,
+        "Q2": 1.3424657534246576,
+        "Q3": 2.2739726027397262,
+        "Q4": 7.36,
+        "positive_quarters": 3
+      }
+    },
+    "tol3.0pt_max10min": {
+      "tol_pts": 3.0,
+      "max_secs": 600,
+      "n_retest_attempts": 648,
+      "n_filled": 296,
+      "n_no_retest": 509,
+      "n_unfilled": 352,
+      "wins": 217,
+      "losses": 79,
+      "timeouts": 0,
+      "total_pnl": 192.0,
+      "pnl_per_day": 0.6530612244897959,
+      "wr_pct": 73.3108108108108,
+      "walk_forward": {
+        "Q1": -4.410958904109589,
+        "Q2": 2.712328767123288,
+        "Q3": -0.3287671232876712,
+        "Q4": 4.533333333333333,
+        "positive_quarters": 2
+      }
+    },
+    "tol3.0pt_max30min": {
+      "tol_pts": 3.0,
+      "max_secs": 1800,
+      "n_retest_attempts": 812,
+      "n_filled": 356,
+      "n_no_retest": 345,
+      "n_unfilled": 456,
+      "wins": 266,
+      "losses": 90,
+      "timeouts": 0,
+      "total_pnl": 520.0,
+      "pnl_per_day": 1.7687074829931972,
+      "wr_pct": 74.71910112359551,
+      "walk_forward": {
+        "Q1": -3.0684931506849313,
+        "Q2": 3.0684931506849313,
+        "Q3": 2.493150684931507,
+        "Q4": 4.506666666666667,
+        "positive_quarters": 3
+      }
+    },
+    "tol3.0pt_max60min": {
+      "tol_pts": 3.0,
+      "max_secs": 3600,
+      "n_retest_attempts": 911,
+      "n_filled": 397,
+      "n_no_retest": 246,
+      "n_unfilled": 514,
+      "wins": 297,
+      "losses": 100,
+      "timeouts": 0,
+      "total_pnl": 516.0,
+      "pnl_per_day": 1.7551020408163265,
+      "wr_pct": 74.81108312342569,
+      "walk_forward": {
+        "Q1": -2.5205479452054793,
+        "Q2": 2.493150684931507,
+        "Q3": 1.5890410958904109,
+        "Q4": 5.36,
+        "positive_quarters": 3
+      }
+    }
+  },
+  "per_level_best_variant": {
+    "variant": "tol1.0pt_max60min",
+    "by_level": {
+      "FIB_0.236": {
+        "n": 296,
+        "wins": 234,
+        "pnl": 644.0,
+        "no_retest": 96
+      },
+      "FIB_0.618": {
+        "n": 127,
+        "wins": 84,
+        "pnl": 296.0,
+        "no_retest": 41
+      },
+      "FIB_EXT_HI_1.272": {
+        "n": 87,
+        "wins": 72,
+        "pnl": 264.0,
+        "no_retest": 35
+      },
+      "FIB_0.764": {
+        "n": 119,
+        "wins": 88,
+        "pnl": 210.0,
+        "no_retest": 55
+      },
+      "IBH": {
+        "n": 117,
+        "wins": 90,
+        "pnl": 0.0,
+        "no_retest": 55
+      }
+    }
+  }
+}
