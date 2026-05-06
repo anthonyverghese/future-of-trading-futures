@@ -79,7 +79,12 @@ BOT_PER_LEVEL_MAX_ENTRIES = {
     "FIB_EXT_LO_1.272": 6,  # weak at #7-9
     "IBH": 7,
 }
-BOT_MONDAY_DOUBLE_CAPS = True  # Double per-level caps on Mondays (+$2.18/day vs baseline)
+BOT_MONDAY_DOUBLE_CAPS = False  # Disabled 2026-05-06: 16-variant filter audit walk-forward
+# (V6 vs V0_baseline) showed 3/4 quarters positive, 0/4 negative with the
+# filter OFF: $/day +$1.64, MaxDD -$107. Original "+$2.18/day" was from
+# slippage-blind era + older per-level cap table. With current cap calibration
+# (FIB_0.236=18 etc.) and slippage modeling, doubling on Mondays just adds
+# slippage cost without finding meaningfully better trades.
 BOT_INCLUDE_VWAP = False  # VWAP excluded: drags in weak regimes (66% WR)
 BOT_INCLUDE_IBL = False  # IBL excluded: -$1.5/day, 72.2% WR (weakest level)
 BOT_INCLUDE_IBH = True  # IBH re-included: SELL only (+$4.05/day, 80.8% WR). BUY blocked via BOT_DIRECTION_FILTER.
