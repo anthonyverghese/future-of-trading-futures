@@ -1,0 +1,66 @@
+{
+  "description": "Bot 5 levels: per-level buffer (IBH=0.75pt, others=1.0pt) — incremental refinement on top of C",
+  "timestamp": "2026-05-05 (late evening, post-market)",
+  "changes_from_previous": {
+    "ibh_buffer_change": "BOT_ENTRY_LIMIT_BUFFER_PTS converted from float 1.0 to dict {'IBH': 0.75}. Other levels fall back to 1.0pt default. Mechanically motivated: IBH is the smallest target (T6/S20), so 1pt of slippage eats 17% of target; tighter buffer keeps wins closer to target_pts. Buffer sweep showed IBH's $/trade declines monotonically as buffer widens — only level with that signal.",
+    "rationale": "+$0.56/day P&L, -$16 MaxDD vs C in real-sim. Modest but real. IBH=0.5pt was worse (-$0.04/day, +$102 MaxDD) — too tight, loses volume. 0.75 is the sweet spot."
+  },
+  "infrastructure_changes": {
+    "bot_trader_dict_support": "Modified bot_trader.py:443+ to accept BOT_ENTRY_LIMIT_BUFFER_PTS as either float (current) or dict (per-level, with 1.0 fallback). Backwards compatible — float still works."
+  },
+  "params": {
+    "levels": ["IBH", "FIB_EXT_HI_1.272", "FIB_0.236", "FIB_0.618", "FIB_0.764"],
+    "excluded_levels": ["FIB_0.5", "FIB_EXT_LO_1.272"],
+    "direction_filter": {"IBH": "down"},
+    "per_level_targets": {
+      "IBH": [6, 20], "FIB_EXT_HI_1.272": [6, 20],
+      "FIB_0.236": [8, 25], "FIB_0.618": [12, 20], "FIB_0.764": [10, 25]
+    },
+    "per_level_max_entries": {
+      "FIB_0.236": 18, "FIB_0.618": 3, "FIB_0.764": 5,
+      "FIB_EXT_HI_1.272": 6, "IBH": 7
+    },
+    "monday_double_caps": true,
+    "entry_limit_buffer_pts": {"IBH": 0.75, "(others_default)": 1.0},
+    "global_cooldown_after_loss_secs": 0,
+    "failed_fill_cooldown_secs": 60,
+    "vol_filter_pct": 0.0015,
+    "momentum_threshold": 0.0,
+    "daily_loss": 200.0,
+    "fill_timeout_secs": 3.0,
+    "position_timeout_min": 15,
+    "data_days": 333,
+    "data_range": "2025-01-02 to 2026-05-01",
+    "simulator": "simulate_v2 with simulate_slippage=True, latency_ms=100, fill_timeout_secs=3.0"
+  },
+  "full_sample": {
+    "days": 333,
+    "trades": 5634,
+    "trades_per_day": 16.8,
+    "outcomes": {"win": 4344, "loss": 1138, "timeout": 152},
+    "pnl_per_day": 16.23,
+    "max_dd": 964,
+    "per_level": {
+      "FIB_0.236":        {"trades": 2021, "wr": 78.1, "ptr": 0.27, "pnl_per_day":  1.64},
+      "FIB_0.618":        {"trades":  663, "wr": 68.5, "ptr": 2.17, "pnl_per_day":  4.29},
+      "FIB_0.764":        {"trades":  983, "wr": 76.5, "ptr": 2.37, "pnl_per_day":  6.93},
+      "FIB_EXT_HI_1.272": {"trades":  732, "wr": 80.5, "ptr": 0.22, "pnl_per_day":  0.47},
+      "IBH":              {"trades": 1235, "wr": 81.0, "ptr": 0.79, "pnl_per_day":  2.90}
+    }
+  },
+  "comparison_table": {
+    "C_baseline_buffer1_global":   {"pnl_per_day": 15.66, "max_dd":  980, "trades": 5662, "ibh_ptr": 0.62, "note": "Earlier 2026-05-05 deploy."},
+    "IBH_075_others_1":            {"pnl_per_day": 16.23, "max_dd":  964, "trades": 5634, "ibh_ptr": 0.79, "note": "DEPLOYED. +$0.56/day, -$16 MaxDD vs C."},
+    "IBH_05_others_1":             {"pnl_per_day": 15.62, "max_dd": 1082, "trades": 5568, "ibh_ptr": 0.67, "note": "Too tight — loses volume. NOT DEPLOYED."}
+  },
+  "experiments": [
+    "per_level_buffer_sweep (post-process): identified IBH as the only level with monotonic decline in $/tr as buffer widens — mechanical signal (T6 target absorbs less slippage)",
+    "run_ibh_buffer_test (real-sim): C baseline + IBH=0.75 + IBH=0.5. IBH=0.75 wins both axes, IBH=0.5 fails on volume."
+  ],
+  "key_insights": [
+    "Per-level buffer customization is justified ONLY when there's a mechanical reason — small target / slippage ratio for IBH. Other levels (T10, T12) showed flat curves across buffers; tuning them would be overfitting.",
+    "Real-sim matched post-process closely on this finding (post-process predicted +$0.69/day, real-sim +$0.56). Earlier today, post-process was wildly wrong on cap-opt and buffer-1 vs target/2. The difference: this finding is mechanically grounded; those weren't.",
+    "IBH=0.5 vs IBH=0.75 illustrates the curve: tighter buffer helps quality up to a point, then loses volume faster than it adds quality. Don't extrapolate past the optimum.",
+    "Quarterly decay caveat: full-sample +$0.56/day full-sample is likely +$0.20/day in Q4-like recent regime. Still positive, just smaller. The MaxDD reduction is more concrete."
+  ]
+}

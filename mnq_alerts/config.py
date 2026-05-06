@@ -114,7 +114,21 @@ BOT_FILL_TIMEOUT_SECS = 3.0  # How long to wait for entry limit to fill before c
 #   buffer=1: +$17.89/day, fill 87.6%, MaxDD $1,295   ← +$2.93/day, lower DD
 # Tighter buffer drops the worst-fill trades (strong-rejection scenarios
 # fill at the limit price) in exchange for keeping wins closer to target.
-BOT_ENTRY_LIMIT_BUFFER_PTS = 1.0
+#
+# Per-level (added 2026-05-05 evening): IBH gets buffer=0.75pt instead of
+# 1.0pt because IBH is T6/S20 — the smallest target — and slippage of 1pt
+# eats 17% of target. Buffer sweep showed monotonic decline in IBH's
+# $/trade as buffer widens; real-sim of buffer={IBH: 0.75} confirmed
+# +$0.56/day, MaxDD $964 vs $980 vs C deployed (small but real).
+# IBH=0.5 was worse — too tight, lost volume. 0.75 is the sweet spot.
+# Other levels (T8-T12) absorb slippage better, stay at 1.0pt.
+#
+# Form: dict[level_name → float] for per-level customization, falling
+# back to 1.0pt for any level not in the dict. (bot_trader also supports
+# float for the global case and float<=0 for the legacy target/2 path.)
+BOT_ENTRY_LIMIT_BUFFER_PTS = {
+    "IBH": 0.75,
+}
 # Was 30s. With higher loss limit, recovery trades after losses are profitable.
 # Removing cooldown + suppression + adaptive caps = +$49.46/day (vs +$41.73 with all on).
 DAILY_LOSS_LIMIT_USD = 200.0  # Stop trading for the day after losing this much

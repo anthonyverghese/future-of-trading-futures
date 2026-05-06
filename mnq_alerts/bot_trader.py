@@ -472,10 +472,14 @@ class BotTrader:
             # FIB_0.618). 1.0pt is the slippage-vs-fill-rate optimum from
             # the buffer sweep. See config.py BOT_ENTRY_LIMIT_BUFFER_PTS.
             #
-            # Sentinel: BOT_ENTRY_LIMIT_BUFFER_PTS <= 0 means "use the
-            # legacy target_pts/2 formula" — useful for backtest comparisons
-            # against the historical buffer behavior.
-            if BOT_ENTRY_LIMIT_BUFFER_PTS > 0:
+            # Forms supported:
+            #   float > 0: use that value for all levels (current default).
+            #   float <= 0: use legacy target_pts/2 (backtest comparison).
+            #   dict[level_name → float]: per-level buffer, falls back to
+            #     1.0pt if the level isn't in the dict.
+            if isinstance(BOT_ENTRY_LIMIT_BUFFER_PTS, dict):
+                entry_limit_buffer = BOT_ENTRY_LIMIT_BUFFER_PTS.get(bz.name, 1.0)
+            elif BOT_ENTRY_LIMIT_BUFFER_PTS > 0:
                 entry_limit_buffer = BOT_ENTRY_LIMIT_BUFFER_PTS
             else:
                 entry_limit_buffer = round(target_pts / 2 * 4) / 4
