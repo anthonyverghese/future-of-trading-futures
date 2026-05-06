@@ -1,0 +1,53 @@
+{
+  "generated_at": "2026-05-06T15:19:20.565718",
+  "n_trades": 5164,
+  "n_days": 326,
+  "single_per_day": 35.66257668711656,
+  "multi_per_day": 28.052147239263803,
+  "be_per_day": 18.619631901840492,
+  "trail_t4_per_day": 17.834355828220858,
+  "trail_t3_per_day": 19.993865030674527,
+  "delta_multi_per_day": -7.610429447852761,
+  "delta_be_per_day": -17.042944785276074,
+  "delta_t4_per_day": -17.828220858895705,
+  "delta_t3_per_day": -15.668711656442035,
+  "composition": {
+    "target_hits": 4000,
+    "stop_hits": 1157,
+    "timeouts": 7,
+    "hit_half": 4508,
+    "be_triggered": 2299,
+    "loss_with_half": 504,
+    "win_be_retraced": 1791
+  },
+  "walk_forward": {
+    "Q1": {
+      "single_per_day": 50.04938271604938,
+      "multi_per_day": 41.4320987654321,
+      "be_per_day": 29.209876543209877,
+      "trail_t4_per_day": 29.296296296296298,
+      "trail_t3_per_day": 33.09465020576128
+    },
+    "Q2": {
+      "single_per_day": 28.54320987654321,
+      "multi_per_day": 20.864197530864196,
+      "be_per_day": 8.518518518518519,
+      "trail_t4_per_day": 9.604938271604938,
+      "trail_t3_per_day": 11.662551440329217
+    },
+    "Q3": {
+      "single_per_day": 32.74074074074074,
+      "multi_per_day": 25.234567901234566,
+      "be_per_day": 14.419753086419753,
+      "trail_t4_per_day": 14.469135802469136,
+      "trail_t3_per_day": 16.37860082304521
+    },
+    "Q4": {
+      "single_per_day": 31.42168674698795,
+      "multi_per_day": 24.759036144578314,
+      "be_per_day": 22.240963855421686,
+      "trail_t4_per_day": 17.96385542168675,
+      "trail_t3_per_day": 18.867469879518005
+    }
+  }
+}
