@@ -52,6 +52,7 @@ from config import (
     BOT_VOL_FILTER_MIN_RANGE_PCT,
     BOT_COUNTER_TREND_VALLEY_FILTER,
     BOT_HYBRID_MIN_COMPOSITE_SCORE,
+    BOT_MAX_SECS_SINCE_LAST_TRADE_THIS_DAY,
 )
 from scoring import composite_score as _human_composite_score
 # SUPPRESSED_WINDOWS import removed — bot suppression disabled (2026-05-02).
@@ -232,6 +233,11 @@ class BotTrader:
         # (2026-05-05) by reverse-engineering from tick data after a
         # missed Elite alert.
         self._vol_filter_last_log: dict[str, datetime.datetime] = {}
+        # Stale-approach filter: timestamp of the most recent trade ENTRY
+        # attempt today. Used by BOT_MAX_SECS_SINCE_LAST_TRADE_THIS_DAY
+        # to skip entries that come after a long quiet period (Phase C
+        # finding: such trades have -$0.58/tr aggregate, Q4 -$2.93/tr).
+        self._last_trade_entry_time: datetime.datetime | None = None
 
     def connect(self) -> bool:
         """Connect to IBKR. Returns True on success."""
@@ -490,6 +496,17 @@ class BotTrader:
                 if lo <= with_trend < hi:
                     continue
 
+            # Stale-approach filter: skip if too long has passed since the
+            # last entry attempt today. Only applies after the first trade
+            # of the day. Disabled by default (threshold=0).
+            if (
+                BOT_MAX_SECS_SINCE_LAST_TRADE_THIS_DAY > 0
+                and self._last_trade_entry_time is not None
+            ):
+                gap_secs = (now - self._last_trade_entry_time).total_seconds()
+                if gap_secs > BOT_MAX_SECS_SINCE_LAST_TRADE_THIS_DAY:
+                    continue
+
             # Volatility filter: skip dead markets.
             if (
                 range_30m_pct is not None
@@ -560,6 +577,7 @@ class BotTrader:
                 if result.success:
                     self._level_trade_counts[bz.name] = level_trades + 1
                     self._active_trade_level = bz.name
+                    self._last_trade_entry_time = now
                 else:
                     print(f"[broker] Trade failed: {result.error}")
                     self._level_cooldown_until[bz.name] = (
@@ -600,6 +618,7 @@ class BotTrader:
         self._level_cooldown_until.clear()
         self._global_cooldown_until = None
         self._vol_filter_last_log.clear()
+        self._last_trade_entry_time = None
         self._adaptive_caps_restored = True  # disabled
 
     def eod_flatten(self) -> None:

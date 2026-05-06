@@ -119,6 +119,12 @@ BOT_COUNTER_TREND_VALLEY_FILTER: tuple[float, float] | None = None
 # composite_score (from scoring.py) is below threshold. None = disabled.
 # 5 is the human's production threshold (82.5% WR at 5.6 alerts/day).
 BOT_HYBRID_MIN_COMPOSITE_SCORE: int | None = None
+# Stale-approach filter: skip a zone entry if more than this many seconds
+# have passed since the bot's prior entry attempt today. Phase C pickle
+# analysis (2026-05-06) found trades >1800s after prior trade have
+# -$0.58/tr aggregate, with Q4 -$2.93/tr. Hypothesis: long gap = stale
+# approach (price moved away and came back). 0 = disabled (default).
+BOT_MAX_SECS_SINCE_LAST_TRADE_THIS_DAY: int = 0
 BOT_FILL_TIMEOUT_SECS = 3.0  # How long to wait for entry limit to fill before cancelling
 # Entry limit buffer in pts. Limit price is line ± buffer (above for BUY,
 # below for SELL). Was target/2 (3-6pt across levels) which gave 99% fill

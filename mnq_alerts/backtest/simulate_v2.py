@@ -49,6 +49,7 @@ def simulate_day_v2(
     entry_limit_buffer_pts_override: float | None = None,
     counter_trend_valley_filter: tuple[float, float] | None = None,
     gap_close: float | None = None,
+    max_secs_since_last_trade: int = 0,
 ) -> list[BacktestTradeRecord]:
     """Simulate one day using real BotTrader + BacktestBroker.
 
@@ -90,6 +91,7 @@ def simulate_day_v2(
     bot._level_cooldown_until = {}
     bot._global_cooldown_until = None
     bot._vol_filter_last_log = {}
+    bot._last_trade_entry_time = None
     bot._adaptive_caps_restored = True  # disabled
 
     # Override config values for this simulation.
@@ -109,6 +111,8 @@ def simulate_day_v2(
         "cfg_vwap": cfg.BOT_INCLUDE_VWAP,
         "cfg_buf": cfg.BOT_ENTRY_LIMIT_BUFFER_PTS,
         "cfg_ctv": cfg.BOT_COUNTER_TREND_VALLEY_FILTER,
+        "cfg_max_gap": cfg.BOT_MAX_SECS_SINCE_LAST_TRADE_THIS_DAY,
+        "bt_max_gap": bt_mod.BOT_MAX_SECS_SINCE_LAST_TRADE_THIS_DAY,
         "bt_dir": bt_mod.BOT_DIRECTION_FILTER,
         "bt_caps": bt_mod.BOT_PER_LEVEL_MAX_ENTRIES,
         "bt_ts": bt_mod.BOT_PER_LEVEL_TS,
@@ -140,6 +144,8 @@ def simulate_day_v2(
         if counter_trend_valley_filter is not None:
             cfg.BOT_COUNTER_TREND_VALLEY_FILTER = counter_trend_valley_filter
             bt_mod.BOT_COUNTER_TREND_VALLEY_FILTER = counter_trend_valley_filter
+        cfg.BOT_MAX_SECS_SINCE_LAST_TRADE_THIS_DAY = max_secs_since_last_trade
+        bt_mod.BOT_MAX_SECS_SINCE_LAST_TRADE_THIS_DAY = max_secs_since_last_trade
 
         bt_mod.BOT_DIRECTION_FILTER = dir_filt
         bt_mod.BOT_PER_LEVEL_MAX_ENTRIES = per_level_caps
@@ -248,6 +254,7 @@ def simulate_day_v2(
         cfg.BOT_INCLUDE_VWAP = orig["cfg_vwap"]
         cfg.BOT_ENTRY_LIMIT_BUFFER_PTS = orig["cfg_buf"]
         cfg.BOT_COUNTER_TREND_VALLEY_FILTER = orig["cfg_ctv"]
+        cfg.BOT_MAX_SECS_SINCE_LAST_TRADE_THIS_DAY = orig["cfg_max_gap"]
 
         bt_mod.BOT_DIRECTION_FILTER = orig["bt_dir"]
         bt_mod.BOT_PER_LEVEL_MAX_ENTRIES = orig["bt_caps"]
@@ -258,5 +265,6 @@ def simulate_day_v2(
         bt_mod.BOT_INCLUDE_VWAP = orig["bt_vwap"]
         bt_mod.BOT_ENTRY_LIMIT_BUFFER_PTS = orig["bt_buf"]
         bt_mod.BOT_COUNTER_TREND_VALLEY_FILTER = orig["bt_ctv"]
+        bt_mod.BOT_MAX_SECS_SINCE_LAST_TRADE_THIS_DAY = orig["bt_max_gap"]
 
     return broker.trades
