@@ -48,6 +48,7 @@ def simulate_day_v2(
     fill_timeout_secs: float = 3.0,
     entry_limit_buffer_pts_override: float | None = None,
     counter_trend_valley_filter: tuple[float, float] | None = None,
+    gap_close: float | None = None,
 ) -> list[BacktestTradeRecord]:
     """Simulate one day using real BotTrader + BacktestBroker.
 
@@ -155,6 +156,11 @@ def simulate_day_v2(
         bot.update_fib_levels(fib_levels)
         interior_fibs = calculate_interior_fibs(dc.ibh, dc.ibl)
         bot.update_fib_levels(interior_fibs)
+        # Optional: add prior day's RTH close as a "gap" magnet level.
+        # Caller is responsible for ensuring per_level_ts and per_level_caps
+        # have entries for "GAP_PRIOR_CLOSE" before passing.
+        if gap_close is not None:
+            bot.update_fib_levels({"GAP_PRIOR_CLOSE": gap_close})
 
         # Compute VWAP availability
         has_vwap = include_vwap and hasattr(dc, "post_ib_vwaps") and dc.post_ib_vwaps is not None
