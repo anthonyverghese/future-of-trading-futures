@@ -47,6 +47,7 @@ def simulate_day_v2(
     latency_ms: float = 100.0,
     fill_timeout_secs: float = 3.0,
     entry_limit_buffer_pts_override: float | None = None,
+    counter_trend_valley_filter: tuple[float, float] | None = None,
 ) -> list[BacktestTradeRecord]:
     """Simulate one day using real BotTrader + BacktestBroker.
 
@@ -106,6 +107,7 @@ def simulate_day_v2(
         "cfg_ibl": cfg.BOT_INCLUDE_IBL,
         "cfg_vwap": cfg.BOT_INCLUDE_VWAP,
         "cfg_buf": cfg.BOT_ENTRY_LIMIT_BUFFER_PTS,
+        "cfg_ctv": cfg.BOT_COUNTER_TREND_VALLEY_FILTER,
         "bt_dir": bt_mod.BOT_DIRECTION_FILTER,
         "bt_caps": bt_mod.BOT_PER_LEVEL_MAX_ENTRIES,
         "bt_ts": bt_mod.BOT_PER_LEVEL_TS,
@@ -114,6 +116,7 @@ def simulate_day_v2(
         "bt_ibl": bt_mod.BOT_INCLUDE_IBL,
         "bt_vwap": bt_mod.BOT_INCLUDE_VWAP,
         "bt_buf": bt_mod.BOT_ENTRY_LIMIT_BUFFER_PTS,
+        "bt_ctv": bt_mod.BOT_COUNTER_TREND_VALLEY_FILTER,
     }
 
     try:
@@ -133,6 +136,9 @@ def simulate_day_v2(
         if entry_limit_buffer_pts_override is not None:
             cfg.BOT_ENTRY_LIMIT_BUFFER_PTS = entry_limit_buffer_pts_override
             bt_mod.BOT_ENTRY_LIMIT_BUFFER_PTS = entry_limit_buffer_pts_override
+        if counter_trend_valley_filter is not None:
+            cfg.BOT_COUNTER_TREND_VALLEY_FILTER = counter_trend_valley_filter
+            bt_mod.BOT_COUNTER_TREND_VALLEY_FILTER = counter_trend_valley_filter
 
         bt_mod.BOT_DIRECTION_FILTER = dir_filt
         bt_mod.BOT_PER_LEVEL_MAX_ENTRIES = per_level_caps
@@ -235,6 +241,7 @@ def simulate_day_v2(
         cfg.BOT_INCLUDE_IBL = orig["cfg_ibl"]
         cfg.BOT_INCLUDE_VWAP = orig["cfg_vwap"]
         cfg.BOT_ENTRY_LIMIT_BUFFER_PTS = orig["cfg_buf"]
+        cfg.BOT_COUNTER_TREND_VALLEY_FILTER = orig["cfg_ctv"]
 
         bt_mod.BOT_DIRECTION_FILTER = orig["bt_dir"]
         bt_mod.BOT_PER_LEVEL_MAX_ENTRIES = orig["bt_caps"]
@@ -244,5 +251,6 @@ def simulate_day_v2(
         bt_mod.BOT_INCLUDE_IBL = orig["bt_ibl"]
         bt_mod.BOT_INCLUDE_VWAP = orig["bt_vwap"]
         bt_mod.BOT_ENTRY_LIMIT_BUFFER_PTS = orig["bt_buf"]
+        bt_mod.BOT_COUNTER_TREND_VALLEY_FILTER = orig["bt_ctv"]
 
     return broker.trades

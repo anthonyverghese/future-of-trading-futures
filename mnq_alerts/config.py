@@ -104,6 +104,16 @@ BOT_MOMENTUM_THRESHOLD = 0.0  # Disabled (2026-05-04): hurts P&L -$1.74/day with
 # Was 5.0. Momentum filter blocked profitable trades more often than bad ones.
 BOT_MOMENTUM_LOOKBACK_MIN = 5  # Minutes to look back for momentum calculation
 BOT_FAILED_FILL_COOLDOWN_SECS = 60  # Per-level cooldown after limit order not filled
+# Counter-trend valley filter: skip trades where with_trend ∈ [lo, hi].
+# with_trend = -trend_60m for SELL, +trend_60m for BUY (positive means
+# direction agrees with 60m trend). The "valley" identified 2026-05-05:
+# moderate counter-trend trades [-30, -15] have negative $/tr in all 4
+# walk-forward quarters. Set to (-30, -15) to enable. Default off.
+BOT_COUNTER_TREND_VALLEY_FILTER: tuple[float, float] | None = None
+# Hybrid pre-filter: if set, skip zone entries where the human's
+# composite_score (from scoring.py) is below threshold. None = disabled.
+# 5 is the human's production threshold (82.5% WR at 5.6 alerts/day).
+BOT_HYBRID_MIN_COMPOSITE_SCORE: int | None = None
 BOT_FILL_TIMEOUT_SECS = 3.0  # How long to wait for entry limit to fill before cancelling
 # Entry limit buffer in pts. Limit price is line ± buffer (above for BUY,
 # below for SELL). Was target/2 (3-6pt across levels) which gave 99% fill

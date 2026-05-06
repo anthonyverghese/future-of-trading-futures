@@ -50,7 +50,10 @@ from config import (
     BOT_TARGET_POINTS,
     BOT_TREND_LOOKBACK_MIN,
     BOT_VOL_FILTER_MIN_RANGE_PCT,
+    BOT_COUNTER_TREND_VALLEY_FILTER,
+    BOT_HYBRID_MIN_COMPOSITE_SCORE,
 )
+from scoring import composite_score as _human_composite_score
 # SUPPRESSED_WINDOWS import removed — bot suppression disabled (2026-05-02).
 # Human app still uses it via alert_manager.py.
 
@@ -446,6 +449,46 @@ class BotTrader:
                 level_cap *= 2
             if level_trades >= level_cap:
                 continue
+
+            # Hybrid pre-filter: skip if the human-side composite_score
+            # is below threshold. The human's scoring is the production-
+            # validated alert quality system (5.6 alerts/day at 82.5% WR
+            # with score>=5, 318-day walk-forward). Memory says human
+            # weights don't transfer to bot at 1pt entry under no-slippage,
+            # but never tested under slippage modeling. Disabled by
+            # default — set BOT_HYBRID_MIN_COMPOSITE_SCORE to 5 (or
+            # other) to enable.
+            if BOT_HYBRID_MIN_COMPOSITE_SCORE is not None:
+                # Human's score uses session_move in pts; bot has pct.
+                session_move_pts = session_move_pct * price / 100.0
+                h_score = _human_composite_score(
+                    level_name=bz.name,
+                    entry_count=bz.entry_count + 1,
+                    now_et=now_et,
+                    tick_rate=tick_rate,
+                    session_move_pts=session_move_pts,
+                    direction=direction,
+                    consecutive_wins=0,  # bot doesn't track this; OK to leave 0
+                    consecutive_losses=self._broker._consecutive_losses,
+                )
+                if h_score < BOT_HYBRID_MIN_COMPOSITE_SCORE:
+                    continue
+
+            # Counter-trend valley filter: skip moderate-counter-trend
+            # trades where with_trend ∈ [lo, hi]. Walk-forward 4-quarter
+            # validation (2026-05-05) showed trades in this band have
+            # negative $/tr in all 4 quarters. Strong counter-trend
+            # (with_trend < lo) is profitable; this band is the
+            # "fakeout zone." Disabled by default — set
+            # BOT_COUNTER_TREND_VALLEY_FILTER = (lo, hi) to enable.
+            if BOT_COUNTER_TREND_VALLEY_FILTER is not None:
+                lo, hi = BOT_COUNTER_TREND_VALLEY_FILTER
+                if direction == "down":
+                    with_trend = -trend_60m
+                else:
+                    with_trend = trend_60m
+                if lo <= with_trend < hi:
+                    continue
 
             # Volatility filter: skip dead markets.
             if (
