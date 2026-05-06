@@ -1,0 +1,141 @@
+{
+  "generated_at": "2026-05-06T14:11:50.848147",
+  "description": "Pickle-based missed-filter hunt. Tests IB-range regime, hour-of-day fine buckets, and time-since-last-trade.",
+  "baseline_pnl_per_day": 19.94,
+  "filters_tested": {
+    "ib_range_regime": {
+      "verdict": "no signal",
+      "description": "small/medium/large IB days. All buckets positive (medium +1.07, large +1.27). No filter candidate.",
+      "data": {
+        "medium_40_80pt": {
+          "n": 166,
+          "pnl_per_tr": 1.07,
+          "wr_pct": 74.1
+        },
+        "large_ge_80pt": {
+          "n": 4998,
+          "pnl_per_tr": 1.27,
+          "wr_pct": 77.8
+        }
+      }
+    },
+    "hour_of_day_30min": {
+      "verdict": "no signal",
+      "description": "30-min UTC buckets across RTH. All buckets >= +0.32/tr, no negative buckets.",
+      "data": {
+        "10:30-11:00": {
+          "n": 1612,
+          "pnl_per_tr": 0.83,
+          "pnl_per_day": 4.12
+        },
+        "11:00-11:30": {
+          "n": 858,
+          "pnl_per_tr": 1.62,
+          "pnl_per_day": 4.26
+        },
+        "11:30-12:00": {
+          "n": 583,
+          "pnl_per_tr": 1.5,
+          "pnl_per_day": 2.69
+        },
+        "12:00-12:30": {
+          "n": 460,
+          "pnl_per_tr": 1.44,
+          "pnl_per_day": 2.03
+        },
+        "12:30-13:00": {
+          "n": 332,
+          "pnl_per_tr": 1.47,
+          "pnl_per_day": 1.5
+        },
+        "13:00-13:30": {
+          "n": 314,
+          "pnl_per_tr": 2.3,
+          "pnl_per_day": 2.21
+        },
+        "13:30-14:00": {
+          "n": 228,
+          "pnl_per_tr": 0.7,
+          "pnl_per_day": 0.49
+        },
+        "14:00-14:30": {
+          "n": 199,
+          "pnl_per_tr": 0.98,
+          "pnl_per_day": 0.6
+        },
+        "14:30-15:00": {
+          "n": 153,
+          "pnl_per_tr": 0.32,
+          "pnl_per_day": 0.15
+        },
+        "15:00-15:30": {
+          "n": 206,
+          "pnl_per_tr": 0.93,
+          "pnl_per_day": 0.59
+        },
+        "15:30-16:00": {
+          "n": 219,
+          "pnl_per_tr": 1.95,
+          "pnl_per_day": 1.31
+        }
+      }
+    },
+    "time_since_last_trade": {
+      "verdict": "CANDIDATE \u2014 3/4 quarters negative, Q4 strongly negative",
+      "description": "Trades >30min after prior trade-this-day are negative aggregate. Walk-forward: Q1 -0.04, Q2 +1.31, Q3 -1.48, Q4 -2.93.",
+      "data": {
+        "first_trade": {
+          "n": 326,
+          "pnl_per_tr": 2.73,
+          "wr_pct": 77.9
+        },
+        "lt_60s": {
+          "n": 1060,
+          "pnl_per_tr": 1.67,
+          "wr_pct": 79.8
+        },
+        "gap_60_300s": {
+          "n": 1637,
+          "pnl_per_tr": 0.97,
+          "wr_pct": 77.6
+        },
+        "gap_300_900s": {
+          "n": 1188,
+          "pnl_per_tr": 1.07,
+          "wr_pct": 77.3
+        },
+        "gap_900_1800s": {
+          "n": 465,
+          "pnl_per_tr": 2.72,
+          "wr_pct": 79.6
+        },
+        "gap_gt_1800s": {
+          "n": 488,
+          "pnl_per_tr": -0.58,
+          "wr_pct": 71.9,
+          "pnl_per_day_impact": -0.87,
+          "flag": true
+        }
+      },
+      "walk_forward_gt_1800s": {
+        "Q1": {
+          "n": 129,
+          "pnl_per_tr": -0.04
+        },
+        "Q2": {
+          "n": 149,
+          "pnl_per_tr": 1.31
+        },
+        "Q3": {
+          "n": 98,
+          "pnl_per_tr": -1.48
+        },
+        "Q4": {
+          "n": 112,
+          "pnl_per_tr": -2.93
+        }
+      },
+      "next_steps": "Real-sim required. Cap-budget effect could either dampen lift (filter frees slot for replacement trade) or amplify (replacement trade is profitable)."
+    }
+  }
+}
