@@ -1574,6 +1574,7 @@ class IBKRBroker:
                 f"— closing at market (bracket unreliable)",
                 flush=True,
             )
+            self._pending_exit_reason = "bracket_race_close"
             self._close_mnq_at_market(f"bot-{parent_id}-close")
             try:
                 # Give _on_order_status time to process the fill.
