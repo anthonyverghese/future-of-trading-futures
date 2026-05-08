@@ -95,8 +95,11 @@ def run_architecture_selection(
 
     results: dict = {"A": {"folds": []}, "B": {"folds": []}}
     for fold in folds:
-        train = dataset[dataset["event_ts"] <= fold.train_end].copy()
-        test = dataset[(dataset["event_ts"] >= fold.test_start) & (dataset["event_ts"] <= fold.test_end)].copy()
+        train = dataset[dataset["event_ts"].dt.date <= fold.train_end.date()].copy()
+        test = dataset[
+            (dataset["event_ts"].dt.date >= fold.test_start.date()) &
+            (dataset["event_ts"].dt.date <= fold.test_end.date())
+        ].copy()
         train_days = sorted(train["event_ts"].dt.date.unique())
         val_cutoff = train_days[-max(1, len(train_days) // 20)]
         val = train[train["event_ts"].dt.date >= val_cutoff].copy()
