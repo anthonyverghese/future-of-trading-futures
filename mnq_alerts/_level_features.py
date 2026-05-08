@@ -158,3 +158,33 @@ def compute_level_context(
     # is_post_IB: events only fire post-IB lock by Task 1, so always 1. Kept for forward-compat.
     feats["is_post_IB"] = 1
     return feats
+
+
+def compute_vol_time(ticks: pd.DataFrame, event_ts: pd.Timestamp) -> dict:
+    """Family 5 — volatility & time-of-day."""
+    feats: dict = {}
+    sub5 = _slice_window(ticks, event_ts, WINDOWS_SEC["5min"])
+    sub30 = _slice_window(ticks, event_ts, 1800)
+    if len(sub5) >= 2:
+        ret = sub5["price"].pct_change().dropna().to_numpy()
+        feats["realized_vol_5min"] = float(np.std(ret)) if len(ret) > 0 else 0.0
+    else:
+        feats["realized_vol_5min"] = 0.0
+    if len(sub30) >= 2:
+        ret = sub30["price"].pct_change().dropna().to_numpy()
+        feats["realized_vol_30min"] = float(np.std(ret)) if len(ret) > 0 else 0.0
+        feats["range_30min"] = float(sub30["price"].max() - sub30["price"].min())
+    else:
+        feats["realized_vol_30min"] = 0.0
+        feats["range_30min"] = 0.0
+
+    et = event_ts.tz_convert("America/New_York")
+    close = et.replace(hour=16, minute=0, second=0, microsecond=0)
+    feats["seconds_to_market_close"] = max(0.0, (close - et).total_seconds())
+    open_dt = et.replace(hour=9, minute=30, second=0, microsecond=0)
+    feats["seconds_into_session"] = (et - open_dt).total_seconds()
+
+    days = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+    for i, d in enumerate(days):
+        feats[f"day_of_week_{d}"] = 1 if et.weekday() == i else 0
+    return feats

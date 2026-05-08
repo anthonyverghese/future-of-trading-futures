@@ -210,3 +210,44 @@ def test_distance_to_vwap_excludes_vwap_from_other_levels():
     assert feats["distance_to_vwap"] == pytest.approx(1.0)
     # nearest other level (excluding self & VWAP) is FIB_0.236 at 95
     assert feats["distance_to_nearest_other_level"] == pytest.approx(5.0)
+
+
+from _level_features import compute_vol_time
+
+
+def test_realized_vol_5min_positive_for_volatile_data():
+    base = pd.Timestamp("2025-06-01 14:31:00", tz="UTC")
+    prices = [100.0 + (i % 2) * 2.0 for i in range(60)]  # alternates 100, 102
+    ticks = pd.DataFrame(
+        {"price": prices, "size": [1] * 60},
+        index=pd.DatetimeIndex([base + pd.Timedelta(seconds=s * 5) for s in range(60)]),
+    )
+    event_ts = ticks.index[-1]
+    feats = compute_vol_time(ticks, event_ts)
+    assert feats["realized_vol_5min"] > 0
+
+
+def test_seconds_to_market_close_correct():
+    # 3:55 PM ET → 5 min to 4:00 PM = 300 seconds.
+    et = pd.Timestamp("2025-06-02 15:55:00", tz="America/New_York")
+    event_ts = et.tz_convert("UTC")
+    base = event_ts - pd.Timedelta(minutes=10)
+    ticks = pd.DataFrame(
+        {"price": [100.0, 100.0], "size": [1, 1]},
+        index=pd.DatetimeIndex([base, event_ts]),
+    )
+    feats = compute_vol_time(ticks, event_ts)
+    assert feats["seconds_to_market_close"] == pytest.approx(300, abs=1)
+
+
+def test_day_of_week_one_hot():
+    et = pd.Timestamp("2025-06-02", tz="America/New_York")  # Monday
+    event_ts = et.tz_convert("UTC") + pd.Timedelta(hours=14, minutes=31)
+    base = event_ts - pd.Timedelta(minutes=5)
+    ticks = pd.DataFrame(
+        {"price": [100.0, 100.0], "size": [1, 1]},
+        index=pd.DatetimeIndex([base, event_ts]),
+    )
+    feats = compute_vol_time(ticks, event_ts)
+    assert feats["day_of_week_Mon"] == 1
+    assert feats["day_of_week_Tue"] == 0
