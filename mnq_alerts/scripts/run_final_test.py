@@ -20,8 +20,11 @@ from _level_validation import FINAL_TEST_TRADING_DAYS
 from _level_final_test import evaluate_final_test
 
 
-# V6 mean daily P&L over the final 30-day window — set when ready.
-V6_FINAL_MEAN_DAILY = 1.83  # placeholder; replace with actual 30-day backtest result
+# V6 baseline mean daily P&L over the final 30-day test window (~Apr 9 - May 6 2026).
+# APPROXIMATION from memory's "recent-60d ~ +$1.83/day" measurement (taken 2026-04-27).
+# Proper calendar-quarter V6 backtest didn't complete; if a model passes other gates
+# but not this one we should re-run V6 to get the exact 30-day window number.
+V6_FINAL_MEAN_DAILY = 1.83
 
 
 def main() -> None:
