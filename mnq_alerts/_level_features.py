@@ -90,3 +90,25 @@ def compute_aggressor(ticks: pd.DataFrame, event_ts: pd.Timestamp) -> dict:
     else:
         feats["net_dollar_flow_5min"] = 0.0
     return feats
+
+
+def compute_volume_profile(ticks: pd.DataFrame, event_ts: pd.Timestamp) -> dict:
+    """Family 3 — volume / size profile."""
+    feats: dict[str, float] = {}
+    for win in ("5s", "30s", "5min"):
+        sub = _slice_window(ticks, event_ts, WINDOWS_SEC[win])
+        feats[f"volume_{win}"] = float(sub["size"].sum()) if not sub.empty else 0.0
+
+    sub30 = _slice_window(ticks, event_ts, WINDOWS_SEC["30s"])
+    if not sub30.empty:
+        sec = max(1.0, (sub30.index[-1] - sub30.index[0]).total_seconds())
+        feats["trade_rate_30s"] = len(sub30) / sec
+        feats["max_print_size_30s"] = float(sub30["size"].max())
+        sizes = sub30["size"].to_numpy().astype(float)
+        total = float(sizes.sum())
+        feats["volume_concentration_30s"] = float((sizes ** 2).sum() / (total ** 2)) if total > 0 else 0.0
+    else:
+        feats["trade_rate_30s"] = 0.0
+        feats["max_print_size_30s"] = 0.0
+        feats["volume_concentration_30s"] = 0.0
+    return feats

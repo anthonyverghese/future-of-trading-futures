@@ -108,3 +108,53 @@ def test_net_dollar_flow_5min_signed():
     feats = compute_aggressor(ticks, event_ts)
     # 2 upticks of 10 contracts each at price 100.5 and 101.0 → positive net flow
     assert feats["net_dollar_flow_5min"] > 0
+
+
+from _level_features import compute_volume_profile
+
+
+def test_volume_5s_sums_size():
+    base = pd.Timestamp("2025-06-01 14:31:00", tz="UTC")
+    ticks = pd.DataFrame(
+        {"price": [100.0, 100.0, 100.0], "size": [3, 5, 7]},
+        index=pd.DatetimeIndex([base + pd.Timedelta(seconds=s) for s in (0, 1, 2)]),
+    )
+    event_ts = ticks.index[-1]
+    feats = compute_volume_profile(ticks, event_ts)
+    assert feats["volume_5s"] == 15
+
+
+def test_max_print_size_30s():
+    base = pd.Timestamp("2025-06-01 14:31:00", tz="UTC")
+    ticks = pd.DataFrame(
+        {"price": [100.0] * 4, "size": [1, 50, 1, 1]},
+        index=pd.DatetimeIndex([base + pd.Timedelta(seconds=s) for s in (0, 5, 10, 15)]),
+    )
+    event_ts = ticks.index[-1]
+    feats = compute_volume_profile(ticks, event_ts)
+    assert feats["max_print_size_30s"] == 50
+
+
+def test_volume_concentration_high_when_one_big_print():
+    base = pd.Timestamp("2025-06-01 14:31:00", tz="UTC")
+    # 99 of size 1, 1 of size 100. Herfindahl ≈ (100^2) / (199^2) ≈ 0.252
+    sizes = [1] * 99 + [100]
+    ticks = pd.DataFrame(
+        {"price": [100.0] * 100, "size": sizes},
+        index=pd.DatetimeIndex([base + pd.Timedelta(seconds=s * 0.1) for s in range(100)]),
+    )
+    event_ts = ticks.index[-1]
+    feats = compute_volume_profile(ticks, event_ts)
+    assert feats["volume_concentration_30s"] > 0.2
+
+
+def test_volume_concentration_low_when_uniform():
+    base = pd.Timestamp("2025-06-01 14:31:00", tz="UTC")
+    ticks = pd.DataFrame(
+        {"price": [100.0] * 30, "size": [1] * 30},
+        index=pd.DatetimeIndex([base + pd.Timedelta(seconds=s) for s in range(30)]),
+    )
+    event_ts = ticks.index[-1]
+    feats = compute_volume_profile(ticks, event_ts)
+    # 30 trades of size 1 → Herfindahl = 30 / 900 = 0.0333
+    assert feats["volume_concentration_30s"] < 0.05
