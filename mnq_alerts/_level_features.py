@@ -188,3 +188,30 @@ def compute_vol_time(ticks: pd.DataFrame, event_ts: pd.Timestamp) -> dict:
     for i, d in enumerate(days):
         feats[f"day_of_week_{d}"] = 1 if et.weekday() == i else 0
     return feats
+
+
+def compute_all_features(
+    *,
+    ticks: pd.DataFrame,
+    event_ts: pd.Timestamp,
+    event_price: float,
+    level_name: str,
+    level_price: float,
+    approach_direction: int,
+    prior_touches: list[dict],
+    all_levels: dict[str, float],
+) -> dict:
+    """Compute all feature families for one event. Output is a flat dict.
+
+    ALL features are derivable strictly from `ticks.loc[ticks.index <= event_ts]`
+    and `prior_touches` filtered to resolution_ts <= event_ts.
+    """
+    # Defensive: ensure ticks slice doesn't include future.
+    ticks_safe = ticks.loc[ticks.index <= event_ts]
+    feats: dict = {}
+    feats.update(compute_kinematics(ticks_safe, event_ts))
+    feats.update(compute_aggressor(ticks_safe, event_ts))
+    feats.update(compute_volume_profile(ticks_safe, event_ts))
+    feats.update(compute_level_context(prior_touches, all_levels, event_ts, event_price, level_name))
+    feats.update(compute_vol_time(ticks_safe, event_ts))
+    return feats
