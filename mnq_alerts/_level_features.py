@@ -44,3 +44,49 @@ def compute_kinematics(ticks: pd.DataFrame, event_ts: pd.Timestamp) -> dict:
     else:
         feats["path_efficiency_5min"] = 0.0
     return feats
+
+
+def _classify_aggressor(prices: np.ndarray) -> np.ndarray:
+    """Tick-rule classification. Returns array of +1 (buy), -1 (sell), 0 (neutral).
+
+    Zero-tick inherits prior non-zero side. First tick is neutral.
+    """
+    n = len(prices)
+    side = np.zeros(n, dtype=int)
+    last = 0
+    for i in range(1, n):
+        if prices[i] > prices[i - 1]:
+            last = 1
+        elif prices[i] < prices[i - 1]:
+            last = -1
+        side[i] = last
+    return side
+
+
+def compute_aggressor(ticks: pd.DataFrame, event_ts: pd.Timestamp) -> dict:
+    """Family 2 — tick-rule aggressor balance and net dollar flow."""
+    feats: dict[str, float] = {}
+    for win, sec in WINDOWS_SEC.items():
+        if win not in ("5s", "30s", "5min"):
+            continue
+        sub = _slice_window(ticks, event_ts, sec)
+        if len(sub) < 2:
+            feats[f"aggressor_balance_{win}"] = 0.0
+            continue
+        prices = sub["price"].to_numpy()
+        sizes = sub["size"].to_numpy()
+        side = _classify_aggressor(prices)
+        classified = side != 0
+        total = float(sizes[classified].sum())
+        signed = float((sizes * side).sum())
+        feats[f"aggressor_balance_{win}"] = signed / total if total > 0 else 0.0
+
+    sub5 = _slice_window(ticks, event_ts, WINDOWS_SEC["5min"])
+    if len(sub5) >= 2:
+        prices = sub5["price"].to_numpy()
+        sizes = sub5["size"].to_numpy()
+        side = _classify_aggressor(prices)
+        feats["net_dollar_flow_5min"] = float((prices * sizes * side).sum())
+    else:
+        feats["net_dollar_flow_5min"] = 0.0
+    return feats

@@ -57,3 +57,54 @@ def test_no_future_data_used():
     feats = compute_kinematics(ticks, event_ts)
     # If we leaked the 10s tick, velocity_5s would skew toward 200.
     assert abs(feats["velocity_5s"] - 2.0) < 1e-9
+
+
+from _level_features import compute_aggressor
+
+
+def test_aggressor_balance_buy_dominant():
+    # All upticks → buy_aggressor; balance = +1
+    base = pd.Timestamp("2025-06-01 14:31:00", tz="UTC")
+    ticks = pd.DataFrame(
+        {"price": [100.0, 100.5, 101.0, 101.5], "size": [1, 1, 1, 1]},
+        index=pd.DatetimeIndex([base + pd.Timedelta(seconds=s) for s in (0, 1, 2, 3)]),
+    )
+    event_ts = ticks.index[-1]
+    feats = compute_aggressor(ticks, event_ts)
+    assert feats["aggressor_balance_5s"] == pytest.approx(1.0)
+
+
+def test_aggressor_balance_sell_dominant():
+    base = pd.Timestamp("2025-06-01 14:31:00", tz="UTC")
+    ticks = pd.DataFrame(
+        {"price": [101.5, 101.0, 100.5, 100.0], "size": [1, 1, 1, 1]},
+        index=pd.DatetimeIndex([base + pd.Timedelta(seconds=s) for s in (0, 1, 2, 3)]),
+    )
+    event_ts = ticks.index[-1]
+    feats = compute_aggressor(ticks, event_ts)
+    assert feats["aggressor_balance_5s"] == pytest.approx(-1.0)
+
+
+def test_aggressor_zero_tick_inherits_prior_side():
+    # First uptick (buy), then zero-tick (inherits buy), then zero-tick (inherits buy)
+    base = pd.Timestamp("2025-06-01 14:31:00", tz="UTC")
+    ticks = pd.DataFrame(
+        {"price": [100.0, 100.5, 100.5, 100.5], "size": [1, 1, 1, 1]},
+        index=pd.DatetimeIndex([base + pd.Timedelta(seconds=s) for s in (0, 1, 2, 3)]),
+    )
+    event_ts = ticks.index[-1]
+    feats = compute_aggressor(ticks, event_ts)
+    # 3 buys (uptick + 2 inherited), 0 sells, first tick is neutral by convention
+    assert feats["aggressor_balance_5s"] > 0.5
+
+
+def test_net_dollar_flow_5min_signed():
+    base = pd.Timestamp("2025-06-01 14:31:00", tz="UTC")
+    ticks = pd.DataFrame(
+        {"price": [100.0, 100.5, 101.0], "size": [10, 10, 10]},
+        index=pd.DatetimeIndex([base + pd.Timedelta(seconds=s) for s in (0, 60, 120)]),
+    )
+    event_ts = ticks.index[-1]
+    feats = compute_aggressor(ticks, event_ts)
+    # 2 upticks of 10 contracts each at price 100.5 and 101.0 → positive net flow
+    assert feats["net_dollar_flow_5min"] > 0
