@@ -158,3 +158,55 @@ def test_volume_concentration_low_when_uniform():
     feats = compute_volume_profile(ticks, event_ts)
     # 30 trades of size 1 → Herfindahl = 30 / 900 = 0.0333
     assert feats["volume_concentration_30s"] < 0.05
+
+
+from _level_features import compute_level_context
+
+
+def test_touches_today_zero_for_first():
+    feats = compute_level_context(
+        prior_touches=[],
+        all_levels={"FIB_0.618": 100.0, "VWAP": 99.0, "FIB_0.236": 95.0},
+        event_ts=pd.Timestamp("2025-06-01 14:31:00", tz="UTC"),
+        event_price=100.0,
+        level_name="FIB_0.618",
+    )
+    assert feats["touches_today"] == 0
+    assert feats["prior_touch_outcome"] == "none"
+
+
+def test_prior_touch_outcome_only_uses_resolved():
+    """Critical leakage protection — prior touch with resolution_ts > event_ts
+    must NOT contribute to prior_touch_outcome."""
+    base = pd.Timestamp("2025-06-01 14:31:00", tz="UTC")
+    prior_touches = [
+        # Touch at 14:31:00, resolved at 14:46:00 (15min later) — resolved BEFORE current event.
+        {"event_ts": base, "resolution_ts": base + pd.Timedelta(minutes=15), "outcome": "bounce_held"},
+        # Touch at 14:50:00, resolution at 15:05:00 — UNRESOLVED relative to current event at 14:55.
+        {"event_ts": base + pd.Timedelta(minutes=19), "resolution_ts": base + pd.Timedelta(minutes=34), "outcome": "breakthrough_held"},
+    ]
+    event_ts = base + pd.Timedelta(minutes=24)  # 14:55
+    feats = compute_level_context(
+        prior_touches=prior_touches,
+        all_levels={"FIB_0.618": 100.0, "VWAP": 99.0},
+        event_ts=event_ts,
+        event_price=100.0,
+        level_name="FIB_0.618",
+    )
+    # The unresolved second touch must NOT influence prior_touch_outcome.
+    assert feats["prior_touch_outcome"] == "bounce_held"
+    # touches_today counts touches whose event_ts < current event_ts (regardless of resolution).
+    assert feats["touches_today"] == 2
+
+
+def test_distance_to_vwap_excludes_vwap_from_other_levels():
+    feats = compute_level_context(
+        prior_touches=[],
+        all_levels={"FIB_0.618": 100.0, "VWAP": 99.0, "FIB_0.236": 95.0},
+        event_ts=pd.Timestamp("2025-06-01 14:31:00", tz="UTC"),
+        event_price=100.0,
+        level_name="FIB_0.618",
+    )
+    assert feats["distance_to_vwap"] == pytest.approx(1.0)
+    # nearest other level (excluding self & VWAP) is FIB_0.236 at 95
+    assert feats["distance_to_nearest_other_level"] == pytest.approx(5.0)

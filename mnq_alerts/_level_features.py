@@ -112,3 +112,49 @@ def compute_volume_profile(ticks: pd.DataFrame, event_ts: pd.Timestamp) -> dict:
         feats["max_print_size_30s"] = 0.0
         feats["volume_concentration_30s"] = 0.0
     return feats
+
+
+def compute_level_context(
+    prior_touches: list[dict],
+    all_levels: dict[str, float],
+    event_ts: pd.Timestamp,
+    event_price: float,
+    level_name: str,
+) -> dict:
+    """Family 4 — level context.
+
+    `prior_touches` is the list of all touches at THIS level earlier in the day,
+    each with keys: event_ts, resolution_ts, outcome (string).
+
+    `all_levels` maps level_name -> price for ALL levels in the session
+    (including VWAP, used only as a distance reference).
+    """
+    feats: dict = {}
+
+    # touches_today: count touches at this level with event_ts < current event_ts.
+    earlier = [t for t in prior_touches if t["event_ts"] < event_ts]
+    feats["touches_today"] = len(earlier)
+
+    # prior_touch_outcome: outcome of the most-recent touch that is RESOLVED.
+    resolved = [t for t in earlier if t["resolution_ts"] <= event_ts]
+    if resolved:
+        last_resolved = max(resolved, key=lambda t: t["event_ts"])
+        feats["prior_touch_outcome"] = last_resolved["outcome"]
+        feats["seconds_since_last_touch"] = (event_ts - last_resolved["event_ts"]).total_seconds()
+    else:
+        feats["prior_touch_outcome"] = "none"
+        feats["seconds_since_last_touch"] = -1.0
+
+    # distance_to_vwap (signed: event_price - vwap_price).
+    feats["distance_to_vwap"] = float(event_price - all_levels.get("VWAP", event_price))
+
+    # distance_to_nearest_other_level (excluding self AND VWAP).
+    others = [p for n, p in all_levels.items() if n != level_name and n != "VWAP"]
+    if others:
+        feats["distance_to_nearest_other_level"] = min(abs(event_price - p) for p in others)
+    else:
+        feats["distance_to_nearest_other_level"] = 0.0
+
+    # is_post_IB: events only fire post-IB lock by Task 1, so always 1. Kept for forward-compat.
+    feats["is_post_IB"] = 1
+    return feats
