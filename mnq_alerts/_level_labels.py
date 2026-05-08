@@ -30,6 +30,12 @@ def label_events(events: pd.DataFrame, ticks: pd.DataFrame) -> pd.DataFrame:
     if events.empty:
         return _empty_labels()
 
+    if ticks.index.tz is None:
+        raise ValueError("ticks must have a tz-aware DatetimeIndex")
+    first_ts = events["event_ts"].iloc[0]
+    if getattr(first_ts, "tzinfo", None) is None:
+        raise ValueError("event_ts values must be tz-aware")
+
     prices = ticks["price"].to_numpy()
     # Keep as DatetimeIndex to preserve timezone info for tz-aware searchsorted comparisons.
     times_idx = ticks.index
