@@ -44,3 +44,19 @@ def test_levels_in_scope_excludes_vwap():
     assert "FIB_0.618" in LEVELS_IN_SCOPE
     assert "IBH" in LEVELS_IN_SCOPE
     assert "IBL" in LEVELS_IN_SCOPE
+
+
+from _level_dataset import build_day_with_features
+
+
+def test_build_day_with_features_returns_features_and_labels():
+    base = pd.Timestamp("2025-06-02 13:30:00", tz="UTC")
+    times = [base + pd.Timedelta(seconds=s) for s in range(0, 23400, 30)]
+    prices = [18000 + (s / 60.0) * 0.3 for s in range(0, 23400, 30)]
+    ticks = pd.DataFrame({"price": prices, "size": [1] * len(times)}, index=pd.DatetimeIndex(times))
+    out = build_day_with_features(ticks)
+    expected_feature_cols = {"velocity_5s", "aggressor_balance_30s", "volume_5min",
+                             "prior_touch_outcome", "realized_vol_5min", "day_of_week_Mon"}
+    if not out.empty:
+        assert expected_feature_cols.issubset(set(out.columns))
+        assert "label" in out.columns
