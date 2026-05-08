@@ -37,6 +37,9 @@ def extract_events(ticks: pd.DataFrame, levels: dict[str, float]) -> pd.DataFram
     if ticks.empty or not levels:
         return _empty_events()
 
+    if ticks.index.tz is None:
+        raise ValueError("ticks must have a tz-aware DatetimeIndex")
+
     prices = ticks["price"].to_numpy()
     times = ticks.index.to_numpy()
     times_pd = ticks.index
@@ -49,7 +52,7 @@ def extract_events(ticks: pd.DataFrame, levels: dict[str, float]) -> pd.DataFram
     out_rows = []
     for i in range(len(ticks)):
         t = times_pd[i]
-        t_et = t.tz_convert(ET) if t.tzinfo else t.replace(tzinfo=ET)
+        t_et = t.tz_convert(ET)
         if t_et.hour < IB_LOCK_HOUR or (t_et.hour == IB_LOCK_HOUR and t_et.minute < IB_LOCK_MINUTE):
             continue
         # Initial arming: each level arms exactly once, at its first eligible tick.

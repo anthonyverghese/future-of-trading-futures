@@ -77,3 +77,12 @@ def test_approach_direction_from_above():
     ticks = _make_ticks([(0, 105.0), (60, 100.5)])
     events = extract_events(ticks, levels)
     assert events.iloc[0]["approach_direction"] == -1
+
+
+def test_raises_on_naive_index():
+    levels = {"FIB_0.618": 100.0}
+    base = pd.Timestamp("2025-06-01 14:31:00")  # no tz
+    idx = pd.DatetimeIndex([base, base + pd.Timedelta(seconds=60)])
+    ticks = pd.DataFrame({"price": [100.5, 100.5], "size": [1, 1]}, index=idx)
+    with pytest.raises(ValueError, match="tz-aware"):
+        extract_events(ticks, levels)
