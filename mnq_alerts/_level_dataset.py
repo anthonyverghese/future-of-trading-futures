@@ -128,15 +128,27 @@ def build_full_history(parquet_dir: str, out_path: str) -> int:
     """
     import os
     import glob
+    import time
     files = sorted(glob.glob(os.path.join(parquet_dir, "MNQ_*.parquet")))
     frames = []
-    for f in files:
-        ticks = pd.read_parquet(f)
-        if not ticks.index.tz:
-            ticks.index = ticks.index.tz_localize("UTC")
-        day = build_day_with_features(ticks)
-        if not day.empty:
-            frames.append(day)
+    t_start = time.time()
+    for i, f in enumerate(files, 1):
+        try:
+            ticks = pd.read_parquet(f)
+            if not ticks.index.tz:
+                ticks.index = ticks.index.tz_localize("UTC")
+            day = build_day_with_features(ticks)
+            if not day.empty:
+                frames.append(day)
+            if i % 10 == 0 or i == len(files):
+                elapsed = time.time() - t_start
+                rate = i / elapsed if elapsed > 0 else 0
+                eta = (len(files) - i) / rate if rate > 0 else 0
+                rows = sum(len(d) for d in frames)
+                print(f"[{i}/{len(files)}] {os.path.basename(f)} | {rows} rows | {elapsed:.0f}s elapsed | ETA {eta:.0f}s", flush=True)
+        except Exception as e:
+            print(f"[skip] {os.path.basename(f)}: {e}", flush=True)
+            continue
     if not frames:
         return 0
     full = pd.concat(frames, ignore_index=True)
