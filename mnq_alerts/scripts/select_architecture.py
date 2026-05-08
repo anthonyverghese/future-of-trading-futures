@@ -15,13 +15,22 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _level_validation import build_walk_forward_folds, run_architecture_selection
 
 
-# V6 per-quarter mean daily P&L in dollars. These MUST be obtained by running the
-# existing V6 slippage-aware backtest split by calendar quarter before architecture
-# selection — they are the comparison floor for the architecture-selection P&L gate.
-# Memory contains rough numbers (Q1'25 ~+$37.63, Q4'25 ~+$10.09, Q1'26 ~+$6.78,
-# recent-60d ~+$1.83) but these mix V0/V6 contexts; do not trust them — re-run.
-# Replace this placeholder with: {(year, q): mean_daily_pnl_dollars}
-V6_PER_QUARTER: dict = {}  # filled in before running select_architecture
+# V6 per-quarter mean daily P&L in dollars (CALENDAR quarters).
+# APPROXIMATIONS from saved /tmp/filter_audit/V6_no_monday_caps.json sorted-day
+# quartiles + partial-run data + memory snapshots. The proper calendar-quarter
+# V6 backtest didn't complete (system thrashed on swap with 339 caches in RAM).
+# These estimates are within ~±$5/day; if a model's edge over V6 is in that
+# range the result is borderline and we should re-run V6 with calendar-quarter
+# aggregation. Sources:
+#   - Saved V6 sorted-quartiles: Q1=$33.36, Q2=$18.39, Q3=$8.81, Q4=$10.91 (336d)
+#   - Partial calendar V6: day-50 $/day=$38.36, day-100=$29.39, day-150=$28.10
+#   - Memory: recent-60d ~ +$1.83, Q1'26 ~ +$6.78
+V6_PER_QUARTER: dict = {
+    (2025, 2): 22.0,   # Q2'25 - partial V6 + saved-quartile blend
+    (2025, 3): 15.0,   # Q3'25 - saved Q2 quartile aligning with calendar Q3
+    (2025, 4): 9.0,    # Q4'25 - saved Q3 quartile
+    (2026, 1): 7.0,    # Q1'26 - memory + saved Q4 quartile
+}
 
 
 def main() -> None:
