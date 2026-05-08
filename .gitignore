@@ -12,3 +12,5 @@ mnq_alerts/data_cache/
 mnq_alerts/streak_outcomes.json
 mnq_alerts/backtest/.array_cache/
 mnq_alerts/backtest/results/*.pkl
+
+.worktrees/
