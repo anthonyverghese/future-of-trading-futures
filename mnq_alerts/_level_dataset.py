@@ -82,26 +82,34 @@ def build_day_with_features(ticks: pd.DataFrame) -> pd.DataFrame:
         outcome=lambda d: d.apply(_outcome_label, axis=1),
     )
 
-    feature_rows = []
-    for _, row in labels.iterrows():
-        # Find prior touches at same level whose event_ts < this event_ts.
-        same_level = label_index[
-            (label_index["level_name"] == row["level_name"]) &
-            (label_index["event_ts"] < row["event_ts"]) &
-            (label_index["direction"] == "bounce") &  # one outcome per touch
-            (label_index["tp"] == 8) & (label_index["sl"] == 25)
+    # Features depend only on (event_ts, level_name, ...) — identical across all 8
+    # (direction, tp, sl) label rows for the same event. Compute features once per
+    # event, then merge onto the 8 label rows. ~8x speedup over per-label-row recompute.
+    canonical = label_index[
+        (label_index["direction"] == "bounce") &
+        (label_index["tp"] == 8) & (label_index["sl"] == 25)
+    ]
+    feats_per_event: dict = {}
+    for _, ev in canonical.iterrows():
+        same_level_prior = canonical[
+            (canonical["level_name"] == ev["level_name"]) &
+            (canonical["event_ts"] < ev["event_ts"])
         ]
         prior_touches = [
             {"event_ts": t.event_ts, "resolution_ts": t.resolution_ts, "outcome": t.outcome}
-            for t in same_level.itertuples()
+            for t in same_level_prior.itertuples()
         ]
-        feats = compute_all_features(
-            ticks=ticks, event_ts=row["event_ts"], event_price=float(row["event_price"]),
-            level_name=row["level_name"], level_price=float(row["level_price"]),
-            approach_direction=int(row["approach_direction"]),
+        feats_per_event[(ev["event_ts"], ev["level_name"])] = compute_all_features(
+            ticks=ticks, event_ts=ev["event_ts"], event_price=float(ev["event_price"]),
+            level_name=ev["level_name"], level_price=float(ev["level_price"]),
+            approach_direction=int(ev["approach_direction"]),
             prior_touches=prior_touches,
             all_levels=levels,
         )
+
+    feature_rows = []
+    for _, row in labels.iterrows():
+        feats = feats_per_event[(row["event_ts"], row["level_name"])]
         feature_rows.append({**row.to_dict(), **feats})
     return pd.DataFrame(feature_rows)
 
