@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 pytest.importorskip("lightgbm")
 from _level_model import train_architecture_a, predict_architecture_a, FEATURE_COLUMNS
+from _level_model import train_architecture_b, predict_architecture_b
 
 
 def _synthetic_dataset(n=6000, seed=0):
@@ -56,6 +57,22 @@ def test_predict_architecture_a_returns_probability_per_variant():
     test_event = df.iloc[5400].to_dict()
     preds = predict_architecture_a(models, test_event)
     # 8 variants per event: 2 directions × 2 tps × 2 sls.
+    assert len(preds) == 8
+    for p in preds.values():
+        assert 0 <= p <= 1
+
+
+def test_train_architecture_b_returns_single_model():
+    df = _synthetic_dataset()
+    model = train_architecture_b(df.iloc[:4500], val=df.iloc[4500:5400])
+    assert model is not None
+
+
+def test_predict_architecture_b_returns_8_variants_per_event():
+    df = _synthetic_dataset()
+    model = train_architecture_b(df.iloc[:4500], val=df.iloc[4500:5400])
+    test_event = df.iloc[5400].to_dict()
+    preds = predict_architecture_b(model, test_event)
     assert len(preds) == 8
     for p in preds.values():
         assert 0 <= p <= 1

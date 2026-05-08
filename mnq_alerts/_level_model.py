@@ -123,3 +123,57 @@ def save_models(models: dict, dir_path: str) -> None:
     for key, m in models.items():
         fn = "_".join(str(k) for k in key) + ".joblib"
         joblib.dump(m, os.path.join(dir_path, fn))
+
+
+LEVEL_ID_MAP = {
+    "IBH": 0, "IBL": 1, "FIB_0.236": 2, "FIB_0.618": 3, "FIB_0.764": 4,
+    "FIB_EXT_HI_1.272": 5, "FIB_EXT_LO_1.272": 6,
+}
+DIRECTION_ID_MAP = {"bounce": 0, "breakthrough": 1}
+
+
+def _add_conditioning(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["level_id"] = df["level_name"].map(LEVEL_ID_MAP).astype(int)
+    df["direction_id"] = df["direction"].map(DIRECTION_ID_MAP).astype(int)
+    return df
+
+
+def train_architecture_b(
+    train: pd.DataFrame, val: pd.DataFrame,
+) -> lgb.LGBMClassifier:
+    train = _add_conditioning(_encode_categoricals(train))
+    val = _add_conditioning(_encode_categoricals(val))
+    feat_cols = FEATURE_COLUMNS + CATEGORICAL_FEATURES + CONDITIONING_FEATURES
+    X_train, y_train = train[feat_cols], train["label"].astype(int)
+    X_val, y_val = val[feat_cols], val["label"].astype(int)
+    model = lgb.LGBMClassifier(**LGBM_PARAMS)
+    model.fit(
+        X_train, y_train, eval_set=[(X_val, y_val)],
+        callbacks=[lgb.early_stopping(50, verbose=False)],
+        categorical_feature=CATEGORICAL_FEATURES + ["level_id", "direction_id"],
+    )
+    return model
+
+
+def predict_architecture_b(
+    model: lgb.LGBMClassifier, event: dict,
+) -> dict[tuple, float]:
+    """Query 8 variants for this event by replicating the row with each conditioning."""
+    feat_cols = FEATURE_COLUMNS + CATEGORICAL_FEATURES + CONDITIONING_FEATURES
+    rows = []
+    keys = []
+    for direction in ("bounce", "breakthrough"):
+        for tp, sl in [(8, 25), (8, 20), (10, 25), (10, 20)]:
+            r = {c: event.get(c) for c in FEATURE_COLUMNS + CATEGORICAL_FEATURES}
+            r["level_id"] = LEVEL_ID_MAP[event["level_name"]]
+            r["direction_id"] = DIRECTION_ID_MAP[direction]
+            r["tp"] = tp
+            r["sl"] = sl
+            rows.append(r)
+            keys.append((direction, tp, sl))
+    df = pd.DataFrame(rows)
+    if "prior_touch_outcome" in df.columns:
+        df["prior_touch_outcome"] = df["prior_touch_outcome"].astype("category")
+    probs = model.predict_proba(df[feat_cols])[:, 1]
+    return dict(zip(keys, probs.astype(float)))
