@@ -1,0 +1,84 @@
+{
+  "filter_name": "V_MULTI",
+  "filter_description": "Secondary gate on top of bot's existing trigger logic. When BOT_FILTER_ENABLED=True in config.py, a trade is taken only if (a) human composite_score >= 5 at the 7pt-zone-entry moment, AND (b) all 3 LightGBM models below agree that expected_pnl > 0 at their respective TP/SL geometry. The bot's own per-level TP/SL config (BOT_PER_LEVEL_TS) still controls the actual bracket placed; the models are used purely as quality gates.",
+  "trained_at": "2026-05-12T00:09:46.419129",
+  "dataset": "_events_augmented_v4.parquet (62,403 events offline-labeled; trained universe restricts to human_score >= 5 and lunch-suppression off = 10,185 events)",
+  "universe_size": 10185,
+  "deployment": {
+    "config_flag": "config.BOT_FILTER_ENABLED",
+    "model_dir": "config.BOT_FILTER_MODEL_DIR (defaults to mnq_alerts/_bot_filter_models/)",
+    "integration_point": "mnq_alerts/bot_trader.py BotTrader._process_zone_entries(), after all existing filters (direction, momentum, caps, hybrid, counter-trend, stale-approach, vol, bot_entry_score) and before broker.can_trade()",
+    "reversibility": "Set BOT_FILTER_ENABLED=False and restart the bot. The filter call is wrapped in a conditional; when False, NO state is maintained (tick buffer, per-direction counter, etc. all dormant) and behavior is byte-for-byte identical to pre-filter bot.",
+    "tick_buffer_size": "rolling 15 minutes; trimmed on every tick",
+    "decision_latency_ms": "estimated 3-5ms per decision (feature compute + 3 LGBM predicts). Negligible vs IBKR's 50-200ms order round-trip.",
+    "fail_open": "If feature compute or model predict raises an exception, the filter returns take=True with reason='error'. This keeps the bot functioning if the filter has a bug; review broker logs for '[bot_filter]' lines to detect."
+  },
+  "backtest_results": {
+    "out_of_time_window": "2026-03-24 to 2026-05-06 (30 trading days, 955 candidate events never seen in training)",
+    "baseline_human_alone": {
+      "trades": 304, "wins": 217, "losses": 87, "wr": 0.714,
+      "total_pnl_dollars": -385.0, "daily_pnl_dollars": -13.27, "max_dd_dollars": 503
+    },
+    "v_multi_filtered": {
+      "trades": 182, "wins": 141, "losses": 41, "wr": 0.775,
+      "total_pnl_dollars": 390.0, "daily_pnl_dollars": 13.46, "max_dd_dollars": 185
+    },
+    "improvement": {
+      "delta_daily_pnl": 26.73,
+      "delta_max_dd": -318,
+      "wr_lift_pp": 6.1,
+      "take_rate": 0.599
+    },
+    "caveat": "Baseline in this dataset is negative because the reconstructed human_score uses approximated test_count (1pt-zone counts vs 7pt-zone counts in live) and resolution-order leak-safe streak vs live's sequential streak. Live human alerts in the same period had ~84.7% WR (positive P&L). The FILTER'S +$26.73/day improvement should compound onto whatever the live human-style base actually produces."
+  },
+  "walk_forward_results": {
+    "folds": "Q2'25, Q3'25, Q4'25, Q1'26 (rolling 90-day train window, 1-day embargo)",
+    "improvement_over_base_per_fold": {
+      "Q2_2025": 3.97,
+      "Q3_2025": -4.06,
+      "Q4_2025": 23.66,
+      "Q1_2026": 16.38
+    },
+    "avg_daily_improvement": 9.98,
+    "max_dd_per_fold": {
+      "base_max": 1276,
+      "v_multi_max": 907
+    },
+    "folds_beat_base": "3 of 4 (Q3'25 the underperformer)"
+  },
+  "models": {
+    "model_8_20.joblib": {
+      "label_col": "label_b_8_20",
+      "tp": 8, "sl": 20, "be": 0.7143,
+      "train_n": 9167, "val_n": 1018,
+      "val_wr_overall": 0.6935,
+      "val_wr_when_taken": 0.7735,
+      "val_take_rate": 0.4077
+    },
+    "model_8_25.joblib": {
+      "label_col": "label_b_8_25",
+      "tp": 8, "sl": 25, "be": 0.7576,
+      "train_n": 9167, "val_n": 1018,
+      "val_wr_overall": 0.7308,
+      "val_wr_when_taken": 0.7794,
+      "val_take_rate": 0.3919
+    },
+    "model_10_20.joblib": {
+      "label_col": "label_b_10_20",
+      "tp": 10, "sl": 20, "be": 0.6667,
+      "train_n": 9167, "val_n": 1018,
+      "val_wr_overall": 0.6532,
+      "val_wr_when_taken": 0.7377,
+      "val_take_rate": 0.4008
+    }
+  },
+  "model_hyperparams": {
+    "num_leaves": 15, "max_depth": 4, "min_data_in_leaf": 30,
+    "learning_rate": 0.05, "n_estimators": 300, "early_stopping": 30,
+    "feature_fraction": 0.8, "bagging_fraction": 0.8,
+    "objective": "binary", "random_state": 42
+  },
+  "feature_set": "51 features: 30 v1 (kinematics, aggressor, volume, level context, vol/time) + 11 zone (7-to-1pt approach window) + 10 v2 (jerk, round-number proximity, large prints, session range, time-since-extremes, pre-zone volume, approach consistency, relative volume) + 7 one-hot level identifiers. See feature_list.json for canonical order.",
+  "retraining": "Run mnq_alerts/scoring_rework/train_production_models.py to retrain from the latest _events_augmented_v4.parquet. The augment pipeline (augment_dataset.py -> add_features.py -> merge_multi_labels.py -> add_human_score.py) regenerates the parquet from scratch in ~3 minutes.",
+  "monitoring": "Each filter decision logs '[bot_filter] TAKE|SKIP <level> | reason=<r> score=<s> votes=<v>/3 ...'. Aggregate these to track filter agreement vs base bot over time. Flag if model_probs systematically drift toward 1.0 (calibration issue) or take_rate drops below ~20% (filter too aggressive)."
+}

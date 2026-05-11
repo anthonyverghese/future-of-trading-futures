@@ -164,6 +164,21 @@ BOT_EOD_FLATTEN_BUFFER_MIN = 2  # Flatten any open position this many minutes
 # before MARKET_CLOSE (so 15:58 ET with 4pm close) to avoid overnight margin.
 # New bot entries are also blocked once this cutoff passes.
 
+# ── V_MULTI filter (secondary gate on top of bot trigger logic) ───────────────
+# Env-overridable: set BOT_FILTER_ENABLED=true in .env (or as a systemd
+# Environment= directive) to enable. Default off matches pre-filter bot.
+# When enabled, the bot only places a trade if (a) the human composite_score
+# is >= 5 at the 7pt-zone-entry moment AND (b) all 3 LightGBM models trained
+# on (8/20, 8/25, 10/20) labels agree expected_pnl > 0. Out-of-time backtest
+# (2026-03-24 to 2026-05-06): filter improves daily P&L by ~$26 vs baseline,
+# lifts WR 71.4% to 77.5%, drops max-DD $503 to $185. See
+# mnq_alerts/_bot_filter_models/meta.json for full details. To revert: unset
+# the env var, restart the bot. No code change required.
+BOT_FILTER_ENABLED = os.getenv("BOT_FILTER_ENABLED", "false").lower() in ("true", "1", "yes")
+BOT_FILTER_MODEL_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "_bot_filter_models"
+)
+
 # ── Display ─────────────────────────────────────────────────────────────────────
 # Override the auto-detected local timezone for log timestamps.
 # Useful on EC2 where the system timezone is UTC.
