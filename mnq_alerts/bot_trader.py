@@ -24,6 +24,7 @@ import datetime
 import time
 from collections import deque
 
+import pandas as pd
 import pytz
 
 from broker import IBKRBroker
@@ -239,6 +240,24 @@ class BotTrader:
         # finding: such trades have -$0.58/tr aggregate, Q4 -$2.93/tr).
         self._last_trade_entry_time: datetime.datetime | None = None
 
+        # V_MULTI filter (only maintained when BOT_FILTER_ENABLED=True).
+        # State here is dormant unless the filter is enabled — zero cost
+        # when disabled.
+        try:
+            from config import BOT_FILTER_ENABLED
+        except ImportError:
+            BOT_FILTER_ENABLED = False
+        self._filter_enabled: bool = bool(BOT_FILTER_ENABLED)
+        # Rolling 15-min tick buffer for filter feature compute. Bounded
+        # by time — trimmed in on_tick.
+        self._filter_tick_buffer: list[tuple[datetime.datetime, float, int]] = []
+        # First RTH tick price for session_move (set on first call to on_tick
+        # while in RTH).
+        self._filter_session_open: float | None = None
+        # Per-(level, human_direction) count of prior 1pt-zone entries today.
+        # Matches the test_count_7pt construction used during training.
+        self._filter_touches_per_dir: dict[tuple[str, str], int] = {}
+
     def connect(self) -> bool:
         """Connect to IBKR. Returns True on success."""
         if not self._broker.connect():
@@ -339,6 +358,20 @@ class BotTrader:
             return
 
         now = _now_override if _now_override is not None else datetime.datetime.now(_ET)
+
+        # Maintain rolling tick buffer for V_MULTI filter (only when enabled).
+        # Zero-cost when disabled. Trims to last 15 min on each tick.
+        if self._filter_enabled:
+            self._filter_tick_buffer.append((now, price, 1))
+            if self._filter_session_open is None:
+                self._filter_session_open = price
+            cutoff = now - datetime.timedelta(minutes=15)
+            # Trim from front; buffer is append-only so trimming is cheap.
+            i = 0
+            while i < len(self._filter_tick_buffer) and self._filter_tick_buffer[i][0] < cutoff:
+                i += 1
+            if i > 0:
+                del self._filter_tick_buffer[:i]
 
         # Detect trade close and reset zones.
         if (
@@ -561,6 +594,74 @@ class BotTrader:
                     f"test #{bz.entry_count}, {direction}, trend={trend_60m:+.0f}"
                 )
                 continue
+
+            # V_MULTI filter gate (only active when BOT_FILTER_ENABLED=True).
+            # Decides whether to actually place the trade based on:
+            # (a) human composite_score >= 5 at the 7pt-zone moment, and
+            # (b) all 3 LightGBM models (8/20, 8/25, 10/20) agree
+            #     expected_pnl > 0 at their respective TP/SL geometry.
+            # See bot_filter.py for details. Toggle via config.BOT_FILTER_ENABLED.
+            if self._filter_enabled:
+                # Track per-(level, direction) entry counts for human's
+                # test_count score component. Matches training's
+                # cumcount + 1 construction. Increment AFTER counting so
+                # entry_count_7pt is 1-indexed including this event.
+                self._filter_touches_per_dir[(bz.name, direction)] = (
+                    self._filter_touches_per_dir.get((bz.name, direction), 0) + 1
+                )
+                entry_count_7pt = self._filter_touches_per_dir[(bz.name, direction)]
+                # Approach direction: +1 if approaching from below (SELL/down),
+                # -1 if from above (BUY/up). price vs level_price tells us.
+                approach_direction = 1 if price < bz.price else -1
+                # Build tick buffer DataFrame for the filter.
+                from bot_filter import FilterContext, get_filter
+                if self._filter_tick_buffer:
+                    tb = pd.DataFrame(
+                        {"price": [t[1] for t in self._filter_tick_buffer],
+                         "size":  [t[2] for t in self._filter_tick_buffer]},
+                        index=pd.DatetimeIndex(
+                            [t[0] for t in self._filter_tick_buffer]
+                        ).tz_convert("UTC"),
+                    )
+                else:
+                    tb = pd.DataFrame(columns=["price", "size"],
+                                      index=pd.DatetimeIndex([], tz="UTC"))
+                # Gather all level prices (zones + VWAP via market_data context
+                # is not available here; pass current zones only — model trained
+                # with distance_to_vwap so we approximate with 0.0 when VWAP
+                # unavailable. Acceptable: feature has low importance).
+                all_levels = {name: z.price for name, z in self._zones.items()}
+                ctx = FilterContext(
+                    tick_buffer=tb,
+                    session_open_price=self._filter_session_open or price,
+                    levels=all_levels,
+                    bot_touches_today=bz.entry_count - 1,
+                    resolution_order_cw=0,  # bot doesn't currently track this
+                    resolution_order_cl=self._broker._consecutive_losses,
+                )
+                event_ts_utc = pd.Timestamp(now).tz_convert("UTC")
+                decision = get_filter().should_take(
+                    level_name=bz.name, level_price=bz.price,
+                    event_ts=event_ts_utc, event_price=price,
+                    approach_direction=approach_direction,
+                    entry_count_7pt=entry_count_7pt, context=ctx,
+                )
+                if not decision.take:
+                    print(
+                        f"[bot_filter] SKIP {bz.name} ({direction}) | "
+                        f"reason={decision.reason} score={decision.human_score} "
+                        f"votes={decision.votes}/3"
+                    )
+                    continue
+                else:
+                    probs_str = ", ".join(
+                        f"{n}:{p['p_win']:.2f}" for n, p in decision.model_probs.items()
+                    )
+                    print(
+                        f"[bot_filter] TAKE {bz.name} ({direction}) | "
+                        f"score={decision.human_score} votes={decision.votes}/3 "
+                        f"({probs_str})"
+                    )
 
             allowed, reason = self._broker.can_trade()
             if allowed:
