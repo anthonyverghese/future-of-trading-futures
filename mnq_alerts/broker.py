@@ -840,6 +840,17 @@ class IBKRBroker:
         if role == "parent":
             # Parent (entry) order filled — record the actual fill price.
             with self._lock:
+                # Idempotency guard. IBKR can emit the parent-filled
+                # orderStatus event more than once for the same order
+                # during state-transition races (e.g. PreSubmitted →
+                # Filled while a cancel is in-flight). Without this
+                # guard, the second emit would re-INSERT a bot_trades
+                # row AND overwrite _pending_db_trade_id, orphaning the
+                # first row in the database. This is the root cause of
+                # the phantom-DB-row bug behind both bracket_race_close
+                # and defensive_flatten duplicates.
+                if self._pending_db_trade_id is not None:
+                    return
                 self._pending_entry_fill = trade.orderStatus.avgFillPrice
                 print(f"[broker] Entry filled @ {self._pending_entry_fill:.2f}")
                 # Log entry to database.

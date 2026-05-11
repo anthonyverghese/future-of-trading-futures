@@ -203,6 +203,47 @@ class TestOnOrderStatus:
         assert b._pending_entry_fill == 20005.0
         assert b._position_open is True  # parent doesn't close position
 
+    def test_parent_fill_is_idempotent_under_duplicate_emit(self, monkeypatch):
+        """IBKR can emit a parent-filled orderStatus event twice for the
+        same order during state-transition races (observed in production
+        on 2026-05-11 11:51:25 and again at 12:40:05). Each duplicate
+        emit previously triggered a fresh log_bot_trade_entry INSERT and
+        overwrote _pending_db_trade_id, orphaning the first row and
+        producing the phantom-bot_trades-row bug behind both
+        bracket_race_close and defensive_flatten duplicates.
+        """
+        insert_calls: list[dict] = []
+
+        def fake_log(**kwargs) -> int:
+            insert_calls.append(kwargs)
+            return 1000 + len(insert_calls)
+
+        import broker as broker_mod  # noqa: E402
+        monkeypatch.setattr(broker_mod, "log_bot_trade_entry", fake_log)
+
+        b = _make_broker(
+            position_open=True,
+            pending_direction="up",
+            pending_line_price=20000.0,
+            pending_level_name="IBH",
+            pending_target_price=20012.0,
+            pending_stop_price=19975.0,
+        )
+        trade = _fake_trade(MNQ_SYMBOL, "Filled", parent_id=0, fill_price=20005.0)
+
+        # First emit: records the fill and INSERTs the row.
+        b._on_order_status(trade)
+        assert b._pending_db_trade_id == 1001
+        assert b._pending_entry_fill == 20005.0
+        assert len(insert_calls) == 1
+
+        # Second emit (duplicate): must be a no-op. Otherwise we get
+        # two rows in bot_trades with the same entry_price/entry_time.
+        b._on_order_status(trade)
+        assert b._pending_db_trade_id == 1001  # unchanged, not 1002
+        assert b._pending_entry_fill == 20005.0  # unchanged
+        assert len(insert_calls) == 1  # still 1, not 2
+
     def test_child_fill_win_up_direction(self):
         """Take-profit fill on a long (up) trade → win."""
         b = _make_broker(
