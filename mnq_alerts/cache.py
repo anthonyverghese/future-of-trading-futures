@@ -19,6 +19,12 @@ import pytz
 
 ET = pytz.timezone("America/New_York")
 
+# Test safety: mnq_alerts/tests/conftest.py redirects these constants to a
+# tmpdir at conftest-load time so tests never write to the production DBs.
+# Every writer below reads the constant by name at call time, so the redirect
+# propagates without explicit fixtures. If you add a new from-import of these
+# paths (e.g. `from cache import ALERTS_LOG_PATH`), you'll defeat the safety
+# net — prefer `cache.ALERTS_LOG_PATH` at call sites instead.
 CACHE_PATH = os.path.join(os.path.dirname(__file__), ".session_cache.db")
 ALERTS_LOG_PATH = os.path.join(os.path.dirname(__file__), "alerts_log.db")
 CACHE_INTERVAL_SECONDS = 300  # save every 5 minutes
