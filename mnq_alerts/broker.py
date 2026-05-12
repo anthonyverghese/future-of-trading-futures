@@ -335,7 +335,7 @@ class IBKRBroker:
             f"[broker] Restored daily state: {self._trades_today} trades "
             f"({self._wins_today}W/{self._losses_today}L), "
             f"P&L ${self._daily_pnl_usd:+.2f}, "
-            f"consec losses {self._consecutive_losses}"
+            f"consec wins {self._consecutive_wins} losses {self._consecutive_losses}"
             + (f" | STOPPED: {self._stop_reason}" if self._stopped_for_day else "")
         )
 
