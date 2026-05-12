@@ -3,7 +3,7 @@
 
 Triggers (any one fires the alert):
 - MemAvailable < 50 MB sustained over a 60s sample window
-- mnq_alerts/main.py RSS > 200 MB (likely leak)
+- mnq_alerts/main.py RSS > 400 MB (likely leak)
 - Swap-in rate > 10 MB/s sustained over a 60s sample window
 
 Rate-limited: at most one Pushover per hour. Designed to be invoked
@@ -27,16 +27,16 @@ SAMPLE_WINDOW_SEC = 60
 
 # Thresholds
 # AVAILABLE_MB_MIN: page when free memory under sustained load.
-# BOT_RSS_MB_MAX: 300 (was 200, raised 2026-05-05). The bot's steady-state
-#   RSS during a busy session is ~170-200 MB — driven by Python interpreter
-#   + libraries + bounded deques (60-min and 5-min price windows). 200 was
-#   set assuming a much lower steady state and pinged during normal busy
-#   periods; 300 only fires on a genuine anomaly (leak, regime change, or
-#   library bloat) since data structures are time-bounded and the service
-#   restarts daily at 09:30 ET.
+# BOT_RSS_MB_MAX: 400 (was 300, raised 2026-05-12). V_MULTI bot filter adds
+#   ~80-100 MB (3 LGBM models + lightgbm C++ runtime + pandas 15-min rolling
+#   tick buffer + pandas/numpy runtime), pushing steady-state from ~170-200
+#   MB to ~250-300 MB with peaks to 350 during feature compute. 400 keeps the
+#   "real anomaly" signal — leak or runaway — while suppressing false pages
+#   on the new V_MULTI baseline. Pair with SWAP_IN as the primary distress
+#   signal since swap-in only fires under genuine pressure.
 # SWAP_IN_MBPS_MAX: page when actively thrashing pages back from swap.
 AVAILABLE_MB_MIN = 50
-BOT_RSS_MB_MAX = 300
+BOT_RSS_MB_MAX = 400
 SWAP_IN_MBPS_MAX = 10.0
 
 

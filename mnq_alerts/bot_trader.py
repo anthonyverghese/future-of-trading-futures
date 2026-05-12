@@ -507,7 +507,7 @@ class BotTrader:
                     tick_rate=tick_rate,
                     session_move_pts=session_move_pts,
                     direction=direction,
-                    consecutive_wins=0,  # bot doesn't track this; OK to leave 0
+                    consecutive_wins=self._broker._consecutive_wins,
                     consecutive_losses=self._broker._consecutive_losses,
                 )
                 if h_score < BOT_HYBRID_MIN_COMPOSITE_SCORE:
@@ -636,7 +636,7 @@ class BotTrader:
                     session_open_price=self._filter_session_open or price,
                     levels=all_levels,
                     bot_touches_today=bz.entry_count - 1,
-                    resolution_order_cw=0,  # bot doesn't currently track this
+                    resolution_order_cw=self._broker._consecutive_wins,
                     resolution_order_cl=self._broker._consecutive_losses,
                 )
                 event_ts_utc = pd.Timestamp(now).tz_convert("UTC")

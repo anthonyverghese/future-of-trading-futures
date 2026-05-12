@@ -93,6 +93,7 @@ class IBKRBroker:
         # Risk management state — resets each trading day.
         self._daily_pnl_usd: float = 0.0
         self._consecutive_losses: int = 0
+        self._consecutive_wins: int = 0
         self._trades_today: int = 0
         self._wins_today: int = 0
         self._losses_today: int = 0
@@ -321,6 +322,7 @@ class IBKRBroker:
             self._wins_today = state["wins"]
             self._losses_today = state["losses"]
             self._consecutive_losses = state["consecutive_losses"]
+            self._consecutive_wins = state.get("consecutive_wins", 0)
             # Eagerly set stopped_for_day so the startup banner and the
             # first can_trade() call reflect the restored state.
             if self._daily_pnl_usd <= -DAILY_LOSS_LIMIT_USD:
@@ -428,9 +430,11 @@ class IBKRBroker:
                         if pnl_usd >= 0:
                             self._wins_today += 1
                             self._consecutive_losses = 0
+                            self._consecutive_wins += 1
                         else:
                             self._losses_today += 1
                             self._consecutive_losses += 1
+                            self._consecutive_wins = 0
                         print(
                             f"[broker] Startup flatten P&L: ${pnl_usd:+.2f} "
                             f"(entry~{entry_price:.2f} exit={fill_price:.2f}) | "
@@ -727,6 +731,7 @@ class IBKRBroker:
             prev_trades = self._trades_today
             self._daily_pnl_usd = 0.0
             self._consecutive_losses = 0
+            self._consecutive_wins = 0
             self._trades_today = 0
             self._wins_today = 0
             self._losses_today = 0
@@ -958,15 +963,17 @@ class IBKRBroker:
         if pnl_usd >= 0:
             self._wins_today += 1
             self._consecutive_losses = 0
+            self._consecutive_wins += 1
         else:
             self._losses_today += 1
             self._consecutive_losses += 1
+            self._consecutive_wins = 0
 
         print(
             f"[broker] Trade closed: "
             f"{'WIN' if pnl_usd >= 0 else 'LOSS'} ${pnl_usd:+.2f} | "
             f"Day: {self.daily_stats} | "
-            f"Consec losses: {self._consecutive_losses}"
+            f"Consec wins: {self._consecutive_wins} losses: {self._consecutive_losses}"
         )
 
         if self._pending_db_trade_id is not None:

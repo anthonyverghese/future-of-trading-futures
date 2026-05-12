@@ -719,6 +719,7 @@ def load_bot_daily_risk_state(date_str: str) -> dict:
         "wins": 0,
         "losses": 0,
         "consecutive_losses": 0,
+        "consecutive_wins": 0,
     }
     if not os.path.exists(ALERTS_LOG_PATH):
         return state
@@ -745,6 +746,11 @@ def load_bot_daily_risk_state(date_str: str) -> dict:
     for outcome, _ in reversed(rows):
         if outcome == "loss":
             state["consecutive_losses"] += 1
+        else:
+            break
+    for outcome, _ in reversed(rows):
+        if outcome == "win":
+            state["consecutive_wins"] += 1
         else:
             break
     return state
