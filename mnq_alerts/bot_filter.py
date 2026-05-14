@@ -217,7 +217,12 @@ class BotFilter:
             )
 
             # 5. Build feature vector in canonical order, predict from 3 models.
-            feat_vec = np.array([features.get(f, 0.0) for f in self.feature_list]).reshape(1, -1)
+            # Pass as a single-row DataFrame so column names match training and
+            # sklearn doesn't emit "X does not have valid feature names" warnings.
+            feat_vec = pd.DataFrame(
+                [[features.get(f, 0.0) for f in self.feature_list]],
+                columns=self.feature_list,
+            )
             votes = 0
             probs = {}
             for name, model, tp, sl in self.models:

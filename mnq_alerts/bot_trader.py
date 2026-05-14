@@ -257,6 +257,10 @@ class BotTrader:
         # Per-(level, human_direction) count of prior 1pt-zone entries today.
         # Matches the test_count_7pt construction used during training.
         self._filter_touches_per_dir: dict[tuple[str, str], int] = {}
+        # Per-(level, direction) last filter-decision signature, used to
+        # suppress duplicate SKIP/TAKE log lines while the bot is sitting
+        # inside a 1pt zone. Reset on daily restart with the rest of state.
+        self._filter_last_log_key: dict[tuple[str, str], tuple] = {}
 
     def connect(self) -> bool:
         """Connect to IBKR. Returns True on success."""
@@ -646,12 +650,22 @@ class BotTrader:
                     approach_direction=approach_direction,
                     entry_count_7pt=entry_count_7pt, context=ctx,
                 )
+                # Suppress duplicate log lines while sitting inside a 1pt zone:
+                # _process_zone_entries can fire many times for a single sustained
+                # touch, and 100+ identical SKIP lines per zone pollute the journal.
+                # Log only when the (reason, score, votes) signature changes for
+                # this (level, direction). TAKE decisions always log.
+                log_key = (decision.reason, decision.human_score, decision.votes)
+                last_key = self._filter_last_log_key.get((bz.name, direction))
+                should_log = decision.take or (log_key != last_key)
+                self._filter_last_log_key[(bz.name, direction)] = log_key
                 if not decision.take:
-                    print(
-                        f"[bot_filter] SKIP {bz.name} ({direction}) | "
-                        f"reason={decision.reason} score={decision.human_score} "
-                        f"votes={decision.votes}/3"
-                    )
+                    if should_log:
+                        print(
+                            f"[bot_filter] SKIP {bz.name} ({direction}) | "
+                            f"reason={decision.reason} score={decision.human_score} "
+                            f"votes={decision.votes}/3"
+                        )
                     continue
                 else:
                     probs_str = ", ".join(
