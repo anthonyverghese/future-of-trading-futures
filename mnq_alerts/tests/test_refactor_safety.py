@@ -61,6 +61,15 @@ from config import BOT_ENTRY_THRESHOLD, BOT_PER_LEVEL_TS, BOT_PER_LEVEL_MAX_ENTR
 
 _ET = pytz.timezone("America/New_York")
 
+# These tests exercise V6's strategy filter behavior (momentum, per-level caps,
+# vol filter, direction filter, etc.). When BOT_REQUIRE_HUMAN_ALERT=True (the
+# new default, 2026-05-27), _process_zone_entries bypasses those V6 filters in
+# favor of the live human-alert gate. Force V6 mode here so the existing
+# invariants are exercised. The new gate has its own dedicated tests in
+# test_bot_trader.py::TestHumanAlertGate.
+import bot_trader as _bt_mod
+_bt_mod.BOT_REQUIRE_HUMAN_ALERT = False
+
 
 def _make_broker():
     """Create a broker with stubbed internals for testing."""

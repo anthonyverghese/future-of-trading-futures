@@ -733,3 +733,179 @@ class TestAdaptiveCaps:
         assert max(1, 6 // 2) == 3    # EXT levels: 6 -> 3
         assert max(1, 7 // 2) == 3    # IBH: 7 -> 3
         assert max(1, 1 // 2) == 1    # minimum is 1, not 0
+
+
+class TestHumanAlertGate:
+    """Tests for the live human-alert gate (2026-05-27).
+
+    Replaces the deprecated V_MULTI reconstructed-score filter. The bot is
+    "armed" for a (level, direction) only after the live human algorithm
+    fires an alert. Once armed, the bot trades when its existing 1pt-zone
+    trigger fires, using human-calibrated TP=8 / SL=20. Arm expires after
+    HUMAN_ALERT_ARM_TIMEOUT_SEC (15 min).
+    """
+
+    def _make_trader(self):
+        """BotTrader with stubbed broker, ready to exercise _process_zone_entries."""
+        from bot_trader import BotTrader
+        bt = BotTrader.__new__(BotTrader)
+        bt._broker = MagicMock()
+        bt._broker.is_connected = True
+        bt._broker._position_open = False
+        bt._broker._consecutive_losses = 0
+        bt._broker._consecutive_wins = 0
+        bt._broker.can_trade = MagicMock(return_value=(True, ""))
+        bt._broker.submit_bracket = MagicMock(
+            return_value=SimpleNamespace(success=True, error="", order_id=1)
+        )
+        bt._zones = {}
+        bt._price_window = deque()
+        bt._price_window_5m = deque()
+        bt._price_5m_ago = None
+        bt._level_trade_counts = {}
+        bt._active_trade_level = None
+        bt._level_cooldown_until = {}
+        bt._global_cooldown_until = None
+        bt._adaptive_caps_restored = True
+        bt._adaptive_caps_until_et_mins = 0
+        bt._adaptive_accepted_trades = 0
+        bt._adaptive_any_loss = False
+        bt._vol_filter_last_log = {}
+        bt._last_trade_entry_time = None
+        bt._alerted_levels = {}
+        bt._filter_enabled = False   # V_MULTI off
+        bt._filter_touches_per_dir = {}
+        bt._filter_last_log_key = {}
+        return bt
+
+    def _fire_zone(self, bt, price, line_price, now=None):
+        """Trigger _process_zone_entries with a price within 1pt of the line."""
+        import bot_trader as _bt_mod
+        if now is None:
+            now = datetime.datetime.now(_ET)
+        bt._process_zone_entries(
+            price=price, now=now, trend_60m=0.0,
+            tick_rate=0.0, session_move_pct=0.0,
+            range_30m=None, range_30m_pct=None, now_et=now.time(),
+        )
+
+    # ---- record_alert ----
+
+    def test_record_alert_populates_set(self):
+        bt = self._make_trader()
+        assert ("IBH", "down") not in bt._alerted_levels
+        bt.record_alert("IBH", "down")
+        assert ("IBH", "down") in bt._alerted_levels
+        # Value is a datetime — used for the 15-min expiry check
+        assert isinstance(bt._alerted_levels[("IBH", "down")], datetime.datetime)
+
+    def test_record_alert_is_idempotent_with_fresh_timestamp(self):
+        bt = self._make_trader()
+        bt.record_alert("IBH", "down")
+        t1 = bt._alerted_levels[("IBH", "down")]
+        # Re-record after a brief delay; timestamp refreshes
+        bt._alerted_levels[("IBH", "down")] = t1 - datetime.timedelta(minutes=5)
+        bt.record_alert("IBH", "down")
+        t2 = bt._alerted_levels[("IBH", "down")]
+        assert t2 > t1  # refreshed
+
+    def test_reset_daily_state_clears_arm(self):
+        bt = self._make_trader()
+        # reset_daily_state calls broker.reset_daily_state too; stub it
+        bt._broker.reset_daily_state = MagicMock()
+        bt.record_alert("IBH", "down")
+        bt.record_alert("FIB_EXT_HI_1.272", "up")
+        assert len(bt._alerted_levels) == 2
+        bt.reset_daily_state()
+        assert bt._alerted_levels == {}
+
+    # ---- gate behavior in _process_zone_entries ----
+
+    def test_unarmed_zone_does_not_trade(self):
+        """Bot in human-alert mode, no record_alert → zone fires but no trade."""
+        import bot_trader as _bt_mod
+        from bot_trader import BotZone
+        bt = self._make_trader()
+        bt._zones["IBH"] = BotZone("IBH", 100.0)
+        with patch.object(_bt_mod, "BOT_REQUIRE_HUMAN_ALERT", True):
+            self._fire_zone(bt, price=99.5, line_price=100.0)
+        bt._broker.submit_bracket.assert_not_called()
+
+    def test_armed_zone_trades_with_human_tp_sl(self):
+        """Bot armed → zone fires → submit_bracket called with TP=8, SL=20."""
+        import bot_trader as _bt_mod
+        from bot_trader import BotZone
+        bt = self._make_trader()
+        bt._zones["IBH"] = BotZone("IBH", 100.0)
+        bt.record_alert("IBH", "down")
+        with patch.object(_bt_mod, "BOT_REQUIRE_HUMAN_ALERT", True):
+            self._fire_zone(bt, price=99.5, line_price=100.0)
+        bt._broker.submit_bracket.assert_called_once()
+        kwargs = bt._broker.submit_bracket.call_args.kwargs
+        assert kwargs["target_pts"] == 8.0
+        assert kwargs["stop_pts"] == 20.0
+        assert kwargs["direction"] == "down"
+        assert kwargs["level_name"] == "IBH"
+
+    def test_arm_expires_after_15min(self):
+        """Armed >15 min ago → zone fires but no trade (stale)."""
+        import bot_trader as _bt_mod
+        from bot_trader import BotZone
+        bt = self._make_trader()
+        bt._zones["IBH"] = BotZone("IBH", 100.0)
+        # Manually backdate the arm beyond the 15-min window
+        bt._alerted_levels[("IBH", "down")] = (
+            datetime.datetime.now(_ET) - datetime.timedelta(minutes=16)
+        )
+        with patch.object(_bt_mod, "BOT_REQUIRE_HUMAN_ALERT", True):
+            self._fire_zone(bt, price=99.5, line_price=100.0)
+        bt._broker.submit_bracket.assert_not_called()
+
+    def test_eod_blocks_trade_even_when_armed_within_15min(self):
+        """EDGE CASE (2026-05-27): if end of market happens before the
+        15-min arm timer expires AND price reaches the line during the
+        post-EOD window, the bot must NOT enter. The broker's
+        can_trade() returns False after eod_flatten sets stopped_for_day,
+        which is checked AFTER the human-alert gate.
+        """
+        import bot_trader as _bt_mod
+        from bot_trader import BotZone
+        bt = self._make_trader()
+        bt._zones["IBH"] = BotZone("IBH", 100.0)
+        # Arm the bot right now — within the 15-min window
+        bt.record_alert("IBH", "down")
+        # Simulate EOD flatten: broker now refuses new trades
+        bt._broker.can_trade = MagicMock(return_value=(False, "Pre-close EOD flatten"))
+        with patch.object(_bt_mod, "BOT_REQUIRE_HUMAN_ALERT", True):
+            self._fire_zone(bt, price=99.5, line_price=100.0)
+        bt._broker.submit_bracket.assert_not_called()
+
+    def test_wrong_direction_does_not_trade(self):
+        """Alert armed for IBH down, but bot's zone fires direction 'up'
+        (price crossed above the line) — no trade."""
+        import bot_trader as _bt_mod
+        from bot_trader import BotZone
+        bt = self._make_trader()
+        bt._zones["IBH"] = BotZone("IBH", 100.0)
+        bt.record_alert("IBH", "down")
+        with patch.object(_bt_mod, "BOT_REQUIRE_HUMAN_ALERT", True):
+            # price > line_price → direction "up", but arm is for "down"
+            self._fire_zone(bt, price=100.5, line_price=100.0)
+        bt._broker.submit_bracket.assert_not_called()
+
+    def test_legacy_mode_ignores_arm(self):
+        """When BOT_REQUIRE_HUMAN_ALERT=False (legacy V6), the arm set is
+        not consulted — V6 strategy filters take over."""
+        import bot_trader as _bt_mod
+        from bot_trader import BotZone
+        bt = self._make_trader()
+        bt._zones["IBH"] = BotZone("IBH", 100.0)
+        # Do NOT record an alert — but expect a trade in legacy mode
+        # because V6 will take any zone trigger that passes its filters.
+        with patch.object(_bt_mod, "BOT_REQUIRE_HUMAN_ALERT", False):
+            self._fire_zone(bt, price=99.5, line_price=100.0)
+        # In legacy mode, BOT_DIRECTION_FILTER for IBH is "down" — price 99.5
+        # vs line 100 → direction "down" → allowed; volatility filter is
+        # bypassed when range_30m_pct is None; momentum filter disabled
+        # by default (BOT_MOMENTUM_THRESHOLD=0.0). So trade should fire.
+        bt._broker.submit_bracket.assert_called_once()

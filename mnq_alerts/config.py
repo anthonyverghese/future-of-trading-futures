@@ -179,6 +179,21 @@ BOT_FILTER_MODEL_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "_bot_filter_models"
 )
 
+# ── Live human-alert gate (replaces deprecated V_MULTI, 2026-05-27) ──────────
+# When True (default), the bot is "armed" for a (level, direction) only after
+# the live human algorithm fires an alert there. Once armed, the bot trades
+# at the existing 1pt-zone trigger using the human's calibrated TP=8 / SL=20.
+# The armed state expires HUMAN_ALERT_ARM_TIMEOUT_SEC after the alert; if
+# price hasn't reached the line by then, the trade idea is stale.
+# When True, V6's strategy filters (direction, vol, per-level caps, level
+# whitelist) are bypassed — the bot trades any level the human alerts on.
+# Broker-level safeties (daily loss limit, 1-position-at-a-time, fill-failure
+# cooldown, EOD flatten) still apply.
+# Set BOT_REQUIRE_HUMAN_ALERT=false to revert to legacy V6 behavior.
+# See mnq_alerts/_bot_filter_models/DEPRECATED.md for why V_MULTI was deprecated.
+BOT_REQUIRE_HUMAN_ALERT = os.getenv("BOT_REQUIRE_HUMAN_ALERT", "true").lower() in ("true", "1", "yes")
+HUMAN_ALERT_ARM_TIMEOUT_SEC = 15 * 60  # match human OutcomeEvaluator EVAL_WINDOW_MINS
+
 # ── Display ─────────────────────────────────────────────────────────────────────
 # Override the auto-detected local timezone for log timestamps.
 # Useful on EC2 where the system timezone is UTC.

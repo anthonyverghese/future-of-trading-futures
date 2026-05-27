@@ -54,6 +54,8 @@ from config import (
     BOT_COUNTER_TREND_VALLEY_FILTER,
     BOT_HYBRID_MIN_COMPOSITE_SCORE,
     BOT_MAX_SECS_SINCE_LAST_TRADE_THIS_DAY,
+    BOT_REQUIRE_HUMAN_ALERT,
+    HUMAN_ALERT_ARM_TIMEOUT_SEC,
 )
 from scoring import composite_score as _human_composite_score
 # SUPPRESSED_WINDOWS import removed — bot suppression disabled (2026-05-02).
@@ -262,6 +264,13 @@ class BotTrader:
         # inside a 1pt zone. Reset on daily restart with the rest of state.
         self._filter_last_log_key: dict[tuple[str, str], tuple] = {}
 
+        # Live human-alert gate state (2026-05-27): maps (level, direction)
+        # -> datetime of the most-recent alert. The bot is "armed" for that
+        # pair until HUMAN_ALERT_ARM_TIMEOUT_SEC after the alert. Populated
+        # via record_alert(); checked in _process_zone_entries when
+        # BOT_REQUIRE_HUMAN_ALERT is True.
+        self._alerted_levels: dict[tuple[str, str], datetime.datetime] = {}
+
     def connect(self) -> bool:
         """Connect to IBKR. Returns True on success."""
         if not self._broker.connect():
@@ -308,19 +317,33 @@ class BotTrader:
         """Register or update a price level for bot zone tracking."""
         self._zones[name] = BotZone(name, price)
 
+    def record_alert(self, level_name: str, direction: str) -> None:
+        """Arm the bot to take a trade on this (level, direction) today.
+
+        Called from main.py whenever the live human algorithm fires an alert.
+        The arm expires HUMAN_ALERT_ARM_TIMEOUT_SEC after this call; if a
+        fresh alert fires on the same pair, the timer resets. Idempotent.
+        Only consulted when BOT_REQUIRE_HUMAN_ALERT=True (default).
+        """
+        self._alerted_levels[(level_name, direction)] = datetime.datetime.now(_ET)
+
     def update_levels(
         self,
         ibh: float | None = None,
         ibl: float | None = None,
         vwap: float | None = None,
     ) -> None:
-        """Bulk update levels. Updates price on existing zones without resetting state."""
+        """Bulk update levels. Updates price on existing zones without resetting state.
+
+        When BOT_REQUIRE_HUMAN_ALERT is True (2026-05-27), the include/exclude
+        flags are bypassed and all levels the human alerts on become eligible.
+        """
         levels = {}
-        if BOT_INCLUDE_IBH:
+        if BOT_REQUIRE_HUMAN_ALERT or BOT_INCLUDE_IBH:
             levels["IBH"] = ibh
-        if BOT_INCLUDE_IBL:
+        if BOT_REQUIRE_HUMAN_ALERT or BOT_INCLUDE_IBL:
             levels["IBL"] = ibl
-        if BOT_INCLUDE_VWAP:
+        if BOT_REQUIRE_HUMAN_ALERT or BOT_INCLUDE_VWAP:
             levels["VWAP"] = vwap
         for name, price in levels.items():
             if price is not None:
@@ -330,9 +353,13 @@ class BotTrader:
                     self._zones[name] = BotZone(name, price)
 
     def update_fib_levels(self, fib_levels: dict[str, float]) -> None:
-        """Register fib levels for bot zone tracking."""
+        """Register fib levels for bot zone tracking.
+
+        When BOT_REQUIRE_HUMAN_ALERT is True (2026-05-27), BOT_EXCLUDE_LEVELS
+        is bypassed — all fib levels the human alerts on become eligible.
+        """
         for name, price in fib_levels.items():
-            if name in BOT_EXCLUDE_LEVELS:
+            if (not BOT_REQUIRE_HUMAN_ALERT) and name in BOT_EXCLUDE_LEVELS:
                 continue
             if name not in self._zones:
                 self._zones[name] = BotZone(name, price)
@@ -468,103 +495,120 @@ class BotTrader:
 
             direction = "up" if price > bz.price else "down"
 
-            # Direction filter (e.g., IBH SELL only).
-            allowed_dir = BOT_DIRECTION_FILTER.get(bz.name)
-            if allowed_dir and allowed_dir != direction:
-                continue
-
-            # Momentum filter: skip if 5-min price change > threshold
-            # in the trade direction. Default 5.0, overridable for backtesting.
-            mom_thresh = momentum_threshold if momentum_threshold is not None else BOT_MOMENTUM_THRESHOLD
-            if mom_thresh > 0 and self._price_5m_ago is not None:
-                momentum = price - self._price_5m_ago
-                if direction == "down":
-                    momentum = -momentum
-                if momentum > mom_thresh:
+            # Live human-alert gate (2026-05-27): when True, the bot only
+            # takes a trade if the live human algorithm has fired an alert
+            # on this (level, direction) within HUMAN_ALERT_ARM_TIMEOUT_SEC.
+            # All V6 strategy filters below are bypassed in this mode — the
+            # bot trusts the human's signal. TP/SL is hard-coded to 8/20 to
+            # match the human's OutcomeEvaluator calibration.
+            if BOT_REQUIRE_HUMAN_ALERT:
+                armed_at = self._alerted_levels.get((bz.name, direction))
+                if armed_at is None:
+                    continue
+                age_sec = (now - armed_at).total_seconds()
+                if age_sec > HUMAN_ALERT_ARM_TIMEOUT_SEC:
+                    continue
+                # Skip V6 strategy filters; use human's 8/20 TP/SL.
+                bz.entry_count += 1
+                target_pts, stop_pts = 8.0, 20.0
+            else:
+                # Direction filter (e.g., IBH SELL only).
+                allowed_dir = BOT_DIRECTION_FILTER.get(bz.name)
+                if allowed_dir and allowed_dir != direction:
                     continue
 
-            # Per-level daily trade cap.
-            level_trades = self._level_trade_counts.get(bz.name, 0)
-            level_cap = BOT_PER_LEVEL_MAX_ENTRIES.get(
-                bz.name, BOT_MAX_ENTRIES_PER_LEVEL
-            )
-            if BOT_MONDAY_DOUBLE_CAPS and now.weekday() == 0:
-                level_cap *= 2
-            if level_trades >= level_cap:
-                continue
+                # Momentum filter: skip if 5-min price change > threshold
+                # in the trade direction. Default 5.0, overridable for backtesting.
+                mom_thresh = momentum_threshold if momentum_threshold is not None else BOT_MOMENTUM_THRESHOLD
+                if mom_thresh > 0 and self._price_5m_ago is not None:
+                    momentum = price - self._price_5m_ago
+                    if direction == "down":
+                        momentum = -momentum
+                    if momentum > mom_thresh:
+                        continue
 
-            # Hybrid pre-filter: skip if the human-side composite_score
-            # is below threshold. The human's scoring is the production-
-            # validated alert quality system (5.6 alerts/day at 82.5% WR
-            # with score>=5, 318-day walk-forward). Memory says human
-            # weights don't transfer to bot at 1pt entry under no-slippage,
-            # but never tested under slippage modeling. Disabled by
-            # default — set BOT_HYBRID_MIN_COMPOSITE_SCORE to 5 (or
-            # other) to enable.
-            if BOT_HYBRID_MIN_COMPOSITE_SCORE is not None:
-                # Human's score uses session_move in pts; bot has pct.
-                session_move_pts = session_move_pct * price / 100.0
-                h_score = _human_composite_score(
-                    level_name=bz.name,
-                    entry_count=bz.entry_count + 1,
-                    now_et=now_et,
-                    tick_rate=tick_rate,
-                    session_move_pts=session_move_pts,
-                    direction=direction,
-                    consecutive_wins=self._broker._consecutive_wins,
-                    consecutive_losses=self._broker._consecutive_losses,
+                # Per-level daily trade cap.
+                level_trades = self._level_trade_counts.get(bz.name, 0)
+                level_cap = BOT_PER_LEVEL_MAX_ENTRIES.get(
+                    bz.name, BOT_MAX_ENTRIES_PER_LEVEL
                 )
-                if h_score < BOT_HYBRID_MIN_COMPOSITE_SCORE:
+                if BOT_MONDAY_DOUBLE_CAPS and now.weekday() == 0:
+                    level_cap *= 2
+                if level_trades >= level_cap:
                     continue
 
-            # Counter-trend valley filter: skip moderate-counter-trend
-            # trades where with_trend ∈ [lo, hi]. Walk-forward 4-quarter
-            # validation (2026-05-05) showed trades in this band have
-            # negative $/tr in all 4 quarters. Strong counter-trend
-            # (with_trend < lo) is profitable; this band is the
-            # "fakeout zone." Disabled by default — set
-            # BOT_COUNTER_TREND_VALLEY_FILTER = (lo, hi) to enable.
-            if BOT_COUNTER_TREND_VALLEY_FILTER is not None:
-                lo, hi = BOT_COUNTER_TREND_VALLEY_FILTER
-                if direction == "down":
-                    with_trend = -trend_60m
-                else:
-                    with_trend = trend_60m
-                if lo <= with_trend < hi:
-                    continue
-
-            # Stale-approach filter: skip if too long has passed since the
-            # last entry attempt today. Only applies after the first trade
-            # of the day. Disabled by default (threshold=0).
-            if (
-                BOT_MAX_SECS_SINCE_LAST_TRADE_THIS_DAY > 0
-                and self._last_trade_entry_time is not None
-            ):
-                gap_secs = (now - self._last_trade_entry_time).total_seconds()
-                if gap_secs > BOT_MAX_SECS_SINCE_LAST_TRADE_THIS_DAY:
-                    continue
-
-            # Volatility filter: skip dead markets.
-            if (
-                range_30m_pct is not None
-                and range_30m_pct < BOT_VOL_FILTER_MIN_RANGE_PCT * 100
-            ):
-                last_log = self._vol_filter_last_log.get(bz.name)
-                if last_log is None or (now - last_log).total_seconds() >= 60:
-                    threshold_pct = BOT_VOL_FILTER_MIN_RANGE_PCT * 100
-                    print(
-                        f"[bot] Skipped {bz.name} (vol filter: "
-                        f"range_30m {range_30m_pct:.3f}% < "
-                        f"{threshold_pct:.2f}%) | dist={abs(price - bz.price):.2f}"
+                # Hybrid pre-filter: skip if the human-side composite_score
+                # is below threshold. The human's scoring is the production-
+                # validated alert quality system (5.6 alerts/day at 82.5% WR
+                # with score>=5, 318-day walk-forward). Memory says human
+                # weights don't transfer to bot at 1pt entry under no-slippage,
+                # but never tested under slippage modeling. Disabled by
+                # default — set BOT_HYBRID_MIN_COMPOSITE_SCORE to 5 (or
+                # other) to enable.
+                if BOT_HYBRID_MIN_COMPOSITE_SCORE is not None:
+                    # Human's score uses session_move in pts; bot has pct.
+                    session_move_pts = session_move_pct * price / 100.0
+                    h_score = _human_composite_score(
+                        level_name=bz.name,
+                        entry_count=bz.entry_count + 1,
+                        now_et=now_et,
+                        tick_rate=tick_rate,
+                        session_move_pts=session_move_pts,
+                        direction=direction,
+                        consecutive_wins=self._broker._consecutive_wins,
+                        consecutive_losses=self._broker._consecutive_losses,
                     )
-                    self._vol_filter_last_log[bz.name] = now
-                continue
+                    if h_score < BOT_HYBRID_MIN_COMPOSITE_SCORE:
+                        continue
 
-            # All filters passed — attempt entry.
-            bz.entry_count += 1
-            target_pts, stop_pts = BOT_PER_LEVEL_TS.get(
-                bz.name, (BOT_TARGET_POINTS, BOT_STOP_POINTS)
-            )
+                # Counter-trend valley filter: skip moderate-counter-trend
+                # trades where with_trend ∈ [lo, hi]. Walk-forward 4-quarter
+                # validation (2026-05-05) showed trades in this band have
+                # negative $/tr in all 4 quarters. Strong counter-trend
+                # (with_trend < lo) is profitable; this band is the
+                # "fakeout zone." Disabled by default — set
+                # BOT_COUNTER_TREND_VALLEY_FILTER = (lo, hi) to enable.
+                if BOT_COUNTER_TREND_VALLEY_FILTER is not None:
+                    lo, hi = BOT_COUNTER_TREND_VALLEY_FILTER
+                    if direction == "down":
+                        with_trend = -trend_60m
+                    else:
+                        with_trend = trend_60m
+                    if lo <= with_trend < hi:
+                        continue
+
+                # Stale-approach filter: skip if too long has passed since the
+                # last entry attempt today. Only applies after the first trade
+                # of the day. Disabled by default (threshold=0).
+                if (
+                    BOT_MAX_SECS_SINCE_LAST_TRADE_THIS_DAY > 0
+                    and self._last_trade_entry_time is not None
+                ):
+                    gap_secs = (now - self._last_trade_entry_time).total_seconds()
+                    if gap_secs > BOT_MAX_SECS_SINCE_LAST_TRADE_THIS_DAY:
+                        continue
+
+                # Volatility filter: skip dead markets.
+                if (
+                    range_30m_pct is not None
+                    and range_30m_pct < BOT_VOL_FILTER_MIN_RANGE_PCT * 100
+                ):
+                    last_log = self._vol_filter_last_log.get(bz.name)
+                    if last_log is None or (now - last_log).total_seconds() >= 60:
+                        threshold_pct = BOT_VOL_FILTER_MIN_RANGE_PCT * 100
+                        print(
+                            f"[bot] Skipped {bz.name} (vol filter: "
+                            f"range_30m {range_30m_pct:.3f}% < "
+                            f"{threshold_pct:.2f}%) | dist={abs(price - bz.price):.2f}"
+                        )
+                        self._vol_filter_last_log[bz.name] = now
+                    continue
+
+                # All filters passed — attempt entry.
+                bz.entry_count += 1
+                target_pts, stop_pts = BOT_PER_LEVEL_TS.get(
+                    bz.name, (BOT_TARGET_POINTS, BOT_STOP_POINTS)
+                )
             # Fixed buffer (was target_pts/2 — caused up to 6pt slippage on
             # FIB_0.618). 1.0pt is the slippage-vs-fill-rate optimum from
             # the buffer sweep. See config.py BOT_ENTRY_LIMIT_BUFFER_PTS.
@@ -690,7 +734,9 @@ class BotTrader:
                     session_move_pct=session_move_pct,
                 )
                 if result.success:
-                    self._level_trade_counts[bz.name] = level_trades + 1
+                    self._level_trade_counts[bz.name] = (
+                        self._level_trade_counts.get(bz.name, 0) + 1
+                    )
                     self._active_trade_level = bz.name
                     self._last_trade_entry_time = now
                 else:
@@ -735,6 +781,7 @@ class BotTrader:
         self._vol_filter_last_log.clear()
         self._last_trade_entry_time = None
         self._adaptive_caps_restored = True  # disabled
+        self._alerted_levels.clear()
 
     def eod_flatten(self) -> None:
         """Flatten open position a few minutes before market close.

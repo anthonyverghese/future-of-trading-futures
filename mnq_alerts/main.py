@@ -577,6 +577,10 @@ def run() -> None:
                             alert_id, line_price, direction, ts_et, today.isoformat()
                         )
                         fired_levels.add((line_name, line_price, direction))
+                        # Arm the bot for this (level, direction) — bot will
+                        # trade if price reaches within 1pt of the line within
+                        # HUMAN_ALERT_ARM_TIMEOUT_SEC (2026-05-27).
+                        bot_call("record_alert", line_name, direction)
                     # Track suppressed zone entries for streak computation —
                     # matches how the backtest computes streaks across ALL entries.
                     for line_name, line_price, direction in all_zone_entries:

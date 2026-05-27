@@ -1,4 +1,14 @@
 {
+  "STATUS_2026_05_14": "DEPRECATED — DO NOT TRUST THIS FILTER OR ITS BACKTEST. See untrustworthy_backtest_note below before recommending V_MULTI, retraining it, or citing its numbers.",
+  "untrustworthy_backtest_note": {
+    "headline": "The V_MULTI backtest, walk-forward, and out-of-time numbers are misleading because the 'human_score' used to gate them is NOT the same as the live human algorithm's score.",
+    "what_we_observed_live": "On 2026-05-14 we directly compared, in production logs, the live human algorithm's composite_score at the moment it fired an alert (alert_manager.py) vs the V_MULTI filter's reconstructed composite_score at the bot's 1pt-zone entry seconds later (bot_filter.py). The two scores diverged systematically: live=5 IBH-down -> reconstructed=-1; live=8 FIB_EXT_HI up -> reconstructed=4; live=7 -> reconstructed=4; live=7 -> reconstructed=0-2. Gap of 3-9 points.",
+    "why_they_diverge": "Both sides call scoring.composite_score (same function), but feed different inputs: (a) live uses LevelState.entry_count (cumulative 7pt-zone entries maintained as in-memory state) and live alert-outcome streaks; (b) reconstruction uses test_count_7pt derived by walking back through ticks plus resolution-order streaks from prior bot trades. These approximations are stale/incorrect vs live, mostly biasing the reconstructed score DOWN.",
+    "implication_for_backtests": "Every V_MULTI evaluation (out_of_time_test.py, clean_report.py, vote_aggregation_sweep.py, speed_filter_validate.py, speed_interaction_test.py, bidirectional_test.py) gated training and test on reconstructed_score >= 5. That universe is a SUBSET of the live-alert->=5 universe and shifted in distribution. The +$26.73/day OOT lift and +$9.98/day walk-forward lift describe behavior within the reconstruction-gated universe — not what the bot would do under a live-alert gate. Do not assume those numbers transfer.",
+    "implication_for_models": "The 3 LGBMs were trained on reconstruction-gated events. If the gate is switched to live-alert-fired events, the models see a different feature distribution than they trained on and may not generalize. They must be retrained on the live-alert-matched universe before any new lift can be claimed.",
+    "live_outcome_so_far": "Over 2026-05-12 through 2026-05-14, V_MULTI took 0 trades while the live human algorithm fired 21 alerts on bot-whitelisted levels (mostly winners). The bot's 1pt zones DID open on those levels at the right times — V_MULTI rejected them because the reconstructed score under-counted the live score.",
+    "decision": "Switch the bot to gate on live human alerts (alert_manager.check_and_notify fired list) instead of reconstructed score + LGBM votes. V_MULTI stays in the repo as code but is OFF (BOT_FILTER_ENABLED=False). When we build the next iteration, training data must be matched to live alerts (not offline reconstruction), and the validation pipeline must read from the alerts DB, not from add_human_score.py."
+  },
   "filter_name": "V_MULTI",
   "filter_description": "Secondary gate on top of bot's existing trigger logic. When BOT_FILTER_ENABLED=True in config.py, a trade is taken only if (a) human composite_score >= 5 at the 7pt-zone-entry moment, AND (b) all 3 LightGBM models below agree that expected_pnl > 0 at their respective TP/SL geometry. The bot's own per-level TP/SL config (BOT_PER_LEVEL_TS) still controls the actual bracket placed; the models are used purely as quality gates.",
   "trained_at": "2026-05-12T00:09:46.419129",
@@ -29,7 +39,8 @@
       "wr_lift_pp": 6.1,
       "take_rate": 0.599
     },
-    "caveat": "Baseline in this dataset is negative because the reconstructed human_score uses approximated test_count (1pt-zone counts vs 7pt-zone counts in live) and resolution-order leak-safe streak vs live's sequential streak. Live human alerts in the same period had ~84.7% WR (positive P&L). The FILTER'S +$26.73/day improvement should compound onto whatever the live human-style base actually produces."
+    "caveat": "Baseline in this dataset is negative because the reconstructed human_score uses approximated test_count (1pt-zone counts vs 7pt-zone counts in live) and resolution-order leak-safe streak vs live's sequential streak. Live human alerts in the same period had ~84.7% WR (positive P&L). The FILTER'S +$26.73/day improvement should compound onto whatever the live human-style base actually produces.",
+    "STATUS_2026_05_14_UPDATE": "Live evidence (2026-05-12 to 2026-05-14) shows the reconstructed_score is materially LOWER than the live human score on the same events, so the +$26.73/day number does NOT describe what V_MULTI does under a live-alert gate. See untrustworthy_backtest_note at top of file."
   },
   "walk_forward_results": {
     "folds": "Q2'25, Q3'25, Q4'25, Q1'26 (rolling 90-day train window, 1-day embargo)",
