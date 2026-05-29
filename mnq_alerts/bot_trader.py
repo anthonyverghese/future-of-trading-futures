@@ -739,6 +739,15 @@ class BotTrader:
                     )
                     self._active_trade_level = bz.name
                     self._last_trade_entry_time = now
+                    # 2026-05-29: one successful entry per (level, direction)
+                    # arm. After fill, the arm is cleared — the bot won't
+                    # re-trade on the same human alert. A *new* human alert
+                    # is required to re-arm. This caps the multi-trade
+                    # behavior we saw on 2026-05-29 (1 IBL alert → 5 trades
+                    # in 27 sec, mixed outcomes). Failed fills (success=False)
+                    # keep the arm for retry within the 15-min window.
+                    if BOT_REQUIRE_HUMAN_ALERT:
+                        self._alerted_levels.pop((bz.name, direction), None)
                 else:
                     print(f"[broker] Trade failed: {result.error}")
                     self._level_cooldown_until[bz.name] = (

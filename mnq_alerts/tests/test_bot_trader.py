@@ -909,3 +909,54 @@ class TestHumanAlertGate:
         # bypassed when range_30m_pct is None; momentum filter disabled
         # by default (BOT_MOMENTUM_THRESHOLD=0.0). So trade should fire.
         bt._broker.submit_bracket.assert_called_once()
+
+    def test_arm_cleared_after_successful_entry(self):
+        """One trade per (level, direction) arm (2026-05-29). After a
+        successful submit_bracket, the arm is cleared. A subsequent zone
+        fire on the same pair (e.g., after the trade closes) does NOT
+        re-trade — a new human alert is required."""
+        import bot_trader as _bt_mod
+        from bot_trader import BotZone
+        bt = self._make_trader()
+        bt._zones["IBH"] = BotZone("IBH", 100.0)
+        bt.record_alert("IBH", "down")
+        assert ("IBH", "down") in bt._alerted_levels
+
+        with patch.object(_bt_mod, "BOT_REQUIRE_HUMAN_ALERT", True):
+            self._fire_zone(bt, price=99.5, line_price=100.0)
+
+        # First trade fires and arm is cleared
+        bt._broker.submit_bracket.assert_called_once()
+        assert ("IBH", "down") not in bt._alerted_levels
+
+        # Simulate the zone re-firing (price leaves 1pt, comes back).
+        bt._zones["IBH"].in_zone = False
+        bt._broker.submit_bracket.reset_mock()
+
+        with patch.object(_bt_mod, "BOT_REQUIRE_HUMAN_ALERT", True):
+            self._fire_zone(bt, price=99.5, line_price=100.0)
+
+        # No new trade — arm was cleared by the first entry
+        bt._broker.submit_bracket.assert_not_called()
+
+    def test_arm_kept_on_failed_fill(self):
+        """If submit_bracket reports success=False (limit not filled
+        within timeout), the arm is NOT cleared — the bot can retry on
+        the next zone fire within the 15-min window."""
+        import bot_trader as _bt_mod
+        from bot_trader import BotZone
+        bt = self._make_trader()
+        bt._zones["IBH"] = BotZone("IBH", 100.0)
+        bt.record_alert("IBH", "down")
+        # Broker returns success=False (e.g., "Entry limit not filled")
+        bt._broker.submit_bracket = MagicMock(
+            return_value=SimpleNamespace(success=False, error="Entry limit not filled", order_id=None)
+        )
+
+        with patch.object(_bt_mod, "BOT_REQUIRE_HUMAN_ALERT", True):
+            self._fire_zone(bt, price=99.5, line_price=100.0)
+
+        # submit_bracket was called once with a failed result
+        bt._broker.submit_bracket.assert_called_once()
+        # Arm remains because no position opened
+        assert ("IBH", "down") in bt._alerted_levels
