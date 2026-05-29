@@ -125,7 +125,17 @@ BOT_HYBRID_MIN_COMPOSITE_SCORE: int | None = None
 # -$0.58/tr aggregate, with Q4 -$2.93/tr. Hypothesis: long gap = stale
 # approach (price moved away and came back). 0 = disabled (default).
 BOT_MAX_SECS_SINCE_LAST_TRADE_THIS_DAY: int = 0
-BOT_FILL_TIMEOUT_SECS = 3.0  # How long to wait for entry limit to fill before cancelling
+BOT_FILL_TIMEOUT_SECS = 60.0  # How long to wait for entry limit to fill before cancelling.
+# Was 3.0 — sized for the original V6 design where the 1pt-zone trigger fired
+# only when price was already at the line (limit expected to fill in <1s).
+# Raised to 60.0 on 2026-05-29 for the new live-alert-gated mode: the bot
+# acts on the human's score=5 signal, but price may briefly leave the 1pt
+# window before retesting the line. Yesterday (2026-05-28) IBH down: limit
+# placed at 30184.50, cancelled in 3s; price spiked to 30189.75 just 7s
+# later (would have filled), then dropped to 30177.25 (bot TP). Net loss
+# of ~$56 from the 3s timeout vs a 60s window that would have caught the
+# spike. 60s keeps stale-trade exposure bounded while capturing typical
+# price excursions.
 # Entry limit buffer in pts. Limit price is line ± buffer (above for BUY,
 # below for SELL). Was target/2 (3-6pt across levels) which gave 99% fill
 # rate but allowed up to 6pt of slippage from line on bad fills.
