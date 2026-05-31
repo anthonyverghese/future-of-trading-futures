@@ -93,6 +93,16 @@ def simulate_day_v2(
     bot._vol_filter_last_log = {}
     bot._last_trade_entry_time = None
     bot._adaptive_caps_restored = True  # disabled
+    # V_MULTI state (2026-05-11): zero-cost when _filter_enabled is False.
+    # Backtests exercise V6 logic — do not load V_MULTI models.
+    bot._filter_enabled = False
+    bot._filter_tick_buffer = []
+    bot._filter_session_open = None
+    bot._filter_touches_per_dir = {}
+    bot._filter_last_log_key = {}
+    # Live-alert gate state (2026-05-27): bypassed by patching
+    # BOT_REQUIRE_HUMAN_ALERT below, but attr still needs to exist.
+    bot._alerted_levels = {}
 
     # Override config values for this simulation.
     # bot_trader.py uses 'from config import X' which creates local bindings.
@@ -122,7 +132,13 @@ def simulate_day_v2(
         "bt_vwap": bt_mod.BOT_INCLUDE_VWAP,
         "bt_buf": bt_mod.BOT_ENTRY_LIMIT_BUFFER_PTS,
         "bt_ctv": bt_mod.BOT_COUNTER_TREND_VALLEY_FILTER,
+        # Live-alert gate (2026-05-27): backtests exercise V6 logic, not
+        # the human-alert gate. Saved here so restore is idempotent.
+        "bt_req_human": getattr(bt_mod, "BOT_REQUIRE_HUMAN_ALERT", False),
     }
+    # Force V6 mode in backtest — gate would otherwise reject every event
+    # since _alerted_levels is empty (no live alert manager in backtest).
+    bt_mod.BOT_REQUIRE_HUMAN_ALERT = False
 
     try:
         # Patch BOTH config module and bot_trader module bindings
@@ -266,5 +282,6 @@ def simulate_day_v2(
         bt_mod.BOT_ENTRY_LIMIT_BUFFER_PTS = orig["bt_buf"]
         bt_mod.BOT_COUNTER_TREND_VALLEY_FILTER = orig["bt_ctv"]
         bt_mod.BOT_MAX_SECS_SINCE_LAST_TRADE_THIS_DAY = orig["bt_max_gap"]
+        bt_mod.BOT_REQUIRE_HUMAN_ALERT = orig["bt_req_human"]
 
     return broker.trades
