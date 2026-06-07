@@ -67,15 +67,21 @@ def load_all_days(
 
 
 _ARRAY_CACHE_DIR = os.path.join(os.path.dirname(__file__), ".array_cache")
+# Bump when the array-computation logic changes so stale caches are
+# automatically ignored. 2026-06-06: session_move anchor shifted from
+# post-IB start (10:30 ET) to RTH open (09:30 ET).
+_ARRAY_CACHE_VERSION = "v2"
 
 
 def precompute_arrays(dc: DayCache) -> DayArrays:
     """Precompute all scoring factor arrays for one day. O(n) per factor.
 
     Caches to disk so subsequent runs skip the expensive computation.
+    Cache key includes _ARRAY_CACHE_VERSION so logic changes invalidate
+    older caches automatically.
     """
     os.makedirs(_ARRAY_CACHE_DIR, exist_ok=True)
-    cache_path = os.path.join(_ARRAY_CACHE_DIR, f"{dc.date}.npz")
+    cache_path = os.path.join(_ARRAY_CACHE_DIR, f"{dc.date}_{_ARRAY_CACHE_VERSION}.npz")
     if os.path.exists(cache_path):
         try:
             d = np.load(cache_path)
@@ -86,7 +92,10 @@ def precompute_arrays(dc: DayCache) -> DayArrays:
     ft = dc.full_ts_ns
     nf = len(fp)
     s = dc.post_ib_start_idx
-    fp0 = float(dc.post_ib_prices[0])
+    # 2026-06-06: anchor session_move to the 09:30 RTH-open price (full_prices[0])
+    # to match live alert_manager (main.py captures day_open at first RTH tick).
+    # Was post_ib_prices[0] (10:30 ET), which shifted the `move` scoring bucket.
+    fp0 = float(fp[0])
 
     # Tick rate (3-min sliding window).
     tr = np.zeros(nf, dtype=np.float64)

@@ -196,6 +196,15 @@ def simulate_day_v2(
         # datetime.fromtimestamp is expensive — only compute when needed.
         _mom_thresh = momentum_max if momentum_max > 0 else 0.0
 
+        # 2026-06-06: fast-skip leaves _price_window (60min trend) and
+        # _price_window_5m (5min momentum) unupdated. Safe only when no
+        # window-dependent filter is active. If any such filter is active,
+        # disable fast-skip so windows stay dense and accurate.
+        fast_skip_safe = (
+            _mom_thresh == 0.0
+            and counter_trend_valley_filter is None
+        )
+
         # Feed ticks through the production code
         for j in range(n):
             gi = start + j
@@ -216,14 +225,13 @@ def simulate_day_v2(
             near_vwap = (has_vwap and j < len(dc.post_ib_vwaps)
                          and abs(pj - float(dc.post_ib_vwaps[j])) <= skip_dist)
 
-            if (not near_fixed and not near_vwap
+            if (fast_skip_safe
+                    and not near_fixed and not near_vwap
                     and not broker._position_open
                     and bot._active_trade_level is None):
-                # Fast path: skip entirely. Price windows will be stale
-                # when we next reach a level, but _update_price_windows
-                # will catch up since we always pass the current sim_now.
-                # The momentum lookback (~1000 ticks) and trend lookback
-                # (~60 min) are approximate anyway.
+                # Fast path: skip entirely. Price windows are unmaintained,
+                # but no active filter consults them in this configuration
+                # (gated by fast_skip_safe above).
                 continue
 
             # Full on_tick path (near a level or position open)

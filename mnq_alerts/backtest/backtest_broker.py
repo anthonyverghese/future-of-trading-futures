@@ -126,6 +126,11 @@ class BacktestBroker:
         # State matching IBKRBroker's interface
         self._position_open = False
         self._consecutive_losses = 0
+        # 2026-06-06: production broker tracks consecutive_wins too (added
+        # 2026-05-13). bot_trader.py:514 and bot_filter.py both read this;
+        # without it, AttributeError when running a backtest that exercises
+        # BOT_HYBRID_MIN_COMPOSITE_SCORE or the live-alert-mode score path.
+        self._consecutive_wins = 0
         self._daily_pnl_usd = 0.0
         self._trades_today = 0
         self._wins_today = 0
@@ -311,9 +316,11 @@ class BacktestBroker:
         if self._pending_pnl_usd >= 0:
             self._wins_today += 1
             self._consecutive_losses = 0
+            self._consecutive_wins += 1
         else:
             self._losses_today += 1
             self._consecutive_losses += 1
+            self._consecutive_wins = 0
 
         self.trades.append(BacktestTradeRecord(
             level=self._pending_level,
@@ -333,6 +340,7 @@ class BacktestBroker:
         self._wins_today = 0
         self._losses_today = 0
         self._consecutive_losses = 0
+        self._consecutive_wins = 0
         self._stopped_for_day = False
         self._stop_reason = ""
         self._pos_exit_idx = -1
