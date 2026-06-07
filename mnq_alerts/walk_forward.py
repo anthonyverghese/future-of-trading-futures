@@ -52,9 +52,28 @@ from score_optimizer import (
     suggest_weight,
 )
 
-# Walk-forward params.
-INITIAL_TRAIN_DAYS = 60
-STEP_DAYS = 20
+# Walk-forward params (2026-06-06 revision):
+#   - SLIDING train window (was EXPANDING — older data was dominating).
+#   - 7-day EMBARGO between train and test to prevent overnight-state /
+#     consec-streak leakage across fold boundaries.
+#   - Larger 90-day train and 30-day test so each fold has enough sample
+#     for Sharpe to be meaningful.
+TRAIN_WINDOW_DAYS = 90   # sliding train window size
+TEST_WINDOW_DAYS = 30    # test window size per fold
+EMBARGO_DAYS = 7         # gap between train end and test start
+STEP_DAYS = TEST_WINDOW_DAYS  # non-overlapping test windows
+
+# Back-compat alias for older code paths still referencing this name.
+INITIAL_TRAIN_DAYS = TRAIN_WINDOW_DAYS
+
+# Strict 3-way data partition (2026-06-06):
+#   discovery (first 25%) — explore edges, brainstorm candidates
+#   walkforward (middle 70%) — sweep parameters, select on per-fold metrics
+#   holdout (last 5%) — touched ONCE at the very end to confirm generalization
+# Percentages of the *cached day count*. Caller computes exact boundaries.
+DISCOVERY_PCT = 0.25
+WALKFORWARD_PCT = 0.70
+# HOLDOUT_PCT implicit = 1 - DISCOVERY_PCT - WALKFORWARD_PCT
 
 # EOD flatten time (hh:mm ET). Mirrors live bot: no new entries after this,
 # and any open position is closed at this cutoff.
@@ -93,6 +112,54 @@ RISK_GRID: list[float | None] = [
     200.0,
     None,
 ]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DATA PARTITION — discovery / walk-forward / final hold-out
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class DataPartition:
+    """Strict 3-way chronological split of cached trading days.
+
+    Discovery: used to brainstorm candidate edges. Anything observed here
+        is "free" but cannot be claimed as out-of-sample evidence later.
+    Walk-forward: used inside walk_forward_bot for parameter selection
+        and validation. Each fold's train + test is fully inside this slice.
+    Hold-out: deliberately NEVER touched until the final go/no-go decision.
+        Touch once. If a strategy that passed walk-forward also clears
+        hold-out, ship it; otherwise discard.
+    """
+    discovery: list[datetime.date]
+    walkforward: list[datetime.date]
+    holdout: list[datetime.date]
+
+    def summary(self) -> str:
+        def _range(days):
+            return f"{days[0]} → {days[-1]} ({len(days)}d)" if days else "(empty)"
+        return (f"  discovery:   {_range(self.discovery)}\n"
+                f"  walkforward: {_range(self.walkforward)}\n"
+                f"  holdout:     {_range(self.holdout)}")
+
+
+def partition_days(valid_days: list[datetime.date]) -> DataPartition:
+    """Split a sorted list of cached days into the 3 partition slices.
+
+    Splits are by INDEX (not by date), so partitions stay non-overlapping
+    even when there are calendar gaps (weekends, holidays). The split
+    percentages are DISCOVERY_PCT and WALKFORWARD_PCT defined above.
+    """
+    n = len(valid_days)
+    if n == 0:
+        return DataPartition([], [], [])
+    d_end = int(n * DISCOVERY_PCT)
+    w_end = int(n * (DISCOVERY_PCT + WALKFORWARD_PCT))
+    return DataPartition(
+        discovery=list(valid_days[:d_end]),
+        walkforward=list(valid_days[d_end:w_end]),
+        holdout=list(valid_days[w_end:]),
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -308,7 +375,37 @@ class WFWindow:
     chosen_ts: tuple[float, float]
     chosen_risk: float | None
     train_pnl_per_day: float
+    train_sharpe: float            # per-day Sharpe on the chosen config's train period
+    test_per_day_pnl: list[float]  # P&L for each calendar day in test_days
+    test_sharpe: float             # per-day Sharpe on the test period
     test_trades: list[Trade]
+
+
+def _per_day_pnl(
+    trades: list[Trade], days: list[datetime.date]
+) -> list[float]:
+    """Return P&L for each calendar day in `days` (0 if no trades that day)."""
+    by_day: dict[datetime.date, float] = {}
+    for t in trades:
+        by_day[t.date] = by_day.get(t.date, 0.0) + t.pnl_usd
+    return [by_day.get(d, 0.0) for d in days]
+
+
+def _annualized_sharpe(per_day_pnl: list[float]) -> float:
+    """Annualized Sharpe-like ratio. 0 when stdev is 0 or sample is <2.
+
+    Trading-day proxy assumes 252 trading days/year. Useful as a
+    cross-config comparison metric within a backtest; not a real Sharpe
+    (no risk-free rate adjustment, P&L not annualized to a return rate).
+    """
+    if len(per_day_pnl) < 2:
+        return 0.0
+    import statistics, math
+    mean = statistics.mean(per_day_pnl)
+    std = statistics.stdev(per_day_pnl)
+    if std == 0.0:
+        return 0.0
+    return (mean / std) * math.sqrt(252)
 
 
 def walk_forward_bot(
@@ -316,17 +413,34 @@ def walk_forward_bot(
     entries_by_date: dict[datetime.date, DayEntries],
     outcomes_by_ts: dict[tuple[float, float], dict[datetime.date, DayOutcomes]],
 ) -> list[WFWindow]:
+    """Sliding-window walk-forward (2026-06-06 revision).
+
+    Each fold:
+      train = the TRAIN_WINDOW_DAYS days immediately preceding the embargo
+      embargo = EMBARGO_DAYS days skipped between train and test
+      test = the next TEST_WINDOW_DAYS days after the embargo
+
+    Successive folds step forward by STEP_DAYS (= TEST_WINDOW_DAYS), so test
+    windows are non-overlapping. Each fold picks the best (TS, risk) on its
+    own train slice — older folds don't bias the choice in newer folds.
+
+    Configuration selection now uses Sharpe-like (mean/std × sqrt(252)) on
+    per-train-day P&L. A config with high mean but very volatile per-day
+    P&L is penalized in favor of one with a steadier curve.
+    """
     windows: list[WFWindow] = []
     n = len(valid_days)
-    k = INITIAL_TRAIN_DAYS
-    while k < n:
-        train_days = valid_days[:k]
-        test_days = valid_days[k : k + STEP_DAYS]
-        if not test_days:
-            break
+    # k is the index AFTER the train window, BEFORE the embargo+test.
+    k = TRAIN_WINDOW_DAYS
+    while k + EMBARGO_DAYS + TEST_WINDOW_DAYS <= n:
+        train_days = valid_days[k - TRAIN_WINDOW_DAYS : k]
+        test_start = k + EMBARGO_DAYS
+        test_days = valid_days[test_start : test_start + TEST_WINDOW_DAYS]
         best_ts = None
         best_risk: float | None = None
-        best_per_day = -float("inf")
+        best_score = -float("inf")
+        best_pd = 0.0
+        best_sharpe = 0.0
         for ts in TS_GRID:
             obd = outcomes_by_ts[ts]
             for risk in RISK_GRID:
@@ -335,20 +449,27 @@ def walk_forward_bot(
                 )
                 if not trades:
                     continue
-                total = sum(t.pnl_usd for t in trades)
+                per_day_arr = _per_day_pnl(trades, train_days)
+                total = sum(per_day_arr)
                 per_day = total / len(train_days)
-                if per_day > best_per_day:
-                    best_per_day = per_day
+                sharpe = _annualized_sharpe(per_day_arr)
+                # Score = Sharpe with tie-break by mean P&L. Sharpe alone
+                # can prefer near-zero mean configs with very low variance
+                # over a clearly positive config with mild variance; the
+                # tie-breaker prevents that pathology.
+                score = sharpe + per_day / 1000.0
+                if score > best_score:
+                    best_score = score
                     best_ts = ts
                     best_risk = risk
+                    best_pd = per_day
+                    best_sharpe = sharpe
         if best_ts is None:
             break
         test_trades = replay_with_risk(
-            test_days,
-            entries_by_date,
-            outcomes_by_ts[best_ts],
-            best_risk,
+            test_days, entries_by_date, outcomes_by_ts[best_ts], best_risk
         )
+        test_pd_arr = _per_day_pnl(test_trades, test_days)
         windows.append(
             WFWindow(
                 train_range=(train_days[0], train_days[-1]),
@@ -357,12 +478,43 @@ def walk_forward_bot(
                 test_days=len(test_days),
                 chosen_ts=best_ts,
                 chosen_risk=best_risk,
-                train_pnl_per_day=best_per_day,
+                train_pnl_per_day=best_pd,
+                train_sharpe=best_sharpe,
+                test_per_day_pnl=test_pd_arr,
+                test_sharpe=_annualized_sharpe(test_pd_arr),
                 test_trades=test_trades,
             )
         )
         k += STEP_DAYS
     return windows
+
+
+def fold_summary(windows: list[WFWindow]) -> dict:
+    """Cross-fold aggregate stats: mean/median/worst-fold P&L and Sharpe.
+
+    Returns a dict with:
+      n_folds, mean_pd, median_pd, worst_pd, best_pd,
+      mean_sharpe, worst_sharpe, fold_consistency_pct
+    fold_consistency_pct = fraction of folds that were profitable.
+    """
+    if not windows:
+        return {"n_folds": 0}
+    import statistics
+    folds_pd = [
+        sum(w.test_per_day_pnl) / max(w.test_days, 1) for w in windows
+    ]
+    folds_sharpe = [w.test_sharpe for w in windows]
+    return {
+        "n_folds": len(windows),
+        "mean_pd": statistics.mean(folds_pd),
+        "median_pd": statistics.median(folds_pd),
+        "worst_pd": min(folds_pd),
+        "best_pd": max(folds_pd),
+        "stdev_pd": statistics.stdev(folds_pd) if len(folds_pd) > 1 else 0.0,
+        "mean_sharpe": statistics.mean(folds_sharpe),
+        "worst_sharpe": min(folds_sharpe),
+        "fold_consistency_pct": sum(1 for p in folds_pd if p > 0) / len(folds_pd),
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -618,16 +770,27 @@ def main() -> None:
     print("\n" + "=" * 78, flush=True)
     print("  BOT: walk-forward T/S + risk-limit selection", flush=True)
     print("=" * 78, flush=True)
+    # Partition data: walk-forward runs only on the middle 70% slice.
+    # Discovery (first 25%) and hold-out (last 5%) are excluded from this
+    # selection to keep them genuinely out-of-sample for downstream analysis.
+    partition = partition_days(valid_days)
+    print(f"  Data partition:", flush=True)
+    print(partition.summary(), flush=True)
+    print(f"  Walk-forward inside the walkforward slice only.", flush=True)
+    print(f"  Train={TRAIN_WINDOW_DAYS}d / embargo={EMBARGO_DAYS}d / "
+          f"test={TEST_WINDOW_DAYS}d (sliding, non-overlapping tests)", flush=True)
     t3 = time.time()
-    wf = walk_forward_bot(valid_days, entries_by_date, outcomes_by_ts)
+    wf = walk_forward_bot(partition.walkforward, entries_by_date, outcomes_by_ts)
     print(f"  Ran {len(wf)} windows in {time.time()-t3:.1f}s\n", flush=True)
 
     print(
-        f"  {'Train end':<12} {'Test range':<24} {'T/S':>6} {'Risk':>11} {'Tr':>4} {'WR%':>6} {'P&L':>8} {'$/day':>7}",
+        f"  {'Train end':<12} {'Test range':<24} {'T/S':>6} {'Risk':>11} {'Tr':>4} "
+        f"{'WR%':>6} {'P&L':>8} {'$/day':>7} {'TrShp':>6} {'TeShp':>6}",
         flush=True,
     )
     print(
-        f"  {'-'*12} {'-'*24} {'-'*6} {'-'*11} {'-'*4} {'-'*6} {'-'*8} {'-'*7}",
+        f"  {'-'*12} {'-'*24} {'-'*6} {'-'*11} {'-'*4} {'-'*6} {'-'*8} {'-'*7} "
+        f"{'-'*6} {'-'*6}",
         flush=True,
     )
     ts_counts: dict[tuple, int] = {}
@@ -646,9 +809,29 @@ def main() -> None:
         print(
             f"  {str(w.train_range[1]):<12} {str(w.test_range[0])}→{str(w.test_range[1])} "
             f"{ts_str:>6} {r_str:>11} {len(w.test_trades):>4} "
-            f"{wr:>5.1f}% ${total:>+6,.0f} ${per_day:>+5.1f}",
+            f"{wr:>5.1f}% ${total:>+6,.0f} ${per_day:>+5.1f} "
+            f"{w.train_sharpe:>+6.2f} {w.test_sharpe:>+6.2f}",
             flush=True,
         )
+
+    # Cross-fold stability summary — the most important table
+    fs = fold_summary(wf)
+    if fs.get("n_folds", 0) > 0:
+        print(f"\n  CROSS-FOLD STABILITY ({fs['n_folds']} folds):", flush=True)
+        print(f"    Mean P&L/day:         ${fs['mean_pd']:+.2f}", flush=True)
+        print(f"    Median P&L/day:       ${fs['median_pd']:+.2f}", flush=True)
+        print(f"    Worst-fold P&L/day:   ${fs['worst_pd']:+.2f}", flush=True)
+        print(f"    Best-fold P&L/day:    ${fs['best_pd']:+.2f}", flush=True)
+        print(f"    Stdev across folds:   ${fs['stdev_pd']:.2f}", flush=True)
+        print(f"    Mean test Sharpe:     {fs['mean_sharpe']:+.2f}", flush=True)
+        print(f"    Worst test Sharpe:    {fs['worst_sharpe']:+.2f}", flush=True)
+        print(f"    Profitable folds:     {fs['fold_consistency_pct']:.0%}",
+              flush=True)
+        # A strategy with negative worst-fold P&L is high-risk regardless of
+        # mean. Flag this prominently.
+        if fs["worst_pd"] < 0:
+            print(f"    ⚠ worst fold negative — consider whether the mean is "
+                  f"earned at the cost of fat tails.", flush=True)
 
     all_test = [t for w in wf for t in w.test_trades]
     total_days = sum(w.test_days for w in wf)
